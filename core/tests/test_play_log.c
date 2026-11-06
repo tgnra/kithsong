@@ -66,7 +66,7 @@ static void wait_position(int64_t ms) {
     mc_player_status_get(player, &st);
     if (st.state == MC_PLAYER_PLAYING && st.position_ms >= ms) return;
   }
-  CHECK(!"the position never got there");
+  CHECK(0 && "the position never got there");
 }
 
 static void wait_stopped(void) {
@@ -75,7 +75,7 @@ static void wait_stopped(void) {
     mc_player_status_get(player, &st);
     if (st.state == MC_PLAYER_STOPPED) return;
   }
-  CHECK(!"it never stopped");
+  CHECK(0 && "it never stopped");
 }
 
 /* Takes the rows there are, waiting for want of them first. */

@@ -1,7 +1,9 @@
 {
-  // Windows build tasks. Needs CMake, Ninja and w64devkit. w64devkit is looked for at
-  // %W64DEVKIT% if set, then ~\Tools\w64devkit, then on PATH. The CMake and Ninja bundled with Visual Studio 2022 Build Tools are used as a fallback
-  // when they are not on PATH.
+  // Windows build tasks. Needs CMake, Ninja and llvm-mingw, which scripts\install-llvm-mingw.ps1
+  // puts in ~\Tools, where the presets find it without PATH (set %LLVM_MINGW% if it's elsewhere).
+  // The CMake and Ninja bundled with Visual Studio 2022 Build Tools are used as a fallback when
+  // they are not on PATH. `windows: build (arm64)` cross-compiles for Windows on Arm; what it
+  // builds won't run on an x64 PC.
   //
   // Linux build tasks. Run everything inside the flake's dev shell (`nix develop`), which
   // provides CMake, Ninja, GTK4, libadwaita and gdb. Ctrl+Shift+B runs `windows: build`;
@@ -22,7 +24,7 @@
   "windows": {
     "options": {
       "env": {
-        "PATH": "${env:W64DEVKIT}\\bin;${userHome}\\Tools\\w64devkit\\bin;${env:PATH};C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja"
+        "PATH": "${env:PATH};C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\CMake\\bin;C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\Common7\\IDE\\CommonExtensions\\Microsoft\\CMake\\Ninja"
       }
     }
   },
@@ -31,25 +33,44 @@
       "label": "windows: configure",
       "type": "shell",
       "command": "cmake",
-      "args": ["--preset", "windows-w64devkit"],
+      "args": ["--preset", "windows-x64"],
       "problemMatcher": []
     },
     {
       "label": "windows: build",
       "type": "shell",
       "command": "cmake",
-      "args": ["--build", "--preset", "windows-w64devkit"],
+      "args": ["--build", "--preset", "windows-x64"],
       "dependsOn": "windows: configure",
       "group": { "kind": "build", "isDefault": true },
       "problemMatcher": {
         "base": "$gcc",
-        "fileLocation": ["autoDetect", "${workspaceFolder}/build/windows-w64devkit"]
+        "fileLocation": ["autoDetect", "${workspaceFolder}/build/windows-x64"]
+      }
+    },
+    {
+      "label": "windows: configure (arm64)",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--preset", "windows-arm64"],
+      "problemMatcher": []
+    },
+    {
+      "label": "windows: build (arm64)",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "--preset", "windows-arm64"],
+      "dependsOn": "windows: configure (arm64)",
+      "group": "build",
+      "problemMatcher": {
+        "base": "$gcc",
+        "fileLocation": ["autoDetect", "${workspaceFolder}/build/windows-arm64"]
       }
     },
     {
       "label": "windows: run",
       "type": "shell",
-      "command": "${workspaceFolder}/build/windows-w64devkit/desktop/windows/kithsong.exe",
+      "command": "${workspaceFolder}/build/windows-x64/desktop/windows/kithsong.exe",
       "dependsOn": "windows: build",
       "problemMatcher": []
     },
@@ -62,7 +83,7 @@
         "-NoProfile",
         "-File",
         "${workspaceFolder}\\scripts\\run-windows-scratch.ps1",
-        "${workspaceFolder}\\build\\windows-w64devkit\\desktop\\windows\\kithsong.exe"
+        "${workspaceFolder}\\build\\windows-x64\\desktop\\windows\\kithsong.exe"
       ],
       "dependsOn": "windows: build",
       "problemMatcher": []
@@ -71,7 +92,7 @@
       "label": "windows: test",
       "type": "shell",
       "command": "ctest",
-      "args": ["--preset", "windows-w64devkit"],
+      "args": ["--preset", "windows-x64"],
       "dependsOn": "windows: build",
       "group": { "kind": "test", "isDefault": true },
       "problemMatcher": []
@@ -79,7 +100,7 @@
     {
       "label": "windows: musicbrainz ping",
       "type": "shell",
-      "command": "${workspaceFolder}/build/windows-w64devkit/core/tests/manual_mb_ping.exe",
+      "command": "${workspaceFolder}/build/windows-x64/core/tests/manual_mb_ping.exe",
       "dependsOn": "windows: build",
       "problemMatcher": []
     },

@@ -1,7 +1,8 @@
-# Packs the Windows release as an unsigned dist\kithsong-<version>-windows-x64.msix for the
+# Packs the Windows release as an unsigned dist\kithsong-<version>-windows-<arch>.msix for the
 # Microsoft Store, which signs it on ingestion. Builds with release-windows.ps1 first, unless
-# -StageDir names a folder it already installed (build\stage-windows\kithsong-<version>). The
-# release workflow runs it that way, after its own build.
+# -StageDir names a folder it already installed (build\stage-windows-<arch>\kithsong-<version>).
+# The release workflow runs it that way, after its own build. x64 and arm64 are separate
+# packages of the same version, and both go into one Store submission.
 #
 # The three Identity values must match Partner Center's Product management → Product
 # identity page (Package/Identity/Name, Package/Identity/Publisher and
@@ -14,6 +15,8 @@
 # packaging\msix\AppxManifest.xml.in; the tile and Start icons are made from
 # packaging\icons\kithsong.ico's and kithsong-*.png's images.
 param(
+    [ValidateSet('x64', 'arm64')]
+    [string]$Arch = 'x64',
     [string]$IdentityName = $(if ($env:KITHSONG_MSIX_IDENTITY_NAME) { $env:KITHSONG_MSIX_IDENTITY_NAME } else { 'tgnra.Kithsong' }),
     [string]$Publisher = $(if ($env:KITHSONG_MSIX_PUBLISHER) { $env:KITHSONG_MSIX_PUBLISHER } else { 'CN=ED86BA9B-1FC2-415A-A900-58A61046A46D' }),
     [string]$PublisherDisplayName = $(if ($env:KITHSONG_MSIX_PUBLISHER_NAME) { $env:KITHSONG_MSIX_PUBLISHER_NAME } else { 'tgnra' }),
@@ -28,9 +31,9 @@ if ($env:OS -ne 'Windows_NT') { Write-Error 'The MSIX package builds on Windows 
 
 $root = Split-Path -Parent $PSScriptRoot
 $version = (Get-Content "$root\VERSION" -TotalCount 1).Trim()
-$work = "$root\build\msix"
+$work = "$root\build\msix-$Arch"
 $layout = "$work\layout"
-$msix = "$root\dist\kithsong-$version-windows-x64.msix"
+$msix = "$root\dist\kithsong-$version-windows-$Arch.msix"
 
 # The Store wants a.b.c.0, each field 0-65535; the 4th is its own, so the build number is
 # left out. A suffix such as -rc1 is dropped.
@@ -69,8 +72,8 @@ $makepri = if ($NoPri) { $null } else { Find-SdkTool 'makepri.exe' }
 # --- The app ---
 
 if (-not $StageDir) {
-    & "$PSScriptRoot\release-windows.ps1"
-    $StageDir = "$root\build\stage-windows\kithsong-$version"
+    & "$PSScriptRoot\release-windows.ps1" -Arch $Arch
+    $StageDir = "$root\build\stage-windows-$Arch\kithsong-$version"
 }
 if (-not (Test-Path "$StageDir\kithsong.exe")) { Write-Error "$StageDir has no kithsong.exe." }
 $StageDir = (Resolve-Path $StageDir).Path
@@ -87,6 +90,7 @@ $values = @{
     PUBLISHER              = $Publisher
     PUBLISHER_DISPLAY_NAME = $PublisherDisplayName
     VERSION                = $msixVersion
+    ARCH                   = $Arch
     DISPLAY_NAME           = 'Kithsong'
     DESCRIPTION            = 'A music library manager and player that keeps your devices in sync over the local network.'
 }

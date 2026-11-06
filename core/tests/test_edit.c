@@ -1102,7 +1102,7 @@ static void test_crash_after(const char *base) {
 
 /* --- Releases --- */
 
-static int g_lookups, g_searches, g_cover_fetches;
+static int g_lookups, g_cover_fetches;
 static mc_status g_lookup_status = MC_OK;
 
 /* Release NEW: two tracks of the three the album has, retitled and renumbered, on two discs,
@@ -1144,7 +1144,6 @@ static mc_status fake_lookup(const char *id, mb_release *out) {
 static mc_status fake_search(const char *artist, const char *album, int track_count,
                              char (*ids)[MC_UID_STRLEN], int max, int *n) {
   (void)artist, (void)album, (void)track_count;
-  g_searches++;
   if (g_lookup_status != MC_OK) return g_lookup_status;
   /* Worst first: the score puts them right. */
   *n = max < 2 ? max : 2;

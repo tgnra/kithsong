@@ -181,6 +181,9 @@ target_include_directories(tag SYSTEM INTERFACE
   "$<BUILD_INTERFACE:${taglib_BINARY_DIR}/taglib>"
   "$<BUILD_INTERFACE:${taglib_BINARY_DIR}>")
 target_compile_definitions(tag INTERFACE TAGLIB_STATIC)
+# tvariant.cpp counts on <iomanip> bringing in <ostream>, which libc++ no longer does. The
+# Windows toolchain's libc++ refuses it, with every << ambiguous.
+target_compile_options(tag PRIVATE "SHELL:-include ostream")
 
 # curl: HTTP(S) only, mbedTLS backend, no optional system dependencies.
 set(MBEDTLS_INCLUDE_DIR "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)

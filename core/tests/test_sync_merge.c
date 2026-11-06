@@ -666,11 +666,11 @@ int main(int argc, char **argv) {
       query_text(mc_library_db(a.lib), "SELECT uid FROM tracks ORDER BY uid LIMIT 1", track, sizeof track);
       CHECK(lib_int(&a, "SELECT count(*) FROM play_events") == 0 && lib_int(&b, "SELECT count(*) FROM play_events") == 0);
       for (int i = 0; i < PLAYS; i++) {
-        mc_play_event e = {.started_ms = 1000 + i, .listened_ms = 5000, .end = MC_PLAY_END_SKIPPED,
+        mc_play_event ev = {.started_ms = 1000 + i, .listened_ms = 5000, .end = MC_PLAY_END_SKIPPED,
                            .context = MC_PLAY_CONTEXT_ALBUM};
-        snprintf(e.track_uid, sizeof e.track_uid, "%s", track);
-        snprintf(e.context_uid, sizeof e.context_uid, "%s", track);
-        CHECK(mc_library_log_play(a.lib, &e) == MC_OK);
+        snprintf(ev.track_uid, sizeof ev.track_uid, "%s", track);
+        snprintf(ev.context_uid, sizeof ev.context_uid, "%s", track);
+        CHECK(mc_library_log_play(a.lib, &ev) == MC_OK);
       }
       mc_play_event back = {.started_ms = 500000, .listened_ms = 7, .end = MC_PLAY_END_FINISHED};
       snprintf(back.track_uid, sizeof back.track_uid, "%s", track);

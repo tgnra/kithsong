@@ -45,40 +45,49 @@ jobs:
           echo "version=$version" >>"$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >>"$GITHUB_OUTPUT"
 
+  # Each architecture builds and runs its tests on its own CPU. windows-11-arm is free for public
+  # repositories.
   windows:
     needs: version
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            ninja: ninja-win.zip
+            ninja-sha256: 07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65
+          - arch: arm64
+            runner: windows-11-arm
+            ninja: ninja-winarm64.zip
+            ninja-sha256: e52f0bdef9dfb1003229dbd6508a508c4073fd017247002adc66e5e806cb0391
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
-      - name: Install w64devkit and Ninja
+      - name: Install llvm-mingw and Ninja
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          function Get-Pinned($url, $sha256, $out) {
-              Invoke-WebRequest $url -OutFile $out
-              if ((Get-FileHash $out -Algorithm SHA256).Hash -ne $sha256) { throw "Checksum mismatch: $url" }
-          }
           $tools = "$env:RUNNER_TEMP\tools"
-          Get-Pinned https://github.com/skeeto/w64devkit/releases/download/v2.10.1/w64devkit-x64-2.10.1.7z.exe `
-              add1edf984ce4d473cfeb7c52e0ab38db73a855bba6c7f564d5e16648eb2896a "$env:RUNNER_TEMP\w64devkit.exe"
-          & "$env:RUNNER_TEMP\w64devkit.exe" -y "-o$tools" | Out-Null
-          Get-Pinned https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip `
-              07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65 "$env:RUNNER_TEMP\ninja.zip"
+          $llvmMingw = scripts/install-llvm-mingw.ps1 -Dir $tools
+          Invoke-WebRequest https://github.com/ninja-build/ninja/releases/download/v1.13.2/${{ matrix.ninja }} -OutFile "$env:RUNNER_TEMP\ninja.zip"
+          if ((Get-FileHash "$env:RUNNER_TEMP\ninja.zip" -Algorithm SHA256).Hash -ne '${{ matrix.ninja-sha256 }}') { throw 'Checksum mismatch: Ninja' }
           Expand-Archive "$env:RUNNER_TEMP\ninja.zip" "$tools\ninja"
-          "$tools\w64devkit\bin" >> $env:GITHUB_PATH
+          "LLVM_MINGW=$llvmMingw" >> $env:GITHUB_ENV
           "$tools\ninja" >> $env:GITHUB_PATH
       # FetchContent's subbuilds record absolute paths, so the key includes the repository
-      # (and with it the checkout path): a cache from before a rename won't configure.
+      # (and with it the checkout path): a cache from before a rename won't configure. The _deps
+      # folder holds objects too, so the key also has the architecture and the toolchain's pin.
       - name: Cache fetched dependencies
         uses: actions/cache@v6
         with:
-          path: build/_deps
-          key: deps-windows-${{ github.repository }}-${{ hashFiles('third_party/CMakeLists.txt') }}
+          path: build/windows-${{ matrix.arch }}-release/_deps
+          key: deps-windows-${{ matrix.arch }}-${{ github.repository }}-${{ hashFiles('third_party/CMakeLists.txt', 'cmake/llvm-mingw.pin') }}
       - name: Build
         shell: pwsh
         env:
           KITHSONG_BUILD_NUMBER: ${{ github.run_number }}
-        run: scripts/release-windows.ps1
+        run: scripts/release-windows.ps1 -Arch ${{ matrix.arch }}
       # Packs what Build installed, so the stage folder is named from the version job's output.
       # The script takes the package version from VERSION; a stage folder that doesn't match
       # fails here. Windows PowerShell, as the script is run and tested locally. The runner's
@@ -87,17 +96,17 @@ jobs:
         shell: powershell
         env:
           VERSION: ${{ needs.version.outputs.version }}
-        run: scripts/package-msix.ps1 -StageDir "build/stage-windows/kithsong-$env:VERSION"
+        run: scripts/package-msix.ps1 -Arch ${{ matrix.arch }} -StageDir "build/stage-windows-${{ matrix.arch }}/kithsong-$env:VERSION"
       - uses: actions/upload-artifact@v7
         with:
-          name: windows
+          name: windows-${{ matrix.arch }}
           path: dist/*.zip
           if-no-files-found: error
       # Its own artifact, as if-no-files-found only fires when every path comes up empty. The
       # release job's merge-multiple download puts it in dist/ with the rest.
       - uses: actions/upload-artifact@v7
         with:
-          name: windows-msix
+          name: windows-${{ matrix.arch }}-msix
           path: dist/*.msix
           if-no-files-found: error
 

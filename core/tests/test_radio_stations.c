@@ -180,7 +180,7 @@ static void test_distinct(const char *scratch) {
     CHECK(s->cover_dir && strstr(s->cover_dir, "album"));
     mc_radio_pick picks[5];
     int n = 0;
-    mc_radio_options opts = {s->seed_track, 5, 1, 0};
+    mc_radio_options opts = {s->seed_track, 5, 1, 0, 0, NULL};
     CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
     CHECK(n > 0);
   }

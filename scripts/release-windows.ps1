@@ -1,29 +1,33 @@
-# Builds the Windows release and packs it as dist\kithsong-<version>-windows-x64.zip: one
+# Builds the Windows release and packs it as dist\kithsong-<version>-windows-<arch>.zip: one
 # kithsong-<version>\ folder holding kithsong.exe and LICENSES\. The release workflow runs this
 # too.
 #
-#   scripts\release-windows.ps1
+#   scripts\release-windows.ps1 [-Arch x64|arm64]
 #
-# Needs w64devkit's gcc (on PATH, or at $env:W64DEVKIT), CMake >= 3.28 and Ninja. Bakes in
+# Runs the tests too, unless this machine can't run what it built (arm64 on an x64 PC).
+#
+# Needs llvm-mingw (scripts\install-llvm-mingw.ps1), CMake >= 3.28 and Ninja. Bakes in
 # $env:KITHSONG_CONTACT, $env:KITHSONG_LASTFM_KEY and $env:KITHSONG_LASTFM_SECRET when
-# they're set, and stamps
-
-# $env:KITHSONG_BUILD_NUMBER (0-65535) into the file version and the app.
+# they're set, and stamps $env:KITHSONG_BUILD_NUMBER (0-65535) into the file version and the
+# app.
+param(
+    [ValidateSet('x64', 'arm64')]
+    [string]$Arch = 'x64'
+)
 $ErrorActionPreference = 'Stop'
 
 if ($env:OS -ne 'Windows_NT') { Write-Error 'The Windows release builds on Windows only.' }
 
 $root = Split-Path -Parent $PSScriptRoot
 $version = (Get-Content "$root\VERSION" -TotalCount 1).Trim()
-$preset = 'windows-w64devkit-release'
+$preset = "windows-$Arch-release"
 $buildDir = "$root\build\$preset"
-$stage = "$root\build\stage-windows\kithsong-$version"
-$zip = "$root\dist\kithsong-$version-windows-x64.zip"
+$stage = "$root\build\stage-windows-$Arch\kithsong-$version"
+$zip = "$root\dist\kithsong-$version-windows-$Arch.zip"
 
-if ($env:W64DEVKIT) { $env:PATH = "$env:W64DEVKIT\bin;$env:PATH" }
-foreach ($tool in 'gcc', 'cmake', 'ninja') {
+foreach ($tool in 'cmake', 'ninja') {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
-        Write-Error "$tool isn't on PATH. Install w64devkit, CMake and Ninja (or set W64DEVKIT)."
+        Write-Error "$tool isn't on PATH. Install CMake and Ninja."
     }
 }
 
@@ -33,7 +37,13 @@ function Invoke-Checked {
     if ($LASTEXITCODE -ne 0) { Write-Error "$($args[0]) failed (exit $LASTEXITCODE)" }
 }
 
-$configure = @('--preset', $preset, '-DKITHSONG_BUILD_TESTS=ON')
+# An Arm PC runs x64 programs too, but not the other way round. With the tests off, ctest below
+# finds none and passes.
+$cpu = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment').PROCESSOR_ARCHITECTURE
+$runnable = $Arch -eq 'x64' -or $cpu -eq 'ARM64'
+if (-not $runnable) { Write-Warning "This $cpu machine can't run an $Arch build, so the tests are left out." }
+
+$configure = @('--preset', $preset, "-DKITHSONG_BUILD_TESTS=$(if ($runnable) { 'ON' } else { 'OFF' })")
 if ($env:KITHSONG_CONTACT) { $configure += "-DKITHSONG_CONTACT=$env:KITHSONG_CONTACT" }
 else { Write-Warning 'KITHSONG_CONTACT is not set; MusicBrainz may block this build.' }
 if ($env:KITHSONG_LASTFM_KEY -and $env:KITHSONG_LASTFM_SECRET) {

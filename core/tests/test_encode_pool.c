@@ -123,7 +123,7 @@ int main(int argc, char **argv) {
     mc_encode_pool *p = NULL;
     CHECK(mc_encode_pool_new(cache, INT64_MAX, &p) == MC_OK);
     if (!p) return TEST_RESULT();
-    int owner;
+    int owner = 0; /* only its address counts */
     CHECK(mc_encode_pool_queue(p, g_uids[7], g_srcs[7], 64, MC_ENCODE_BACKGROUND, NULL) == MC_OK);
     mc_encode_stats st = {0};
     for (int waited = 0; !st.peak && waited < WAIT_MS; waited += 1) {

@@ -72,6 +72,7 @@ int mc_power_on_ac(void) {
   int forced = atomic_load(&g_override);
   if (forced >= 0) return forced;
 #ifdef _WIN32
+  (void)g_sysfs_root;
   SYSTEM_POWER_STATUS status;
   if (!GetSystemPowerStatus(&status)) return 1;
   return mc_power_windows_on_ac(status.ACLineStatus, status.BatteryFlag);

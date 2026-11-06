@@ -34,4 +34,6 @@ set(CMAKE_RC_COMPILER "${_root}/bin/${KITHSONG_TRIPLE}-windres.exe")
 
 # Every executable, tests too: with the toolchain off PATH nothing would find libc++.dll or
 # libunwind.dll. The UCRT is the only C runtime left to load, and that's part of Windows.
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-static")
+# Threads get the same stack as the main one, and lld's default of 1 MB is half of what
+# GNU ld gave them.
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -Wl,--stack,2097152")

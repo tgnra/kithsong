@@ -1,14 +1,14 @@
 {
   // F5: build, then debug the app with gdb (C/C++ extension required). On Windows this uses
-  // w64devkit's gdb; on Linux, gdb runs inside the flake's dev shell, so the app inherits its
-  // library paths, GSettings schemas and icons.
+  // w64devkit's gdb, the only part of w64devkit still in use; on Linux, gdb runs inside the
+  // flake's dev shell, so the app inherits its library paths, GSettings schemas and icons.
   "version": "0.2.0",
   "configurations": [
     {
       "name": "Kithsong (Windows, gdb)",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/windows-w64devkit/desktop/windows/kithsong.exe",
+      "program": "${workspaceFolder}/build/windows-x64/desktop/windows/kithsong.exe",
       "cwd": "${workspaceFolder}",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb.exe",

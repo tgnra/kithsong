@@ -251,7 +251,7 @@ static int dy(int n) {
   return MulDiv(n, ed.base_y, 8);
 }
 
-static char *dup(const char *s) {
+static char *copy_text(const char *s) {
   return _strdup(s ? s : "");
 }
 
@@ -332,13 +332,13 @@ static char *format_duration(long long s) {
   char buf[64];
   if (s >= 3600) snprintf(buf, sizeof buf, "%lld:%02lld:%02lld", s / 3600, s / 60 % 60, s % 60);
   else snprintf(buf, sizeof buf, "%lld:%02lld", s / 60, s % 60);
-  return dup(buf);
+  return copy_text(buf);
 }
 
 static char *format_int(long long n) {
   char buf[32];
   snprintf(buf, sizeof buf, "%lld", n);
-  return dup(buf);
+  return copy_text(buf);
 }
 
 #define EPOCH_DIFF_MS 11644473600000LL /* 1601 to 1970 */
@@ -551,8 +551,8 @@ static void reset_values(node *c) {
   free(c->value);
   free(c->value2);
   free(c->extra);
-  c->value = dup(type_is(c, "date") ? "30" : "");
-  c->value2 = dup("");
+  c->value = copy_text(type_is(c, "date") ? "30" : "");
+  c->value2 = copy_text("");
   c->extra = NULL;
   c->unit = UNIT_DAYS;
   c->date = today();
@@ -737,7 +737,7 @@ static char *rule_json(BOOL with_limit) {
 /* What the core says rule is (malloc'd), or NULL. */
 static char *describe(const char *rule) {
   char *sentence = NULL, *out = NULL;
-  if (rule && mc_smart_describe(ed.lib, ed.subject, rule, &sentence) == MC_OK) out = dup(sentence);
+  if (rule && mc_smart_describe(ed.lib, ed.subject, rule, &sentence) == MC_OK) out = copy_text(sentence);
   mc_free(sentence);
   return out;
 }
@@ -779,7 +779,7 @@ static BOOL load_cond(node *parent, yyjson_val *leaf, BOOL negated) {
   reset_values(c);
   if (!strcmp(type, "text") && yyjson_is_str(value)) {
     free(c->value);
-    c->value = dup(yyjson_get_str(value));
+    c->value = copy_text(yyjson_get_str(value));
   } else if (!strcmp(type, "int") || !strcmp(type, "duration")) {
     BOOL dur = !strcmp(type, "duration");
     yyjson_val *vals[2] = {value, NULL};
@@ -816,7 +816,7 @@ static BOOL load_cond(node *parent, yyjson_val *leaf, BOOL negated) {
     if (!strcmp(type, "format"))
       for (int i = 0; i < FORMAT_COUNT && found < 0; i++)
         if (!_stricmp(k_formats[i].value, s)) found = i;
-    if (found < 0) c->extra = dup(s);
+    if (found < 0) c->extra = copy_text(s);
     c->choice = found >= 0 ? found : CHOICE_EXTRA;
   }
   return TRUE;
@@ -846,7 +846,7 @@ static BOOL load_node(node *parent, yyjson_val *v) {
     node *g = node_new(parent, TRUE);
     if (!g || depth_of(g) > MAX_DEPTH) return FALSE;
     g->mode = mode;
-    g->name = name ? dup(name) : NULL;
+    g->name = name ? copy_text(name) : NULL;
     size_t i, max;
     yyjson_val *k;
     yyjson_arr_foreach(list, i, max, k) if (!load_node(g, k)) return FALSE;
@@ -2828,7 +2828,7 @@ static void start(const char *name, const char *rule) {
     SendMessageW(ed.dlg, DM_SETDEFID, IDCANCEL, 0);
   }
   free(ed.old_rule);
-  ed.old_rule = ed.creating ? NULL : ed.read_only ? dup(rule) : rule_json(TRUE); /* as written here */
+  ed.old_rule = ed.creating ? NULL : ed.read_only ? copy_text(rule) : rule_json(TRUE); /* as written here */
   if (ed.creating && !ed.root->nkids) cond_new(ed.root); /* a blank rule: one condition to fill in */
   ed.depth = 0;
   ed.stack[0] = ed.root->id;
@@ -3121,9 +3121,9 @@ static BOOL find_smart(mc_library *lib, const char *uid, char **name, mc_smart_s
       const mc_smart_info *s = &list->items[i];
       if (strcmp(s->uid, uid)) continue;
       found = TRUE;
-      if (name) *name = dup(s->name);
+      if (name) *name = copy_text(s->name);
       if (subject) *subject = s->subject;
-      if (rule) *rule = dup(s->rule ? s->rule : "{\"v\":1}");
+      if (rule) *rule = copy_text(s->rule ? s->rule : "{\"v\":1}");
     }
   mc_smart_list_free(list);
   return found;

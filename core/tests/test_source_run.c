@@ -91,7 +91,7 @@ static void test_finding_a_checkout(void) {
   /* Found from the build folder, and from the root. */
   path(root, sizeof root, g_scratch, "repo");
   make_repo(root, -1);
-  path(deep, sizeof deep, root, "build/windows-w64devkit/desktop/windows");
+  path(deep, sizeof deep, root, "build/windows-x64/desktop/windows");
   CHECK(mc_mkdirs(deep) == MC_OK);
   char *found = mc_source_root(deep);
   CHECK(found && same_full(found, root));

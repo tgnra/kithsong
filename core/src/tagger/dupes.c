@@ -346,8 +346,8 @@ static mc_status find_release(mc_library *lib, const mc_db_album *album, const m
   static const char *const by[] = {
     "SELECT uid FROM albums WHERE mb_albumid = ?1",
     "SELECT uid FROM albums WHERE mb_releasegroupid = ?1",
-    "SELECT al.uid FROM albums al JOIN artists ar ON ar.uid = al.artist_uid"
-    " WHERE al.title = ?1 COLLATE NOCASE AND coalesce(al.artist_credit, ar.name) = ?2 COLLATE NOCASE"};
+    ("SELECT al.uid FROM albums al JOIN artists ar ON ar.uid = al.artist_uid"
+     " WHERE al.title = ?1 COLLATE NOCASE AND coalesce(al.artist_credit, ar.name) = ?2 COLLATE NOCASE")};
   static const char by_key[] =
     "SELECT al.uid FROM albums al JOIN artists ar ON ar.uid = al.artist_uid"
     " WHERE mc_name_key(al.title) = mc_name_key(?1)"

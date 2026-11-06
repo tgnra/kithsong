@@ -371,7 +371,7 @@ static void test_album_flags(fixture *f) {
   char al[MC_UID_STRLEN], sql[160];
   mc_uid_new(al);
   const char *o = f->lo;
-  mc_album_flags flags = {1, 1};
+  mc_album_flags flags = {1, 1, 0, 0};
 
   mc_row b1[] = {text_row(5000, o, "albums", al, "title", "From an older peer")};
   CHECK(apply(f, b1, 1) == 1);

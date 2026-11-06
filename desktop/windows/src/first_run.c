@@ -75,7 +75,7 @@ static int scale(int px) {
   return MulDiv(px, (int)g_fr.dpi, USER_DEFAULT_SCREEN_DPI);
 }
 
-static char *dup(const char *s) {
+static char *copy_text(const char *s) {
   char *d = s ? malloc(strlen(s) + 1) : NULL;
   if (d) strcpy(d, s);
   return d;
@@ -338,7 +338,7 @@ static void choose(void) {
 static void start(void) {
   const char *dir = g_fr.selected == PART_SUGGESTED ? g_fr.suggested : g_fr.selected == PART_CHOSEN ? g_fr.chosen : NULL;
   if (!dir || !confirm_onedrive(g_fr.wnd, dir)) return;
-  g_fr.result = dup(dir);
+  g_fr.result = copy_text(dir);
   g_fr.done = g_fr.result != NULL;
 }
 

@@ -36,7 +36,7 @@ typedef struct fx {
 /* --- The trash --- */
 
 static char g_bin[1200];
-static int g_binned, g_fail_trash;
+static int g_binned;
 static const char *g_refuse; /* a file name the trash won't take */
 static const char *g_arrive; /* a folder someone starts work in on the first trashing */
 static struct fx *g_late;    /* a library that gets rows on the first trashing */
@@ -44,7 +44,6 @@ static void row_of(struct fx *f, const char *rel);
 
 static mc_status fake_trash(const char *path) {
   if (g_refuse && strstr(path, g_refuse)) {
-    g_fail_trash++;
     return MC_ERR_IO;
   }
   if (g_arrive) {

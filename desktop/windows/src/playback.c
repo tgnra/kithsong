@@ -60,7 +60,7 @@ static struct {
   BOOL shown_shuffle;
 } s;
 
-static wchar_t *dup(const wchar_t *w) {
+static wchar_t *copy_text(const wchar_t *w) {
   return w ? _wcsdup(w) : NULL;
 }
 
@@ -115,7 +115,7 @@ static void add_new_items(void) {
       it->duration_ms = t->duration_ms;
       mc_track_list_free(list);
     }
-    if (!it->title) it->title = dup(mc_wstr(MC_STR_UNTITLED));
+    if (!it->title) it->title = copy_text(mc_wstr(MC_STR_UNTITLED));
   }
 }
 
@@ -337,7 +337,7 @@ void playback_tracks_changed(void) {
     free(it->artist);
     free(it->album);
     free(it->cover_dir);
-    it->title = t->title ? wstr_dup_from_utf8(t->title) : dup(mc_wstr(MC_STR_UNTITLED));
+    it->title = t->title ? wstr_dup_from_utf8(t->title) : copy_text(mc_wstr(MC_STR_UNTITLED));
     it->artist = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
     it->album = t->album ? wstr_dup_from_utf8(t->album) : NULL;
     it->cover_dir = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
@@ -409,10 +409,10 @@ static void play_queue(const playback_track *tracks, int count, int start, mc_pl
     const playback_track *t = &tracks[i];
     item *it = &items[i];
     if (t->uid && strlen(t->uid) < MC_UID_STRLEN) strcpy(it->uid, t->uid);
-    it->title = dup(t->title ? t->title : mc_wstr(MC_STR_UNTITLED));
-    it->artist = dup(t->artist);
-    it->album = dup(t->album);
-    it->cover_dir = dup(t->cover_dir);
+    it->title = copy_text(t->title ? t->title : mc_wstr(MC_STR_UNTITLED));
+    it->artist = copy_text(t->artist);
+    it->album = copy_text(t->album);
+    it->cover_dir = copy_text(t->cover_dir);
     it->duration_ms = t->duration_ms;
     paths[i] = t->path;
     uids[i] = t->uid;

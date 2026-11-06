@@ -5,7 +5,7 @@ function(kithsong_warnings target)
     target_compile_options(${target} PRIVATE /W4)
   else()
     target_compile_options(${target} PRIVATE
-      -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion
+      -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion -Wno-enum-float-conversion
       $<$<COMPILE_LANGUAGE:C>:-Wstrict-prototypes -Wmissing-prototypes>)
   endif()
 endfunction()
