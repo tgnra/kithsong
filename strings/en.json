@@ -1012,6 +1012,10 @@
   },
 
   "windows": {
+    "queue": { "text": "Queue", "note": "The button in the now-playing bar that opens the list of what plays next: its tooltip and name for accessibility; also the heading of that list." },
+    "queue_clear": { "text": "Clear", "note": "Button at the top of the queue: removes everything from it." },
+    "queue_remove": { "text": "Remove from queue", "note": "Tooltip of the x on a track in the queue." },
+    "queue_empty": { "text": "Nothing queued", "note": "In the queue when it is empty." },
     "yes": { "text": "_Yes", "note": "Button answering a question." },
     "no": { "text": "_No", "note": "Button answering a question." },
     "home_station_name": { "text": "Radio station", "note": "Said by screen readers before a radio station's name on the Home page." },
