@@ -433,15 +433,21 @@ fun App(
                 // sliding out doesn't take that one over.
                 nav.layers.forEach { layer ->
                     if (layer.page == Page.Player) key(layer.id) {
+                        // Back and dragging down are the queue's while it's open.
+                        val queue = rememberQueueSlide()
+                        val backHere = layer.id == top?.id && !smartOpen
                         DismissibleScreen(
                             DismissDirection.Down,
                             onLeaving = { nav = nav.leave(layer.id) },
                             onDismissed = { nav = nav.remove(layer.id) },
-                            backEnabled = layer.id == top?.id && !smartOpen,
+                            backEnabled = backHere && !queue.open,
+                            draggable = !queue.shown,
                         ) { dismiss ->
                             FullPlayer(
                                 playback,
                                 track,
+                                queue,
+                                queueBackEnabled = backHere,
                                 onCollapse = dismiss,
                                 onAddToPlaylist = if (actions.editor == null) null else {
                                     { actions.addToPlaylist(Addition.Tracks(listOf(track.uid))) }
@@ -518,7 +524,7 @@ fun isShortWindow(): Boolean =
 private val ShortWindowHeight = 480.dp
 
 /** Hides a layer from accessibility services while another covers it. */
-private fun Modifier.coveredIf(covered: Boolean) = if (covered) clearAndSetSemantics {} else this
+internal fun Modifier.coveredIf(covered: Boolean) = if (covered) clearAndSetSemantics {} else this
 
 private val NavSaver = BackStack.saver(Page::encode, Page::decode)
 

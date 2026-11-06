@@ -9,17 +9,21 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
-import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import ng.kithso.android.KithsongApp
+import ng.kithso.android.data.CoreLibrarySource
 import ng.kithso.android.data.Track
 import ng.kithso.core.CorePlayer
+import ng.kithso.core.UpNextEntry
+import ng.kithso.playback.CoreMediaPlayer
 import ng.kithso.playback.path
 import ng.kithso.playback.playOrigin
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -52,6 +56,12 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
     override var station by mutableStateOf(false)
         private set
 
+    override var upNext by mutableStateOf<List<UpNextEntry>>(emptyList())
+        private set
+
+    private val app = context.applicationContext as KithsongApp
+    // In this process, as the service is; see PlaybackService.
+    private val player get() = app.mediaPlayer
     private var controller: MediaController? = null
     private val pending = ArrayList<(MediaController) -> Unit>()
     private var ticker: Job? = null
@@ -120,11 +130,13 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
         withController { it.seekTo(positionMs) }
     }
 
-    override fun next() = withController { it.seekToNext() }
+    // Straight to the player: a controller shows the timeline's neighbour at once, which with up
+    // next about is the wrong track.
+    override fun next() = withController { (player ?: it).seekToNext() }
 
-    override fun previous() = withController { it.seekToPrevious() }
+    override fun previous() = withController { (player ?: it).seekToPrevious() }
 
-    override fun skipToPrevious() = withController { it.seekToPreviousMediaItem() }
+    override fun skipToPrevious() = withController { (player ?: it).seekToPreviousMediaItem() }
 
     override fun setShuffle(on: Boolean) {
         shuffleOn = on
@@ -151,10 +163,45 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
         track = null
         positionMs = 0
         withController {
+            player?.clearUpNext()
             it.stop()
             // An empty queue, as clearMediaItems() asks to remove items, which the player ignores.
             it.setMediaItems(emptyList())
         }
+    }
+
+    override suspend fun addUpNext(what: QueueAddition, next: Boolean): Boolean {
+        val source = app.library as? CoreLibrarySource ?: return false
+        // The player is there once the controller has connected.
+        val connected = CompletableDeferred<CoreMediaPlayer?>()
+        withController { connected.complete(player) }
+        val player = connected.await() ?: return false
+        return source.addUpNext(player, what, next, app.settings.queueTracks)
+    }
+
+    override fun moveUpNext(id: Int, to: Int) {
+        // At once, as a dragged row has to stay where it's dropped; the player's word follows.
+        val from = upNext.indexOfFirst { it.id == id }
+        if (from >= 0) upNext = upNext.toMutableList().apply { add(to.coerceIn(0, lastIndex), removeAt(from)) }
+        player?.moveUpNext(id, to)
+    }
+
+    override fun removeUpNext(id: Int) {
+        upNext = upNext.filterNot { it.id == id }
+        player?.removeUpNext(id)
+    }
+
+    override fun clearUpNext() {
+        upNext = emptyList()
+        player?.clearUpNext()
+    }
+
+    /** Up next changed, or what's around it: from the player, on the main thread. */
+    fun upNextChanged() {
+        val player = player ?: return
+        upNext = player.upNext
+        nextTrack = player.itemAt(1)?.toTrack()
+        previousTrack = player.itemAt(-1)?.toTrack()
     }
 
     private fun withController(action: (MediaController) -> Unit) {
@@ -171,8 +218,7 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
         // The player says: shuffled the core's queue never ends, though the timeline's shuffle
         // order, which holds each track once, does, and a station's goes on past what's known.
         hasNext = player.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT)
-        nextTrack = player.trackAt(player.nextMediaItemIndex)
-        previousTrack = player.trackAt(player.previousMediaItemIndex)
+        upNextChanged()
         positionMs = player.currentPosition
         ticker?.cancel()
         ticker = if (!player.isPlaying) null else scope.launch {
@@ -182,8 +228,6 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
             }
         }
     }
-
-    private fun Player.trackAt(index: Int) = if (index == C.INDEX_UNSET) null else getMediaItemAt(index).toTrack()
 
     private companion object {
         const val TAG = "kithsong"

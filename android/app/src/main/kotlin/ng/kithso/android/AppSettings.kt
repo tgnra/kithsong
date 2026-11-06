@@ -95,6 +95,14 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
             save()
         }
 
+    /** Whether an album or playlist added to the queue goes in as a row per track, not one row. */
+    var queueTracks: Boolean
+        get() = core.queueTracks
+        set(value) {
+            core.queueTracks = value
+            save()
+        }
+
     /** The playback volume, 0 to 100, as it was left; nothing sets it yet. */
     val volume: Int get() = core.volume
 

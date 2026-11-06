@@ -39,9 +39,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
@@ -160,19 +162,39 @@ private fun PlayPause(playback: Playback) {
  * down (see [DismissibleScreen]). Swiping left or right skips a track, moving the art and title
  * (see [TrackSwipeState]). [onMenu], if given, opens the track's menu from a button across from
  * the collapse button, and from a long press on the art.
+ *
+ * The chevron facing down at the foot of the player, away from the one in the corner that closes
+ * it, slides the view up to show the queue ([QueuePage]), as does dragging up, and [slide] holds
+ * how far. A window too short to spare the height has that chevron in the middle of the top row.
+ * Only the player's own view swipes between tracks, and the background stays put under both.
+ * [queueBackEnabled]: system back is the queue's while it's open.
  */
 @Composable
-fun FullPlayer(
+internal fun FullPlayer(
     playback: Playback,
     track: Track,
+    slide: QueueSlide,
+    queueBackEnabled: Boolean,
     onCollapse: () -> Unit,
     onAddToPlaylist: (() -> Unit)? = null,
     onMenu: (() -> Unit)? = null,
 ) {
     val swipe = rememberTrackSwipe(playback)
-    Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize().trackSwipe(swipe)) {
+    QueueBackHandler(slide, queueBackEnabled)
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxSize().onSizeChanged { slide.page = it.height.toFloat() },
+    ) {
         ArtBackdrop(rememberArtColors(track.art), Modifier.fillMaxSize())
-        BoxWithConstraints(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
+        BoxWithConstraints(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { translationY = -slide.progress * slide.page }
+                .coveredIf(slide.open)
+                .queueDrag(slide, swipe)
+                .trackSwipe(swipe)
+                .windowInsetsPadding(WindowInsets.safeDrawing),
+        ) {
             val wide = maxWidth > maxHeight
             // Below about this, two lines and the controls don't fit, so a short title gives its space back.
             val titleSpace = maxHeight >= 256.dp + 56.dp * LocalDensity.current.fontScale
@@ -183,6 +205,10 @@ fun FullPlayer(
                         Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.close_player))
                     }
                     Spacer(Modifier.weight(1f))
+                    if (wide) {
+                        QueueChevron(slide)
+                        Spacer(Modifier.weight(1f))
+                    }
                     if (onMenu != null) IconButton(onClick = onMenu, modifier = Modifier.offset(x = 12.dp)) {
                         Icon(Icons.MoreVert, contentDescription = stringResource(R.string.track_menu))
                     }
@@ -202,11 +228,31 @@ fun FullPlayer(
                         art = { PlayerArt(swipe, onMenu, Modifier) },
                         title = { PlayerTitle(swipe, titleSpace, Alignment.TopStart) },
                         controls = { PlayerControls(playback, track, onAddToPlaylist) },
+                        chevron = { QueueChevron(slide) },
                         modifier = Modifier.weight(1f),
                     )
                 }
             }
         }
+        if (slide.shown) {
+            QueuePage(
+                playback,
+                slide,
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { translationY = (1f - slide.progress) * slide.page }
+                    .queueDrag(slide)
+                    .windowInsetsPadding(WindowInsets.safeDrawing),
+            )
+        }
+    }
+}
+
+/** Slides the view to the queue. */
+@Composable
+private fun QueueChevron(slide: QueueSlide) {
+    IconButton(onClick = slide::show) {
+        Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.open_queue))
     }
 }
 
@@ -216,20 +262,23 @@ fun FullPlayer(
  * controls, and past their limits, around the lot.
  *
  * The title sits under the art and the controls right under the title, which keeps the height
- * of two lines, so moving between a short title and a long one moves none of it.
+ * of two lines, so moving between a short title and a long one moves none of it. The chevron
+ * stays at the foot, in the room below the controls.
  */
 @Composable
 private fun TallPlayerLayout(
     art: @Composable () -> Unit,
     title: @Composable () -> Unit,
     controls: @Composable () -> Unit,
+    chevron: @Composable () -> Unit,
     modifier: Modifier,
 ) {
-    Layout(listOf(art, title, controls), modifier) { (artItem, titleItem, controlsItem), constraints ->
+    Layout(listOf(art, title, controls, chevron), modifier) { (artItem, titleItem, controlsItem, chevronItem), constraints ->
         val width = constraints.maxWidth
         val height = constraints.maxHeight
         val artGap = ArtGap.roundToPx()
-        val bottom = BottomGap.roundToPx()
+        val chevronPlaced = chevronItem.single().measure(Constraints())
+        val bottom = maxOf(BottomGap.roundToPx(), chevronPlaced.height - ControlsGap.roundToPx())
         // ControlsGap isn't placed, it's part of the room below the controls, which sizes the art.
         val fixed = artGap + ControlsGap.roundToPx() + bottom
         val titlePlaced = titleItem.single().measure(Constraints(width, width, 0, height))
@@ -250,6 +299,7 @@ private fun TallPlayerLayout(
             artPlaced.place((width - side) / 2, artTop)
             titlePlaced.place(0, titleTop)
             controlsPlaced.place(0, titleTop + titlePlaced.height)
+            chevronPlaced.place((width - chevronPlaced.width) / 2, height - chevronPlaced.height)
         }
     }
 }

@@ -26,6 +26,7 @@ import ng.kithso.android.sync.VerifyWorker
 import ng.kithso.android.ui.BackStack
 import ng.kithso.android.ui.art.FileArt
 import ng.kithso.android.ui.art.artImageLoader
+import ng.kithso.playback.CoreMediaPlayer
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import java.io.File
@@ -68,6 +69,9 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         private set
     lateinit var settings: AppSettings
         private set
+
+    /** The player, for what doesn't go through the session (up next); null without the service. */
+    var mediaPlayer: CoreMediaPlayer? = null
 
     /** Passes plays on to Last.fm for the group's account (see [Scrobbling]). */
     lateinit var scrobbling: Scrobbling
@@ -128,6 +132,8 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
             settings.deviceName = renamed.takeIf { it != systemDeviceName() }
         }
         core.onChanged = syncer::notifyChanged
+        // Its tracks are the old library's.
+        syncer.onLibraryReplaced = { playback.clearUpNext() }
         core.binOffered = syncer::binOffered
         VerifyWorker.schedule(this)
         importer = Importer(this, core, MainScope())

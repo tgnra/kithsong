@@ -56,12 +56,17 @@ import java.io.File
  * The queue and the place in it are kept as they go along ([QueueMemory]), so the process can go
  * at any time. The next one starts paused where this left off, and a play button (Bluetooth, say)
  * that starts the process goes on from there. A station keeps only its track, and starts from
- * it again.
+ * it again. Up next isn't kept.
+ *
+ * The app's UI is in this process, so it reaches up next through [KithsongApp.mediaPlayer] rather
+ * than the session, which has no way to say what plays next or to edit it: controllers see up
+ * next's tracks as the queue's last items, and can't change them.
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     private val scope = MainScope()
     private var session: MediaLibrarySession? = null
+    private lateinit var core: CoreMediaPlayer
     private lateinit var memory: QueueMemory
     private val saving = Dispatchers.IO.limitedParallelism(1)
     // Nothing is saved until what's kept has been read: the empty player would replace it.
@@ -80,17 +85,20 @@ class PlaybackService : MediaLibraryService() {
             onNowPlaying = { trackUid -> app.scrobbling.nowPlaying(trackUid) },
             onPlayEnded = { event -> app.library.logPlay(event) },
             libraryDir = app.libraryDir.path,
-            stationItems = { uids, origin, done ->
+            addedItems = { uids, origin, done ->
                 scope.launch {
                     val tracks = app.library.tracks(uids)
                     // Finding a cover's URI touches the disk.
-                    done(withContext(Dispatchers.IO) { stationItems(this@PlaybackService, uids, tracks, origin) })
+                    done(withContext(Dispatchers.IO) { addedItems(this@PlaybackService, uids, tracks, origin) })
                 }
             },
+            onUpNextChanged = { (app.playback as? SessionPlayback)?.upNextChanged() },
         ) { trackUid, startedMs ->
             app.library.recordPlay(trackUid)
             app.scrobbling.scrobble(trackUid, startedMs)
         }
+        core = player
+        app.mediaPlayer = player
         val openApp = PendingIntent.getActivity(
             this,
             0,
@@ -152,6 +160,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session
 
     override fun onDestroy() {
+        (application as KithsongApp).mediaPlayer = null
         session?.run {
             if (restored) memory.write(snapshot(player))
             player.release()
@@ -172,8 +181,11 @@ class PlaybackService : MediaLibraryService() {
         val current = player.currentMediaItem ?: return null
         val origin = current.playOrigin
         if (origin.context == CorePlayer.PlayContext.Radio) return SavedQueue(listOf(current.mediaId), 0, 0, origin)
-        val uids = List(player.mediaItemCount) { player.getMediaItemAt(it).mediaId }
-        return SavedQueue(uids, player.currentMediaItemIndex, player.currentPosition, origin)
+        // Up next isn't kept, so nor is how far into one of its tracks it had got.
+        val uids = core.listItems.map { it.mediaId }
+        if (uids.isEmpty()) return null
+        val index = player.currentMediaItemIndex
+        return SavedQueue(uids, core.listPlace(index), if (index < uids.size) player.currentPosition else 0, origin)
     }
 
     // The queue kept from last time, but for tracks it can't play any more; null for none.

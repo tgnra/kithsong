@@ -272,6 +272,12 @@ class Syncer(
     private val state = MutableStateFlow(SyncStatus(deviceName))
     val status: StateFlow<SyncStatus> = state
 
+    /**
+     * This phone's library was set aside for the one it paired into, as a merge of the old one
+     * starts and again once it's over; called in [scope].
+     */
+    var onLibraryReplaced: () -> Unit = {}
+
     // Only touched on [thread].
     private var sync: CoreSync? = null
     private val holders = HashSet<String>()
@@ -798,6 +804,7 @@ class Syncer(
                         "${event.tracksSkipped} deleted, ${event.tracksLeftOut} left out, ${event.tracksFailed} failed",
                 )
                 update { copy(merge = (merge ?: MergeState()).copy(result = event)) }
+                scope.launch { onLibraryReplaced() }
                 source.refresh()
                 lastFilesRefresh = SystemClock.elapsedRealtime()
             }
@@ -901,7 +908,10 @@ class Syncer(
             lastFilesRefresh = now
             source.refresh()
         }
-        if (before?.running != true) startService()
+        if (before?.running != true) {
+            startService()
+            scope.launch { onLibraryReplaced() }
+        }
     }
 
     // On [thread]. False if the result needs no telling, so nothing changed.
