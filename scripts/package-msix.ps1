@@ -1,8 +1,11 @@
 # Packs the Windows release as an unsigned dist\kithsong-<version>-windows-<arch>.msix for the
 # Microsoft Store, which signs it on ingestion. Builds with release-windows.ps1 first, unless
 # -StageDir names a folder it already installed (build\stage-windows-<arch>\kithsong-<version>).
-# The release workflow runs it that way, after its own build. x64 and arm64 are separate
-# packages of the same version, and both go into one Store submission.
+# The release workflow runs it that way, after its own build.
+#
+# -Bundle packs nothing: it joins the x64 and arm64 packages already in dist\ into
+# dist\kithsong-<version>-windows.msixbundle. That's the file to give the Store. As separate
+# packages of one version, it ranks x64 above Arm, so Arm PCs could be sent the emulated build.
 #
 # The three Identity values must match Partner Center's Product management → Product
 # identity page (Package/Identity/Name, Package/Identity/Publisher and
@@ -23,7 +26,8 @@ param(
     # A release-windows.ps1 install to pack instead of building.
     [string]$StageDir,
     # Leaves out resources.pri. The scale and targetsize icons then go unused.
-    [switch]$NoPri
+    [switch]$NoPri,
+    [switch]$Bundle
 )
 $ErrorActionPreference = 'Stop'
 
@@ -67,6 +71,19 @@ function Find-SdkTool($name) {
 }
 
 $makeappx = Find-SdkTool 'makeappx.exe'
+
+if ($Bundle) {
+    $packages = "$root\build\msix-bundle"
+    if (Test-Path $packages) { Remove-Item -Recurse -Force $packages }
+    New-Item -ItemType Directory -Force $packages | Out-Null
+    foreach ($each in 'x64', 'arm64') { Copy-Item "$root\dist\kithsong-$version-windows-$each.msix" $packages }
+    $bundleFile = "$root\dist\kithsong-$version-windows.msixbundle"
+    if (Test-Path $bundleFile) { Remove-Item -Force $bundleFile }
+    Invoke-Checked $makeappx bundle /d $packages /p $bundleFile /bv $msixVersion /o
+    Write-Host "Wrote $bundleFile ($msixVersion, unsigned)"
+    return
+}
+
 $makepri = if ($NoPri) { $null } else { Find-SdkTool 'makepri.exe' }
 
 # --- The app ---

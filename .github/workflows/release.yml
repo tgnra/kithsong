@@ -110,6 +110,26 @@ jobs:
           path: dist/*.msix
           if-no-files-found: error
 
+  windows-bundle:
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: windows-*-msix
+          path: dist
+          merge-multiple: true
+      # Windows PowerShell and the runner's SDK, like Pack the MSIX.
+      - name: Bundle the MSIX packages
+        shell: powershell
+        run: scripts/package-msix.ps1 -Bundle
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-msixbundle
+          path: dist/*.msixbundle
+          if-no-files-found: error
+
   linux:
     needs: version
     runs-on: ubuntu-latest
@@ -230,7 +250,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [version, windows, linux, linux-tarball, android]
+    needs: [version, windows, windows-bundle, linux, linux-tarball, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write

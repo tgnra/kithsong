@@ -1,5 +1,5 @@
 /* How fast Opus transcoding runs here. Not a test: build Release, with a
- * FETCHCONTENT_BASE_DIR of its own (a shared one lets a debug build's libopus objects in).
+ * preset of its own, as each has its own deps.
  *
  *   manual_opus_bench info
  *   manual_opus_bench resq
