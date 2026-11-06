@@ -16,7 +16,7 @@
 extern "C" {
 #endif
 
-/* Defined in library.h, which includes this through musiccore.h before it defines them. */
+/* Defined in library.h, which includes this through kithcore.h before it defines them. */
 typedef struct mc_library mc_library;
 typedef struct mc_track_list mc_track_list;
 typedef struct mc_album_list mc_album_list;

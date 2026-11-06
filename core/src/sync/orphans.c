@@ -11,7 +11,7 @@
  *  - library-before-merge-*.db at the top, the set-aside copies, and their -wal or -shm;
  *  - ".merge-restore", the folder that undoing a merge works in, at the top;
  *  - ".kithsong-*" anywhere: an edit's copies and backups, the artist refresh's copies, the
- *    library move's write probe, a source run's marker (musiccore/source_run.h). Some have an
+ *    library move's write probe, a source run's marker (kithcore/source_run.h). Some have an
  *    edit's journal to answer to, and one kept needlessly costs a little space, where a backup
  *    deleted loses a track;
  *  - the config folder, should the user have put it inside: sync.db, deleted.db, settings.json,

@@ -1,5 +1,5 @@
 /* Remove from this computer and Sync to this computer, on the album tiles' menu
- * (album_groups.c) and the artist page's menu (artist_view.c), through musiccore/sync_here.h:
+ * (album_groups.c) and the artist page's menu (artist_view.c), through kithcore/sync_here.h:
  * an album or artist leaves this computer, or comes back, while it stays in the library and
  * on the other devices. Neither shows while sync is off, outside a group or on an archive,
  * where Delete from library is the only honest option. Asks first:

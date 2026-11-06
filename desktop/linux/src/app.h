@@ -22,7 +22,7 @@ typedef struct app {
   GtkWindow *win;
   AdwToastOverlay *toasts; /* over the whole window, e.g. "Restored 3 tracks" */
   char *settings_dir;  /* ~/.config/kithsong */
-  gboolean from_source; /* running from a checkout (musiccore/source_run.h) */
+  gboolean from_source; /* running from a checkout (kithcore/source_run.h) */
   char *reset_failed;  /* why Reset Kithsong… couldn't clear all of settings_dir as this
                         * start began, to say once the window is up; else NULL */
   char *art_dir;        /* settings_dir/playlist-art: playlists' and album groups' pictures, see
@@ -119,7 +119,7 @@ void app_open_album_group(app *a, const char *uid);
  * settings_view_choose_library() does. */
 gboolean app_open_library(app *a, const char *dir);
 
-/* Stress test libraries (musiccore/stress.h). Opens the one in dir and saves that, remembering
+/* Stress test libraries (kithcore/stress.h). Opens the one in dir and saves that, remembering
  * the library to go back to; and goes back to it. With no way back saved, Settings opens. */
 void app_open_stress(app *a, const char *dir);
 void app_back_to_library(app *a);

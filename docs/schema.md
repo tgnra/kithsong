@@ -88,7 +88,7 @@ with `exclude_track`.
 ## Deleted tracks
 
 Deleting a track (`mc_delete_run()`, see
-[musiccore/delete.h](../core/include/musiccore/delete.h)) moves its files to the Recycle Bin
+[kithcore/delete.h](../core/include/kithcore/delete.h)) moves its files to the Recycle Bin
 or trash and deletes its rows like any other change, so the delete syncs. What's needed to
 bring it back is kept out of the library, in `deleted.db` in the per-device config dir: one
 row per trashed file with its old path, size, modification time, hash (if known), and the
@@ -154,7 +154,7 @@ are dropped), so new albums keep the column's default, `'album'`. `tracks.year` 
 
 ## Album flags
 
-What an album's tags can't say, set by hand (`mc_album_flags_set()`, `musiccore/edit.h`) and
+What an album's tags can't say, set by hand (`mc_album_flags_set()`, `kithcore/edit.h`) and
 never written to its files. They sync as logged fields of the album.
 
 - `albums.no_scrobble`, 0 or 1: its tracks are never scrobbled nor sent as now playing, whichever
@@ -348,7 +348,7 @@ that row until they're older than the windows anyway.
 
 A fingerprint of how each track sounds, for telling which tracks sound alike, and its loudness,
 worked out on the device from the audio alone: nothing goes over the network but sync's own
-rows. The API is in `musiccore/analysis.h`, the code in `core/src/analysis/`. It changes nothing
+rows. The API is in `kithcore/analysis.h`, the code in `core/src/analysis/`. It changes nothing
 about playback: the loudness is kept so that a volume feature won't need a second decode of the
 library.
 
@@ -514,7 +514,7 @@ can't be opened for now, or changed while it was read.
 `core/tests/manual_analysis` analyses a file or folder and prints the features and each file's
 nearest neighbours, for a person to judge.
 
-Radio ([`radio.h`](../core/include/musiccore/radio.h)) picks from these results: a fixed mix with
+Radio ([`radio.h`](../core/include/kithcore/radio.h)) picks from these results: a fixed mix with
 `mc_radio_make()`, or a station that goes on for as long as it's asked (`mc_radio_station_open()`).
 Candidates have a result of this version and a file on this device, aren't in a continuous mix, and
 are of the seed's group (see [Radio stations](#radio-stations)).
@@ -622,7 +622,7 @@ log and the rest all 32 passes. The seed is already playing by then.
 
 ### Radio stations
 
-`mc_radio_stations_list()` ([`radio_stations.h`](../core/include/musiccore/radio_stations.h), the
+`mc_radio_stations_list()` ([`radio_stations.h`](../core/include/kithcore/radio_stations.h), the
 code in `core/src/radio/stations.c` and `groups.c`) makes the Home page's Radio row: one station
 for each kind of music the analysis finds in the library, so a library of two kinds has two
 stations. Nothing is stored, so there's no schema to it: it's worked out again each time the page
@@ -710,7 +710,7 @@ fills an empty folder with a made-up library to time.
 
 The menus of a track, album or artist start a station from one track. For an album or artist that's
 `mc_radio_seed_for_album()` or `mc_radio_seed_for_artist()`
-([`radio_seeds.h`](../core/include/musiccore/radio_seeds.h)): of the tracks that pass
+([`radio_seeds.h`](../core/include/kithcore/radio_seeds.h)): of the tracks that pass
 `mc_radio_seed_check()`, the one with the least total distance to the others, on the fixed scales, so
 a menu needn't read the whole library to open. Of more than 64 such tracks, 64 are compared. Plays
 only decide between tracks that are level, as the two of a two-track album always are: anything more
@@ -719,7 +719,7 @@ would let the most played track stand for an album it may not sound like. Nothin
 
 ## Stats
 
-`mc_library_read_stats()` (`musiccore/library.h`) adds up what's above with one read query:
+`mc_library_read_stats()` (`kithcore/library.h`) adds up what's above with one read query:
 nothing is stored for it, so there's nothing to keep up to date or to sync. Tracks, albums,
 singles, artists, genres and playing time come twice, for the whole library and for what has a
 file on this device, as a device needn't hold all of it. Albums, singles and artists are counted
@@ -743,7 +743,7 @@ defined by a rule instead of by hand. The rule is evaluated each time the list i
 against this device's data: nothing it selects is stored. Two devices can therefore differ
 on what a list holds when a rule depends on local data, such as "on this device". The rule
 is one JSON value in `smart_lists.rule`, so an edit syncs whole and two edits never merge
-into a mix of both. The API is in `musiccore/smartlist.h`, and the evaluator in
+into a mix of both. The API is in `kithcore/smartlist.h`, and the evaluator in
 `core/src/smart/smartlist.c`.
 
 ```json
@@ -935,7 +935,7 @@ joins only its own table. That's why a kind is only ever added.
 | `analysis_failed`  | no     | files that wouldn't decode for the audio analysis; see [Audio analysis](#audio-analysis) |
 | `file_failed`      | no     | originals imported here that failed a check; see [Failed originals](sync-protocol.md#failed-originals) |
 | `recycle_bin`      | no     | deletes made here that no other device has heard of yet, which can be taken back; see [Recycle bin](#recycle-bin) |
-| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_name_seq` (the `seq` names were last logged at, see [Duplicates](sync-protocol.md#duplicates)), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)), `merge_wait` (set with it until this device's profile is confirmed: the merge waits for that, see [Merging libraries](sync-protocol.md#merging-libraries); its value is the run of the app that set it, and a later run finding it undoes the pairing), `merge_with` and `merge_name` (with them: the kept device's name and this device's own before pairing), `merge_restored` (the kept device's name, after a pairing was undone, until a frontend has said so), `merge_restore_sync` and `merge_restored_name` (while an undone pairing's `sync.db` and name are still to be put back; see "Abandoning a merge" there), `artist_refresh` (`'pending'` until the credits from before v13 are split, then `'done'`; see [Artist credits](#artist-credits)), while it's pending the refresh's cursors `artist_refresh_mb`, `artist_refresh_split`, `artist_refresh_loose` and its `artist_refresh_files` (see [Refresh after upgrading](tagging-rules.md#refresh-after-upgrading)), `changelog_epoch` (bumped each time a delete is taken back out of the recycle bin, which takes changelog rows out; see [Recycle bin](#recycle-bin)), `edit_swap` (while a hand edit swaps its files: what to put right after a crash; see [Hand edits](tagging-rules.md#hand-edits)), `stress_library` (the preset, in a generated stress test library: sync and scrobbling refuse such a library, see `musiccore/stress.h`), and other per-library settings |
+| `meta`             | no     | `node_uid`, `library_uid`, `merge_seq` (the changelog `seq` duplicate merging has read up to), `merge_name_seq` (the `seq` names were last logged at, see [Duplicates](sync-protocol.md#duplicates)), `merge_source` (the set-aside library still to merge in, see [Identity](#identity)), `merge_wait` (set with it until this device's profile is confirmed: the merge waits for that, see [Merging libraries](sync-protocol.md#merging-libraries); its value is the run of the app that set it, and a later run finding it undoes the pairing), `merge_with` and `merge_name` (with them: the kept device's name and this device's own before pairing), `merge_restored` (the kept device's name, after a pairing was undone, until a frontend has said so), `merge_restore_sync` and `merge_restored_name` (while an undone pairing's `sync.db` and name are still to be put back; see "Abandoning a merge" there), `artist_refresh` (`'pending'` until the credits from before v13 are split, then `'done'`; see [Artist credits](#artist-credits)), while it's pending the refresh's cursors `artist_refresh_mb`, `artist_refresh_split`, `artist_refresh_loose` and its `artist_refresh_files` (see [Refresh after upgrading](tagging-rules.md#refresh-after-upgrading)), `changelog_epoch` (bumped each time a delete is taken back out of the recycle bin, which takes changelog rows out; see [Recycle bin](#recycle-bin)), `edit_swap` (while a hand edit swaps its files: what to put right after a crash; see [Hand edits](tagging-rules.md#hand-edits)), `stress_library` (the preset, in a generated stress test library: sync and scrobbling refuse such a library, see `kithcore/stress.h`), and other per-library settings |
 
 ## Change tracking
 
@@ -962,7 +962,7 @@ thread. Each has its own clock, so writes go through `mc_library_begin_write()`,
 the write lock and then catches the clock up to the newest logged hlc. That keeps the log
 strictly increasing per device.
 
-The triggers call SQL functions that musiccore registers (`mc_hlc_now()`, `mc_node_uid()`,
+The triggers call SQL functions that kithcore registers (`mc_hlc_now()`, `mc_node_uid()`,
 `mc_applying_remote()`). Any other tool that opens the database, such as the sqlite3 CLI,
 will therefore fail on writes to tracked tables instead of silently making untracked
 changes. That is deliberate.

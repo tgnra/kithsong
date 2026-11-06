@@ -1,4 +1,4 @@
-/* Library search (musiccore/search.h).
+/* Library search (kithcore/search.h).
  *
  * The index is a sorted vocabulary of folded words (util/text.h), each with a posting list of
  * the items and fields that hold it. A search folds the query into words and, for each, walks

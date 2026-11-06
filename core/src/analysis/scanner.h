@@ -1,4 +1,4 @@
-/* Inside the scanner (musiccore/analysis.h). Internal to core. */
+/* Inside the scanner (kithcore/analysis.h). Internal to core. */
 #ifndef MC_ANALYSIS_SCANNER_H
 #define MC_ANALYSIS_SCANNER_H
 

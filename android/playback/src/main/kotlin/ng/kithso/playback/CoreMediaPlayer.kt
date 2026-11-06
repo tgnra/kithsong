@@ -21,7 +21,7 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 
 /**
- * musiccore's gapless player as a Media3 [Player], so a media session can drive it: the core
+ * kithcore's gapless player as a Media3 [Player], so a media session can drive it: the core
  * decodes and plays, and this keeps the queue of [MediaItem]s (each with its file, see [path])
  * and what Media3 needs around it. It also does what an Android player must and the core
  * doesn't know about: audio focus, pausing when headphones are unplugged, and a wake lock while

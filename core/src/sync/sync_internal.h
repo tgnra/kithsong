@@ -285,7 +285,7 @@ int mc_sync_take_user(mc_sync *sync, const char *peer_uid);
  * acted on. Clears nothing. The recycle bin's deletes go only in such a session. */
 int mc_sync_pressed(mc_sync *sync, const char *peer_uid);
 
-/* --- The recycle bin (here.c; musiccore/delete.h) --- */
+/* --- The recycle bin (here.c; kithcore/delete.h) --- */
 
 /* Before a library exchange: waits for a restore under way, then empties the bin through
  * lib, as its deletes may reach the peer from now on. With pressed 0 (the user didn't ask

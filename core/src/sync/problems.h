@@ -1,4 +1,4 @@
-/* What the checks left for the user: mc_sync_get_problems() in musiccore/sync.h, and "Verification"
+/* What the checks left for the user: mc_sync_get_problems() in kithcore/sync.h, and "Verification"
  * in docs/sync-protocol.md. Internal to core.
  *
  * Removing a lost track deletes it on every device, so what counts as lost is deliberately

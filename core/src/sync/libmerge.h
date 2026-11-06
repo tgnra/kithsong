@@ -1,5 +1,5 @@
 /* Merging libraries, the library side (see "Merging libraries" in docs/sync-protocol.md and
- * musiccore/sync.h). The device whose library isn't kept sets it aside (a copy next to it)
+ * kithcore/sync.h). The device whose library isn't kept sets it aside (a copy next to it)
  * and empties it in place before it joins; once the first session has brought the kept
  * library, the copy's current state is merged in as an import would bring it in: tracks
  * through the import's duplicates check, then playlists, album groups, smart lists, play

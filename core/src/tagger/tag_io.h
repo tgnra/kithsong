@@ -1,5 +1,5 @@
 /* Parts of the TagLib shim (tag_io.cpp) that are internal to core. The rest is in
- * musiccore/tagger.h. */
+ * kithcore/tagger.h. */
 #ifndef MC_TAGGER_TAG_IO_H
 #define MC_TAGGER_TAG_IO_H
 

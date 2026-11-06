@@ -1,5 +1,5 @@
-/* JNI bindings for ng.kithso.core.CoreSettings: the core's settings.json (musiccore/settings.h).
- * Kept apart from jni_bridge.c; as thin as it is: marshal arguments, call musiccore, convert
+/* JNI bindings for ng.kithso.core.CoreSettings: the core's settings.json (kithcore/settings.h).
+ * Kept apart from jni_bridge.c; as thin as it is: marshal arguments, call kithcore, convert
  * results. Failures throw ng.kithso.core.KithCoreException. */
 #include <jni.h>
 #include <stdint.h>

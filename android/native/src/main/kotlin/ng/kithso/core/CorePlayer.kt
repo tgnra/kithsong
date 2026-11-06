@@ -1,7 +1,7 @@
 package ng.kithso.core
 
 /**
- * musiccore's gapless player (mc_player). It may be used from any thread. [onEvent] is called
+ * kithcore's gapless player (mc_player). It may be used from any thread. [onEvent] is called
  * on the player's own thread with an [Event]; read [status] from there or after posting to
  * the UI thread.
  */

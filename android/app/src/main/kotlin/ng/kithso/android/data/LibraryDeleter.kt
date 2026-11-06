@@ -60,7 +60,7 @@ interface LibraryDeleter {
 }
 
 /**
- * The recycle bin (musiccore/delete.h): in a sync group, what was deleted here since the last
+ * The recycle bin (kithcore/delete.h): in a sync group, what was deleted here since the last
  * sync. Its files are gone from this phone already; until a sync sends the deletes, one can be
  * restored, which keeps it in the library and on the other devices, removed from this phone
  * (its sync profile excludes it). While it holds anything this phone doesn't sync by itself:

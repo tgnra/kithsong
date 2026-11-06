@@ -15,14 +15,14 @@
  * neither adds to it nor starts a new play. Starting an item again (a skip to it, previous(),
  * a seek to 0, resuming after a stop) does.
  *
- * It keeps the play log's rows too (musiccore/library.h), one for every item started, heard
+ * It keeps the play log's rows too (kithcore/library.h), one for every item started, heard
  * or not: a skip after a second gets one as a full play does, and an item that can't be
  * played gets one that says so. A row is finished when its play ends, and the frontend passes
  * it on (mc_player_take_ended()), so an app that dies without closing loses the play under
  * way, and only that one.
  *
  * A radio play (mc_player_play_radio()) is a queue that grows: a thread of the player's keeps a
- * few tracks queued ahead from a station (musiccore/radio.h), so neither the audio nor a
+ * few tracks queued ahead from a station (kithcore/radio.h), so neither the audio nor a
  * frontend ever waits on it.
  *
  * Up next is what people add to (mc_player_play_next(); apps call it the queue, where this file's

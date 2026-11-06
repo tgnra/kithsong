@@ -1,5 +1,5 @@
 /* JNI bindings for ng.kithso.core.SmartNatives: making, editing and describing smart playlists
- * and smart album groups (musiccore/smartlist.h), for the rule editor. Listing them, and their
+ * and smart album groups (kithcore/smartlist.h), for the rule editor. Listing them, and their
  * previews, are in jni_bridge.c and jni_browse.c. Thin like jni_bridge.c, whose helpers it
  * shares. Failures throw ng.kithso.core.KithCoreException. */
 #include <jni.h>

@@ -1,4 +1,4 @@
-/* What the GTK frontend feeds the profiler (musiccore/perf.h), all from the window's frame
+/* What the GTK frontend feeds the profiler (kithcore/perf.h), all from the window's frame
  * clock: a frame in which a watched list moved is a frame of scrolling, and a view switch or
  * startup's first content is painted once a frame has finished after it. Also the scroll test,
  * which scrolls the main views by the core's fixed script, one step per frame. */

@@ -1,6 +1,6 @@
 /* Tracks waiting for a device: what this device's profile wants and it doesn't hold in the
  * right form, that only members it can't reach now could give it (mc_sync_get_waiting() in
- * musiccore/sync.h, "Waiting for a device" in docs/sync-protocol.md). Internal to core.
+ * kithcore/sync.h, "Waiting for a device" in docs/sync-protocol.md). Internal to core.
  *
  * Nothing records which member holds which file (files is local), so who could give a track
  * is worked out from what is recorded:

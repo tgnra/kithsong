@@ -1,4 +1,4 @@
-/* Editing an album's, artist's or track's tags by hand (musiccore/edit.h), from their menus:
+/* Editing an album's, artist's or track's tags by hand (kithcore/edit.h), from their menus:
  * the album tiles' (album_groups.c, and artist_view.c's on an artist's page), the tracks'
  * (track_list.c, artist_view.c), the artists' (artist_view.c) and the recents' (recents.c).
  * The fields and what they do are those of Windows' edit_dialog.c:

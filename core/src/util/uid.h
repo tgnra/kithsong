@@ -1,4 +1,4 @@
-/* Uids beyond mc_uid_new() (musiccore.h). Internal to core. */
+/* Uids beyond mc_uid_new() (kithcore.h). Internal to core. */
 #ifndef MC_UTIL_UID_H
 #define MC_UTIL_UID_H
 

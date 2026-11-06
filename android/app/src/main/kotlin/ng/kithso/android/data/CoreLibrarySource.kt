@@ -79,7 +79,7 @@ import java.io.File
 import java.util.Calendar
 
 /**
- * The library as musiccore has it, in library folder [dir]. A library handle isn't
+ * The library as kithcore has it, in library folder [dir]. A library handle isn't
  * thread-safe, so every core call runs on one background thread ([core]); [library] is read
  * whole when this is created and again on [refresh], which is cheap enough to do after every
  * sync: one query for the albums, one for the tracks on this phone (for the artists), and

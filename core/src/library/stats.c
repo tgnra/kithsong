@@ -1,4 +1,4 @@
-/* See mc_library_read_stats() in musiccore/library.h. */
+/* See mc_library_read_stats() in kithcore/library.h. */
 #include <string.h>
 
 #include "kithcore/kithcore.h"

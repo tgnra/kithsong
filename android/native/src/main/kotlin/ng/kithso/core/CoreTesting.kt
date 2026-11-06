@@ -1,7 +1,7 @@
 package ng.kithso.core
 
 /**
- * The profiler (musiccore/perf.h) and stress test libraries (musiccore/stress.h). The profiler's
+ * The profiler (kithcore/perf.h) and stress test libraries (kithcore/stress.h). The profiler's
  * functions may be called from any thread, once [setEnabled] has been, and do nothing while
  * it's off; a stress library's job runs on a thread of its own.
  */

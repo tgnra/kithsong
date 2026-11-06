@@ -1,6 +1,6 @@
 package ng.kithso.core
 
-// One run of the audio scanner over a library (musiccore/analysis.h), bound in jni_analysis.c.
+// One run of the audio scanner over a library (kithcore/analysis.h), bound in jni_analysis.c.
 
 /**
  * Analyses the tracks of the library in [dir] that have a file here and no result yet, on a

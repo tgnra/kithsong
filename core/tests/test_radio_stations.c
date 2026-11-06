@@ -1,4 +1,4 @@
-/* The radio stations a library offers (musiccore/radio_stations.h), and the Home row they fill,
+/* The radio stations a library offers (kithcore/radio_stations.h), and the Home row they fill,
  * from made-up analysis results, so no audio is decoded. */
 #include <stdio.h>
 #include <stdlib.h>

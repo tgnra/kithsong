@@ -1,6 +1,6 @@
 package ng.kithso.core
 
-// Making and editing smart playlists and smart album groups (musiccore/smartlist.h), bound in
+// Making and editing smart playlists and smart album groups (kithcore/smartlist.h), bound in
 // jni_smart.c. A rule is JSON in the format docs/schema.md gives (Smart lists); [isAlbums]
 // says which subject it's for, an album group's rather than a playlist's. Listing them is
 // CoreLibrary.smartLists, and what a rule would hold previewSmartTracks / previewSmartAlbums.

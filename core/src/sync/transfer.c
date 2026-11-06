@@ -2311,7 +2311,7 @@ static const char k_unwatch_sql[] =
   "DROP TABLE IF EXISTS temp.sync_dropped_records;";
 
 /* Removes the files of tracks the exchange deleted (another device deleted them, see
- * musiccore/delete.h). Originals imported here go to the trash, unless there's none, with a
+ * kithcore/delete.h). Originals imported here go to the trash, unless there's none, with a
  * record so they can be got back from it as after a delete here; files received from peers
  * are simply removed. */
 static void drop_deleted_tracks(mc_session *s) {

@@ -1,5 +1,5 @@
 /* Remove from this PC and Sync to this PC, on the album and artist menus
- * (musiccore/sync_here.h): an album or artist leaves this PC, or comes back, while it stays
+ * (kithcore/sync_here.h): an album or artist leaves this PC, or comes back, while it stays
  * in the library and on the other devices. Neither shows on an archive or outside a group,
  * where Delete from library is the only honest option. Asks first:
  *

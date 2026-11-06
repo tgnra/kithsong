@@ -1,6 +1,6 @@
 /* Settings' Testing section, below its heading and the button that opens it (settings_view.c
- * has those): the profiler (musiccore/perf.h) with its report, and stress test libraries
- * (musiccore/stress.h).
+ * has those): the profiler (kithcore/perf.h) with its report, and stress test libraries
+ * (kithcore/stress.h).
  *
  *   [x] Profile the app's speed
  *   Startup is measured from the next start ...

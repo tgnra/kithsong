@@ -1,4 +1,4 @@
-/* Removing an album or artist from one device (musiccore/sync_here.h), in test_sync_files.c
+/* Removing an album or artist from one device (kithcore/sync_here.h), in test_sync_files.c
  * style: A holds the library as WAV originals and is the group's archive; B syncs
  * everything, then removes an album, an artist, and brings them back, in "Sync everything"
  * and in a selection. Also what the menus are offered on an archive and outside a group,

@@ -15,7 +15,7 @@
 #ifndef KITHCORE_TRANSCODE_H
 #define KITHCORE_TRANSCODE_H
 
-/* The format types come before musiccore.h, which includes sync.h, which uses them. */
+/* The format types come before kithcore.h, which includes sync.h, which uses them. */
 #ifdef __cplusplus
 extern "C" {
 #endif

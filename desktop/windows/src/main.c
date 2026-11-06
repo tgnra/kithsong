@@ -67,7 +67,7 @@
  * Command line: kithsong.exe [--config-dir <dir> | --config-dir=<dir>] [--] [paths...]
  * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\kithsong,
  * so two instances can sync on one PC; the paths are imported. Run from a checkout, the app
- * has folders of its own (musiccore/source_run.h). Launching it again with the
+ * has folders of its own (kithcore/source_run.h). Launching it again with the
  * same config folder brings the open window forward and hands it the paths instead, as
  * GApplication does on Linux (claim_instance). --add-firewall-rule or
  * --add-firewall-rule-public alone is firewall.c's elevated helper, which adds the Windows
@@ -208,7 +208,7 @@ typedef struct app {
   mc_settings *settings;
   mc_library *lib;
   char *config_dir;        /* UTF-8: settings.json and sync.db */
-  BOOL from_source;        /* running from a checkout (musiccore/source_run.h) */
+  BOOL from_source;        /* running from a checkout (kithcore/source_run.h) */
   char *art_dir;           /* UTF-8: playlists' pictures, in config_dir */
   BOOL refresh_pending;    /* TIMER_REFRESH_DEVICES is set */
   BOOL library_pending;    /* TIMER_REFRESH_LIBRARY is set */
@@ -1453,7 +1453,7 @@ static void rename_self(const char *name) {
 }
 
 /* Deleted tracks whose files are back from the Recycle Bin come back into the library
- * (musiccore/delete.h). Cheap: run at startup, on switching libraries and whenever the
+ * (kithcore/delete.h). Cheap: run at startup, on switching libraries and whenever the
  * window is activated. The now-playing strip says how many tracks came back. */
 static void restore_deleted(void) {
   int restored = 0, tracks = 0;
@@ -2584,7 +2584,7 @@ static void back_to_library(void) {
   free(dir);
 }
 
-/* --- The scroll test (musiccore/perf.h) --- */
+/* --- The scroll test (kithcore/perf.h) --- */
 
 /* Each view in turn scrolls by the fixed script, one frame per display refresh. A frame paints
  * before the next is asked for, so the frame times include all of its work. */

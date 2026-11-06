@@ -1,4 +1,4 @@
-/* See musiccore/edit.h. */
+/* See kithcore/edit.h. */
 #include "kithcore/edit.h"
 
 #include <stdio.h>

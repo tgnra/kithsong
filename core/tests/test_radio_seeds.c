@@ -1,4 +1,4 @@
-/* The seeds of an album's or artist's radio (musiccore/radio_seeds.h), from made-up analysis
+/* The seeds of an album's or artist's radio (kithcore/radio_seeds.h), from made-up analysis
  * results, so no audio is decoded. */
 #include <stdio.h>
 #include <stdlib.h>

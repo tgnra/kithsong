@@ -1,4 +1,4 @@
-/* Moving a library to another folder. See musiccore/library_move.h for what moves and the
+/* Moving a library to another folder. See kithcore/library_move.h for what moves and the
  * order that keeps the old library usable until the new one is complete.
  *
  * The library folder is listed once, depth first with each folder before what's in it, into

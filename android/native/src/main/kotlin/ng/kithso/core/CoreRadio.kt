@@ -1,6 +1,6 @@
 package ng.kithso.core
 
-// The Home page's radio stations (musiccore/radio_stations.h), bound in jni_radio.c.
+// The Home page's radio stations (kithcore/radio_stations.h), bound in jni_radio.c.
 
 /**
  * mc_radio_station_info: a station, named by [seedTrack], which starts from [startTrack] this time,

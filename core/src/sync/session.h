@@ -27,7 +27,7 @@ typedef struct mc_session {
   int asked;
   /* This device's user asked for a session with the peer (mc_sync_pressed(); for the
    * initiator, it was started for mc_sync_now()), so the library exchange may send the
-   * recycle bin's deletes (musiccore/delete.h). Never set from the peer's HELLO. */
+   * recycle bin's deletes (kithcore/delete.h). Never set from the peer's HELLO. */
   int pressed;
   /* The library exchange was left out: the recycle bin holds deletes and pressed is 0. */
   int bin_held;

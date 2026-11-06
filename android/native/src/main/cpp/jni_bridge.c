@@ -1,5 +1,5 @@
 /* JNI bindings for ng.kithso.core.NativeCore, CoreLibrary, CoreImport, CorePlayer and CoreSync
- * (CoreScrobbler's are in jni_scrobbler.c). Keep this thin: marshal arguments, call musiccore,
+ * (CoreScrobbler's are in jni_scrobbler.c). Keep this thin: marshal arguments, call kithcore,
  * convert results. Failures throw ng.kithso.core.KithCoreException. */
 #include <jni.h>
 #include <stdint.h>

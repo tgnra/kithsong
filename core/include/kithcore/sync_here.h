@@ -90,7 +90,7 @@ mc_status mc_sync_remove_here(mc_sync *sync, const mc_here_plan *plan, mc_here_r
  * mc_sync_remove_here() does. */
 mc_status mc_sync_restore_here(mc_sync *sync, mc_profile_item_kind kind, const char *uid);
 
-/* --- The recycle bin (musiccore/delete.h) ---
+/* --- The recycle bin (kithcore/delete.h) ---
  * On a device with no trash, a delete from the library can be taken back until the next sync
  * sends it. Taken back, it becomes a removal from this device: the files stay gone here, and
  * the album or track stays in the library and on the other devices. */

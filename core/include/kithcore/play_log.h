@@ -1,5 +1,5 @@
 /* A play log row, which the player fills in and the library keeps (mc_player_take_ended(),
- * mc_library_log_play()). Included by musiccore.h, ahead of both of theirs. */
+ * mc_library_log_play()). Included by kithcore.h, ahead of both of theirs. */
 #ifndef KITHCORE_PLAY_LOG_H
 #define KITHCORE_PLAY_LOG_H
 

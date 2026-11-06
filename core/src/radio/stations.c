@@ -1,4 +1,4 @@
-/* See musiccore/radio_stations.h, and "Radio stations" in docs/schema.md for the reasoning.
+/* See kithcore/radio_stations.h, and "Radio stations" in docs/schema.md for the reasoning.
  *
  * There's a station for each group of radio/groups.h. Its seed starts as the group's centre, and
  * gives way to a track close by that makes a better one: one pass over the library per seed. */

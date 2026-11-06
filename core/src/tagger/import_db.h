@@ -112,7 +112,7 @@ mc_status mc_import_db_move_file(mc_library *lib, const char *old_path, const ch
 int mc_import_db_is_track_at(mc_library *lib, const char *path, const char *mb_releasetrackid);
 
 /* Whether the album mc_import_db_write() would write album into has a cover the user chose
- * (albums.art_chosen, musiccore/edit.h): 1, with its uid and the image's hash, if so. */
+ * (albums.art_chosen, kithcore/edit.h): 1, with its uid and the image's hash, if so. */
 int mc_import_db_chosen_art(mc_library *lib, const mc_db_album *album, char uid[MC_UID_STRLEN],
                             char hash[65]);
 

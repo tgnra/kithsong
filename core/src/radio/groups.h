@@ -1,6 +1,6 @@
 /* The kinds of music a library holds, worked out from the audio analysis alone: what a library's
- * stations are (musiccore/radio_stations.h), and what keeps each one to its own music
- * (musiccore/radio.h). "Radio stations" in docs/schema.md has the reasoning.
+ * stations are (kithcore/radio_stations.h), and what keeps each one to its own music
+ * (kithcore/radio.h). "Radio stations" in docs/schema.md has the reasoning.
  *
  * Nothing is stored. The answer depends only on the results, so working it out again gives the
  * same groups, on any day and however much is played. It's quick next to reading the results. */

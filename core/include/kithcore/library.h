@@ -116,7 +116,7 @@ mc_status mc_library_record_play(mc_library *lib, const char *track_uid);
  * is the raw history a home screen or radio can read back. The player fills a row in (see
  * mc_player_take_ended()) and the frontend hands it to mc_library_log_play(). Rows are this
  * device's own, are never changed once written, and are kept for good; see docs/schema.md.
- * Its types are in musiccore/play_log.h, as the player has them too. */
+ * Its types are in kithcore/play_log.h, as the player has them too. */
 
 /* Adds a row, as this device's. MC_ERR_NOT_FOUND if the track has gone meanwhile. */
 mc_status mc_library_log_play(mc_library *lib, const mc_play_event *event);

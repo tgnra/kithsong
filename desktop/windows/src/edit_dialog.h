@@ -1,4 +1,4 @@
-/* Editing an album's, artist's or track's tags by hand (musiccore/edit.h), from their
+/* Editing an album's, artist's or track's tags by hand (kithcore/edit.h), from their
  * right-click menus. A Mica window over the main window, modal, as first_run.c's is:
  *
  *   Edit album                                 [x]

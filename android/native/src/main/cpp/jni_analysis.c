@@ -1,5 +1,5 @@
 /* JNI bindings for ng.kithso.core.AnalysisNatives: one run of the audio scanner
- * (mc_analysis_scanner_start_once() in musiccore/analysis.h), for the phone's charging job, and
+ * (mc_analysis_scanner_start_once() in kithcore/analysis.h), for the phone's charging job, and
  * what's waiting for it. As thin as it is; the scanner has a thread and a connection of its own. */
 #include <jni.h>
 #include <stdint.h>

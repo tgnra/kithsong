@@ -701,7 +701,7 @@ typedef struct mc_sync_profile {
                              * !budget_enabled so it comes back. */
   mc_profile_item *items;   /* the selection; kept while sync_all so it comes back */
   int count;
-  /* The albums and artists removed from this device (musiccore/sync_here.h), an artist's
+  /* The albums and artists removed from this device (kithcore/sync_here.h), an artist's
    * albums among them, sorted: what Select all leaves out (mc_sync_select_items()). Filled
    * in by mc_sync_get_profile(); not part of what's edited, so mc_sync_set_profile() and
    * mc_sync_estimate_profile() ignore it. */
@@ -743,7 +743,7 @@ mc_status mc_sync_select_items(mc_sync *sync, const char *device_uid, mc_profile
                                const char (*uids)[MC_UID_STRLEN], int count, int on);
 /* What What to sync does with a tick under Sync everything, where all's ticked but what was
  * removed: with on, excludes the albums or artists (MC_PROFILE_ALBUM or MC_PROFILE_ARTIST), as
- * Remove from this device would (musiccore/sync_here.h) but leaving the files to the next
+ * Remove from this device would (kithcore/sync_here.h) but leaving the files to the next
  * sync; without, takes them out of mc_sync_profile.removed. An album removed only through its
  * artist comes back alone. It changes the profile like any edit, for any member's profile.
  * MC_ERR_LOCKED for an archive; MC_ERR_INVALID_ARG and MC_ERR_NOT_FOUND as for

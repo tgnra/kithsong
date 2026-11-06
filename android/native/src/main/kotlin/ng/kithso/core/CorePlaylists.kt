@@ -1,6 +1,6 @@
 package ng.kithso.core
 
-// Editing playlists (musiccore/playlist.h) on an open CoreLibrary, bound in jni_playlist_edit.c.
+// Editing playlists (kithcore/playlist.h) on an open CoreLibrary, bound in jni_playlist_edit.c.
 // Entries are a playlist's items: a track can be in one more than once, so moving and
 // removing name an entry ([playlistEntries]) rather than a track. Each throws
 // KithCoreException, ERR_NOT_FOUND (-3) when the playlist, track or entry doesn't exist.
@@ -44,7 +44,7 @@ internal object PlaylistNatives {
     @JvmStatic external fun nativeRemove(handle: Long, entryUid: String)
 }
 
-// Editing album groups, the playlists of albums (also musiccore/playlist.h), likewise. An album
+// Editing album groups, the playlists of albums (also kithcore/playlist.h), likewise. An album
 // is in a group at most once, so adding and removing name the album. Listing them is
 // CoreLibrary.albumGroups and albumGroupAlbums. Each throws KithCoreException, ERR_NOT_FOUND
 // (-3) when the group or album doesn't exist, or for a removal, the album isn't in the group.

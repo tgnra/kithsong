@@ -1,4 +1,4 @@
-/* Deleting tracks to the trash, and restoring them (see musiccore/delete.h).
+/* Deleting tracks to the trash, and restoring them (see kithcore/delete.h).
  *
  * A track's rows are saved generically, as JSON objects of column -> value read with
  * PRAGMA table_info, and put back by inserting whichever of those columns the table still

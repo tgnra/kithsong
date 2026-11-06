@@ -2,7 +2,7 @@
  * the audio analysis finds in it, so two kinds make two stations. Worked out from the analysis
  * alone, on the device. How: "Radio stations" in docs/schema.md.
  *
- * A station keeps to its own kind (musiccore/radio.h). Every track belongs to one kind, the one
+ * A station keeps to its own kind (kithcore/radio.h). Every track belongs to one kind, the one
  * it sounds nearest, so stations don't overlap. A library that doesn't divide clearly gets one
  * station, and one with too little analysed gets none.
  *

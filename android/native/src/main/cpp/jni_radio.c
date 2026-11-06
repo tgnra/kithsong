@@ -1,5 +1,5 @@
 /* JNI bindings for ng.kithso.core.RadioNatives: the Home page's stations, and what it takes to
- * start one (musiccore/radio_stations.h, radio.h). As thin as it is; the player's side of a
+ * start one (kithcore/radio_stations.h, radio.h). As thin as it is; the player's side of a
  * station is in jni_bridge.c with the rest of CorePlayer. */
 #include <jni.h>
 #include <stdint.h>

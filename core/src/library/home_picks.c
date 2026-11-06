@@ -452,7 +452,7 @@ static int oldest_cmp(const void *a, const void *b) {
 
 /* --- The rows --- */
 
-/* The library's stations (musiccore/radio_stations.h), each with its seed's album cover, or
+/* The library's stations (kithcore/radio_stations.h), each with its seed's album cover, or
  * failing that its artist's usual picture. The row stays out for a library with none. */
 static void pick_radio(const sources *s, row *r) {
   mc_radio_station_list *list = NULL;

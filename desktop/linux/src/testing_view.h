@@ -1,5 +1,5 @@
 /* Settings' Testing group: an expander row, closed to begin with, holding the profiler
- * (musiccore/perf.h) with its report, and stress test libraries (musiccore/stress.h).
+ * (kithcore/perf.h) with its report, and stress test libraries (kithcore/stress.h).
  *
  *   |  Testing                                       v |
  *   |    Profile the app's speed                  [==] |

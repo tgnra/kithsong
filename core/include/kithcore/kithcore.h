@@ -1,4 +1,4 @@
-/* musiccore: shared library behind every Kithsong frontend.
+/* kithcore: shared library behind every Kithsong frontend.
  *
  * Conventions:
  *  - Every function returns mc_status (or a value plus an out-param) unless noted.
@@ -51,7 +51,7 @@ const char *mc_status_str(mc_status status);
 mc_status mc_init(void);
 void mc_shutdown(void);
 
-/* Frees any string or buffer returned by musiccore. NULL is a no-op. */
+/* Frees any string or buffer returned by kithcore. NULL is a no-op. */
 void mc_free(void *ptr);
 
 /* Writes a new time-ordered (v7) UUID such as "0192f1e4-7c3a-7b21-9d4e-1f2a3b4c5d6e". */

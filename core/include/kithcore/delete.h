@@ -102,7 +102,7 @@ mc_status mc_delete_run_permanently(mc_library *lib, const mc_delete_plan *plan,
  * changelog rows it logged and the rows it took. Until a sync sends this device's library
  * rows, no other device has heard of it, so taking it back (mc_sync_bin_restore()) can simply
  * delete those changelog rows and put the rows back unlogged. The music then counts as
- * removed from this device (its profile excludes it, see musiccore/sync_here.h) rather than
+ * removed from this device (its profile excludes it, see kithcore/sync_here.h) rather than
  * deleted: its files stay gone here, and it stays in the library and on the other devices.
  *
  * A sync that sends the library's rows empties the bin first, so a delete can never be

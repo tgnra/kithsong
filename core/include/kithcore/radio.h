@@ -1,5 +1,5 @@
 /* Radio: tracks of the library that sound like a seed track, chosen from what the audio
- * analysis found (musiccore/analysis.h). Nothing leaves the device. It comes as a mix, a list
+ * analysis found (kithcore/analysis.h). Nothing leaves the device. It comes as a mix, a list
  * of a fixed length, or a station, which goes on for as long as it's asked.
  *
  * Each pick is scored by how close it sounds to the seed and to the track before it, so the
@@ -10,7 +10,7 @@
  * considered.
  *
  * It keeps to the seed's kind of music: the library's groups are those its stations are made of
- * (musiccore/radio_stations.h), and only the seed's own group is drawn from, so a mix from a track
+ * (kithcore/radio_stations.h), and only the seed's own group is drawn from, so a mix from a track
  * of one never strays into another. A library of one kind, or with too little analysed to say,
  * has the whole library to draw from.
  *
@@ -21,7 +21,7 @@
  * changes the order: no track is left out for it. "What skips teach a station" in docs/schema.md
  * has the rules. With no such skips, picks are what they'd be without any of this.
  *
- * To play a station, see mc_player_play_radio() in musiccore/playback.h. */
+ * To play a station, see mc_player_play_radio() in kithcore/playback.h. */
 #ifndef KITHCORE_RADIO_H
 #define KITHCORE_RADIO_H
 

@@ -1,6 +1,6 @@
 package ng.kithso.core
 
-/** A musiccore failure; [status] is the negative mc_status code. */
+/** A kithcore failure; [status] is the negative mc_status code. */
 class KithCoreException(val status: Int) : RuntimeException("kithcore status $status")
 
 /**

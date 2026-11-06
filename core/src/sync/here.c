@@ -1,5 +1,5 @@
 /* Removing an album or artist from this device, and syncing it here again. See
- * musiccore/sync_here.h and "Removing from one device" in docs/sync-protocol.md.
+ * kithcore/sync_here.h and "Removing from one device" in docs/sync-protocol.md.
  *
  * The profile edit is a profile_items row of an exclusion kind (sync/plan.h), written like
  * any other item so it syncs field by field. The files go as reconcile would drop them after
@@ -514,7 +514,7 @@ mc_status mc_sync_restore_here(mc_sync *sync, mc_profile_item_kind kind, const c
   return st;
 }
 
-/* --- The recycle bin (musiccore/delete.h) --- */
+/* --- The recycle bin (kithcore/delete.h) --- */
 
 mc_status mc_sync_bin_send_begin(mc_sync *sync, mc_library *lib, int pressed) {
   if (!lib) return MC_OK;

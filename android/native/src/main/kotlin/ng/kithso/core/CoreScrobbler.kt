@@ -1,7 +1,7 @@
 package ng.kithso.core
 
 /**
- * musiccore's scrobbler (mc_scrobbler): passes this device's plays on to Last.fm (or a service
+ * kithcore's scrobbler (mc_scrobbler): passes this device's plays on to Last.fm (or a service
  * with the same API) for the sync group's account, kept in sync.db in [configDir], the same
  * folder [CoreSync] is given. [library] must stay open while this exists; it's only read. It
  * may be used from any thread. [authBegin] and [authFinish] block on the network.

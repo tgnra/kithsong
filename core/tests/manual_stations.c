@@ -1,4 +1,4 @@
-/* Prints the radio stations a library offers (musiccore/radio_stations.h) and how long they took,
+/* Prints the radio stations a library offers (kithcore/radio_stations.h) and how long they took,
  * for judging them by eye, and times them on a made-up library of any size.
  *
  *   manual_stations <library folder> [--days <n>] [--runs <n>] [--migrate]

@@ -8,7 +8,7 @@
  *   +------+ (  o   ) +------+ +------+ +---
  *   ...
  *
- * What's in each row is core's business (musiccore/home_picks.h); a row with nothing in it isn't
+ * What's in each row is core's business (kithcore/home_picks.h); a row with nothing in it isn't
  * shown. A library with no music shows a welcome and the Import button, and one that hasn't been
  * played yet says that the page fills up as it is. The Windows page is the same, drawn by hand.
  *

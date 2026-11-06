@@ -1,4 +1,4 @@
-/* Stress test libraries and the profiler (musiccore/stress.h, perf.h): what the generator makes,
+/* Stress test libraries and the profiler (kithcore/stress.h, perf.h): what the generator makes,
  * that it can't touch anything else, and that such a library neither syncs nor scrobbles. */
 #include <stdio.h>
 #include <stdlib.h>

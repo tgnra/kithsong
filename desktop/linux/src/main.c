@@ -257,7 +257,7 @@ GtkWidget *app_list_header(const char *title, const char *tooltip, const char *a
 }
 
 /* Deleted tracks whose files are back from the Trash come back into the library
- * (musiccore/delete.h). Cheap: run when a library opens and whenever the window becomes
+ * (kithcore/delete.h). Cheap: run when a library opens and whenever the window becomes
  * active. TRUE if any came back; a toast says how many tracks. */
 static gboolean restore_deleted(app *a) {
   int restored = 0, tracks = 0;
@@ -2074,7 +2074,7 @@ int main(int argc, char **argv) {
 
   /* Settings in ~/.config/kithsong say where the library folder is. With none yet, the first
    * run asks, once the window is up. Run from a checkout, settings are in kithsong-debug
-   * beside it, and the library is one in the temp folder (musiccore/source_run.h). */
+   * beside it, and the library is one in the temp folder (kithcore/source_run.h). */
   int from_source = mc_source_run();
   char *settings_dir = g_build_filename(g_get_user_config_dir(), from_source ? MC_SOURCE_SETTINGS_DIR : "kithsong", NULL);
   if (!from_source) { /* the old folder is the installed app's to take */

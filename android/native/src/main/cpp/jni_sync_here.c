@@ -1,5 +1,5 @@
 /* JNI bindings for ng.kithso.core.SyncHereNatives: removing an album or artist from this
- * phone, and syncing it here again (musiccore/sync_here.h), on an open CoreSync's handle.
+ * phone, and syncing it here again (kithcore/sync_here.h), on an open CoreSync's handle.
  * Kept apart from jni_bridge.c; as thin as it is. Failures throw KithCoreException. */
 #include <jni.h>
 #include <stdint.h>
@@ -166,7 +166,7 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_SyncHereNatives_nativeSelect(JNIEnv *
   free(cuids);
 }
 
-/* The recycle bin (musiccore/delete.h): whether deletes here go to it. */
+/* The recycle bin (kithcore/delete.h): whether deletes here go to it. */
 JNIEXPORT jboolean JNICALL Java_ng_kithso_core_SyncHereNatives_nativeBinOffered(JNIEnv *env, jclass cls,
                                                                              jlong handle) {
   (void)env;

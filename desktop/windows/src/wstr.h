@@ -1,4 +1,4 @@
-/* UI text as UTF-16, from the core's string table (musiccore/i18n.h, strings/en.json). */
+/* UI text as UTF-16, from the core's string table (kithcore/i18n.h, strings/en.json). */
 #ifndef KITHSONG_WSTR_H
 #define KITHSONG_WSTR_H
 

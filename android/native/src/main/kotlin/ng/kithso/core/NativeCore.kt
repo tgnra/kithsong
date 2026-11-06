@@ -2,7 +2,7 @@ package ng.kithso.core
 
 import android.content.res.Configuration
 
-/** Bindings to musiccore (android/native/src/main/cpp/jni_bridge.c). */
+/** Bindings to kithcore (android/native/src/main/cpp/jni_bridge.c). */
 object NativeCore {
     init {
         System.loadLibrary("kithsong_jni")

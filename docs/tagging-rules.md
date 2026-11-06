@@ -1,7 +1,7 @@
 # Tagging rules
 
 > Status: the importer in `core/src/tagger` implements everything below except where marked
-> *not yet*. Public API: the "Import" section of `core/include/musiccore/tagger.h`.
+> *not yet*. Public API: the "Import" section of `core/include/kithcore/tagger.h`.
 
 ## Services
 
@@ -304,16 +304,16 @@ library.db
 - `files.path` is stored relative to the library folder, with `/`, so the folder can be moved
   or mounted under another drive letter.
 - the library folder lives in per-device settings (`settings.json`, see
-  `core/include/musiccore/settings.h`), in `%LOCALAPPDATA%\kithsong` on Windows and
+  `core/include/kithcore/settings.h`), in `%LOCALAPPDATA%\kithsong` on Windows and
   `~/.config/kithsong` on Linux. A build run from inside a checkout uses `kithsong-debug` there
-  instead, and a library of its own in the temp folder (`core/include/musiccore/source_run.h`).
+  instead, and a library of its own in the temp folder (`core/include/kithcore/source_run.h`).
 - a database inside a OneDrive/Dropbox-style synced folder can be corrupted by the sync
   client; the Windows frontend warns when the chosen folder is under OneDrive.
 
 ## Duplicates
 
 Before an item from outside the library folder is written, it's compared with the library.
-The full rules are in `core/include/musiccore/tagger.h` ("Duplicates"); in short:
+The full rules are in `core/include/kithcore/tagger.h` ("Duplicates"); in short:
 
 - **Same release**: an album with the same MusicBrainz release id, else release group id,
   else the same album artist and title with at least half of the incoming tracks in its
@@ -491,7 +491,7 @@ and how far it is.
 ## Hand edits
 
 The edit dialog's album, artist and track tags, and matching an album to another release
-(`core/include/musiccore/edit.h`, `core/src/library/edit.c`). The rows are the source of truth:
+(`core/include/kithcore/edit.h`, `core/src/library/edit.c`). The rows are the source of truth:
 an edit changes them, logged like any change, and they are what every device shows. Files
 follow on this device only.
 
@@ -652,7 +652,7 @@ so most local art is kept without a request; downloads are at most 1200 px anywa
 
 ### A cover the user chose
 
-`mc_album_art_set()` and `mc_album_art_set_file()` (`musiccore/edit.h`) take the image as bytes or
+`mc_album_art_set()` and `mc_album_art_set_file()` (`kithcore/edit.h`) take the image as bytes or
 a path. It must be a JPEG or PNG of up to 16 MB and 8192 px a side that decodes in full
 (`mc_album_art_check()` says so without changing anything), and it's kept byte for byte.
 

@@ -1,4 +1,4 @@
-/* Radio mixes and stations (musiccore/radio.h), from made-up analysis results, so no audio is
+/* Radio mixes and stations (kithcore/radio.h), from made-up analysis results, so no audio is
  * decoded. */
 #include <math.h>
 #include <stdio.h>

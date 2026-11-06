@@ -1,4 +1,4 @@
-/* Running from the source code (musiccore/source_run.h): finding a checkout, the library such
+/* Running from the source code (kithcore/source_run.h): finding a checkout, the library such
  * a run makes, and above all what Reset may delete. Its fixtures are in the temp folder, as
  * this test's own build folder is inside a checkout. */
 #ifndef _WIN32

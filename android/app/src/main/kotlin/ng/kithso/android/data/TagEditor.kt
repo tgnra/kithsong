@@ -97,7 +97,7 @@ internal fun readAtMost(stream: InputStream, limit: Int): ByteArray? {
  * Editing an album's, artist's or track's tags, an album's flags and cover and a single's mix, and
  * matching an album to another MusicBrainz release, for a [LibrarySource] that can ([CoreTagEditor]; the made-up
  * library can't, and the UI then offers no Edit). What an edit does, to rows and files, is
- * all the core's (musiccore/edit.h).
+ * all the core's (kithcore/edit.h).
  */
 interface TagEditor {
     suspend fun read(target: TagTarget): TagResult<TagValues>

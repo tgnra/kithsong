@@ -173,7 +173,7 @@ static const char *const k_migrations[] = {
   "INSERT OR REPLACE INTO meta (key, value) VALUES ('artist_refresh',"
   " CASE WHEN EXISTS (SELECT 1 FROM tracks) OR EXISTS (SELECT 1 FROM albums)"
   " THEN 'pending' ELSE 'done' END);",
-  /* v14: the recycle bin (musiccore/delete.h): deletes made on this device that no other
+  /* v14: the recycle bin (kithcore/delete.h): deletes made on this device that no other
    * device has heard of yet, so they can still be taken back. seq_first..seq_last are the
    * changelog rows the delete logged. This device's own: never logged. (IF NOT EXISTS: tests
    * that wind user_version back keep their tables.) */
@@ -189,7 +189,7 @@ static const char *const k_migrations[] = {
   "  seq_last   INTEGER NOT NULL,"
   "  rows       TEXT NOT NULL"
   ");",
-  /* v15: an album's flags (musiccore/edit.h), what its tags can't say: no_scrobble keeps its
+  /* v15: an album's flags (kithcore/edit.h), what its tags can't say: no_scrobble keeps its
    * tracks from being scrobbled, mix makes it a continuous mix, found as an album and not by
    * its tracks. Never written to files. */
   "ALTER TABLE albums ADD COLUMN no_scrobble INTEGER NOT NULL DEFAULT 0;"
@@ -199,10 +199,10 @@ static const char *const k_migrations[] = {
    * flags anything: each device works detected mixes out from synced rows. The version is for
    * older apps, which would take -1 for a mix, and for mix_file_loose(). */
   "SELECT 1;",
-  /* v17: the cover the user chose for an album (musiccore/edit.h), as its SHA-256. Import and
+  /* v17: the cover the user chose for an album (kithcore/edit.h), as its SHA-256. Import and
    * downloads leave such a cover alone, and sync brings it to devices that have another. */
   "ALTER TABLE albums ADD COLUMN art_chosen TEXT;",
-  /* v18: the play log (musiccore/library.h): a row for each time a track was started, where
+  /* v18: the play log (kithcore/library.h): a row for each time a track was started, where
    * track_plays only keeps a count. Like track_plays each row is one device's, and it is
    * written once and never changed, so sync can't lose or clash over one, and it's logged
    * whole, as one change (mc_changelog_whole_row). context_uid isn't a reference: the history
@@ -220,7 +220,7 @@ static const char *const k_migrations[] = {
   ") WITHOUT ROWID;"
   "CREATE INDEX IF NOT EXISTS play_events_started ON play_events (started_ms, uid);"
   "CREATE INDEX IF NOT EXISTS play_events_track ON play_events (track_uid);",
-  /* v19: local audio analysis (musiccore/analysis.h). track_analysis holds a track's results,
+  /* v19: local audio analysis (kithcore/analysis.h). track_analysis holds a track's results,
    * one row for what an original gave and one for a transcode, under a uid derived from the
    * track and the source: two devices analysing one track write one row, and a transcode's
    * result can't overwrite an original's, as last-writer-wins would have it. analysis_failed

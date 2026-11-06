@@ -84,12 +84,12 @@ const char *mc_profile_kind_str(mc_profile_item_kind kind);
  * uids, on the library. */
 #define MC_PLAN_ARTIST_TRACKS(p)   CREDITED_TRACKS(p) " UNION SELECT uid FROM tracks WHERE album_uid IN (" CREDITED_ALBUMS(p) ")"
 
-/* profile_items.kind of an exclusion (musiccore/sync_here.h): the album's or artist's tracks
+/* profile_items.kind of an exclusion (kithcore/sync_here.h): the album's or artist's tracks
  * are not wanted, whatever else but a ticked playlist selects them (and not on an archive).
  * Not an mc_profile_item_kind: editors get them apart, as mc_sync_profile.removed. */
 #define MC_PLAN_EXCLUDE_ALBUM "exclude_album"
 #define MC_PLAN_EXCLUDE_ARTIST "exclude_artist"
-/* A single track: a delete taken back out of the recycle bin (musiccore/delete.h). */
+/* A single track: a delete taken back out of the recycle bin (kithcore/delete.h). */
 #define MC_PLAN_EXCLUDE_TRACK "exclude_track"
 /* An album brought back on its own while its artist stays removed: the selection counts for it
  * in spite of the artist's exclusion. Goes when the album or that artist next changes. */

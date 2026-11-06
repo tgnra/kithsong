@@ -633,7 +633,7 @@ static int delete_group(sqlite3_stmt *del, const stored_row *rows, int n, int i,
  * wanted (with any duplicates of them). want is sorted and unique; it is resolved here, so a
  * caller holding a merged-away uid still means its album. Rows of kinds this version
  * doesn't know are left as they are, and so are exclusions, but an album or artist added
- * drops its own (musiccore/sync_here.h): what the user just chose to sync is synced. The
+ * drops its own (kithcore/sync_here.h): what the user just chose to sync is synced. The
  * stored rows are read once and walked beside want, so that Select all and Select none on a
  * long list cost one pass. */
 static mc_status write_items(mc_sync_db *sdb, mc_library *lib, const char *uid,

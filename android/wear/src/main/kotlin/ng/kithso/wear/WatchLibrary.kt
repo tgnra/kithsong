@@ -21,7 +21,7 @@ import ng.kithso.core.appendToPlaylist
 import java.io.File
 
 /**
- * The library as musiccore has it, in folder [dir], seen as the watch can play it. Sync brings
+ * The library as kithcore has it, in folder [dir], seen as the watch can play it. Sync brings
  * the whole group's library data but only the files the watch's profile wants, so only what
  * has a file here is listed: albums with a folder here, playlists with a track that has a file
  * here, manual album groups with such an album, and of an album's or playlist's tracks only

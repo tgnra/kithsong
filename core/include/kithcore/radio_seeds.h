@@ -1,5 +1,5 @@
 /* The track to start a radio from when what's asked for is a whole album or artist. A station
- * starts from one track (musiccore/radio.h), so this picks the one that stands for the rest.
+ * starts from one track (kithcore/radio.h), so this picks the one that stands for the rest.
  *
  * That's the track nearest the middle of those that can seed one: the one with the least
  * distance to the others, as mc_analysis_distance() has it. What's been played decides only

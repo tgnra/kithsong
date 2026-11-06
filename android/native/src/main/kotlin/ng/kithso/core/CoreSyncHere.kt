@@ -1,7 +1,7 @@
 package ng.kithso.core
 
 // Removing an album or artist from this phone only, and syncing it here again
-// (musiccore/sync_here.h), bound in jni_sync_here.c. It stays in the library and on the other
+// (kithcore/sync_here.h), bound in jni_sync_here.c. It stays in the library and on the other
 // devices: this phone's profile gets an exclusion, and its files here go at once. Each throws
 // KithCoreException.
 

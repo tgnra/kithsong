@@ -215,7 +215,7 @@ wrong release, metadata would mix field by field, and both archives would claim 
 library), one library is kept whole and the other device's music is brought into it as an
 import would bring it in, except that names match as they do for
 [Duplicates](#duplicates) (`mc_name_key()`), not only as an import has them. The API is in
-`core/include/musiccore/sync.h` ("Merging libraries"); the code in
+`core/include/kithcore/sync.h` ("Merging libraries"); the code in
 `core/src/sync/pairing.c` and `core/src/sync/libmerge.c`.
 
 - **Which library is kept:** the larger, by `tracks`, then by `bytes`, then the smaller
@@ -291,7 +291,7 @@ import would bring it in, except that names match as they do for
     Nothing goes over the wire, so the kept device needs no newer version for this.
   - Tracks, album by album (tracks with no album one by one, staying without one), through the
     import's duplicates check (`mc_dupes_plan_remote()`, "Duplicates" in
-    `core/include/musiccore/tagger.h`): matched by MusicBrainz release, release group or
+    `core/include/kithcore/tagger.h`): matched by MusicBrainz release, release group or
     artist and title, and track ids. Untagged music comes in as it is tagged, and each track
     and album with its artist credit as the copy has it (`artist_credit` and the credit
     rows' artists, upserted as an import's; a copy set aside before v13 has none, and each
@@ -400,7 +400,7 @@ import would bring it in, except that names match as they do for
 ### Scrobbling account
 
 `scrobble_account` is the group's one account with Last.fm or a service with the same API
-(see `core/include/musiccore/scrobbler.h`): the service's addresses, API key and secret
+(see `core/include/kithcore/scrobbler.h`): the service's addresses, API key and secret
 (NULL: Last.fm and the build's key), the session key and the user name. Its one row has the
 fixed uid `00000000-0000-0000-0000-000000000000` on every device, so a device that signed in
 before it joined a group merges with the group's account by last writer wins, field by field.
@@ -891,9 +891,9 @@ the plaintext limit.
     received files are removed. A file whose row went otherwise (a crash, an
     edit outside a session) is an orphan. Before looking for orphans, the
     session restores deleted tracks whose files the user took back out of the trash
-    (`mc_delete_restore()`, `core/include/musiccore/delete.h`), so those aren't swept away.
+    (`mc_delete_restore()`, `core/include/kithcore/delete.h`), so those aren't swept away.
   - Stale copies: when an import on some device replaces a track's original with a
-    better file (see "Duplicates" in `core/include/musiccore/tagger.h`), the track gets a
+    better file (see "Duplicates" in `core/include/kithcore/tagger.h`), the track gets a
     new `tracks.file_rev`, which syncs like any other field. Every `files` row records the
     `file_rev` it was made from. A received original or transcode whose `file_rev` differs
     from its track's is stale: it doesn't count as holding the track, so the new file is
@@ -987,7 +987,7 @@ profile and pressed Sync.
 
 "Remove from this PC" (computer, phone) on an album's or artist's menu takes it off this
 device and leaves it in the library and on every other device (`mc_sync_remove_here()`,
-[musiccore/sync_here.h](../core/include/musiccore/sync_here.h)). Only a device in a group
+[kithcore/sync_here.h](../core/include/kithcore/sync_here.h)). Only a device in a group
 that isn't an archive offers it: an archive keeps the whole library, and with no group the
 music lives nowhere else.
 
@@ -1045,7 +1045,7 @@ keeps it in the library's `recycle_bin` table (see
 [Recycle bin](schema.md#recycle-bin) in schema.md): the changelog rows it logged, and the
 rows it took.
 
-- **Taking it back** (`mc_sync_bin_restore()`, musiccore/sync_here.h) relies on no other
+- **Taking it back** (`mc_sync_bin_restore()`, kithcore/sync_here.h) relies on no other
   device having heard of the delete: it deletes the delete's changelog rows and puts the rows
   back unlogged, so to every device it's as if nothing was deleted, and the version vectors
   never carried it. The device's own profile then excludes what it deleted (`exclude_album`
@@ -1426,7 +1426,7 @@ is still wanted if it ever turns up.
 `mc_sync_remove_lost()` takes the uids the user confirmed and works the list out again itself, so
 anything that came back since the card was drawn stays. It refuses with `MC_ERR_LOCKED` while a
 session's file phase runs, as that may be bringing one of them. The removal is an ordinary delete
-(`musiccore/delete.h`). The frontends always ask first, naming the tracks.
+(`kithcore/delete.h`). The frontends always ask first, naming the tracks.
 
 ## Open questions
 

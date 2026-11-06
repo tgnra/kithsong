@@ -1,4 +1,4 @@
-/* The background scanner (musiccore/analysis.h, scanner.h).
+/* The background scanner (kithcore/analysis.h, scanner.h).
  *
  * What a track needs is worked out from the tables each time, so there's no queue or cursor to
  * keep: a restart goes on where it stopped, a new import or a result arriving by sync changes

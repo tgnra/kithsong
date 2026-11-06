@@ -1,4 +1,4 @@
-/* Deleting albums and tracks from the library (musiccore/delete.h), from their right-click
+/* Deleting albums and tracks from the library (kithcore/delete.h), from their right-click
  * menus: the album grid's tiles, the track list's tracks. Asks first, in the playlist dialogs' Delete dialog:
  *
  *   +- Delete from Library ----------------------+

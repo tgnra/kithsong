@@ -1,4 +1,4 @@
-/* The recycle bin (musiccore/delete.h, mc_sync_bin_restore() in musiccore/sync_here.h), in
+/* The recycle bin (kithcore/delete.h, mc_sync_bin_restore() in kithcore/sync_here.h), in
  * test_sync_here.c style: A holds the library as WAV originals and is the group's archive; B,
  * as a phone, syncs everything and deletes into the bin. Checked: where the bin is offered;
  * that a delete in the bin goes nowhere until B's user presses Sync (B refuses A's session,

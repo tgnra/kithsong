@@ -1,4 +1,4 @@
-/* Hand edits (musiccore/edit.h; "Hand edits" in docs/tagging-rules.md). Each test makes a library
+/* Hand edits (kithcore/edit.h; "Hand edits" in docs/tagging-rules.md). Each test makes a library
  * of real files through mc_import_db_write(), as an import leaves it. MusicBrainz and the
  * Cover Art Archive are fakes, so nothing here touches the network.
  *

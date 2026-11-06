@@ -1,4 +1,4 @@
-/* Hand edits (musiccore/edit.h; docs/tagging-rules.md, "Hand edits").
+/* Hand edits (kithcore/edit.h; docs/tagging-rules.md, "Hand edits").
  *
  * An edit changes rows, and through them what this device's files say and where they are, and
  * has to do all of that or none of it. So it goes in three steps, on a connection of its own

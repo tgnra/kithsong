@@ -1,4 +1,4 @@
-/* Local audio analysis (musiccore/analysis.h): loudness against EBU Tech 3341 and 3342's test
+/* Local audio analysis (kithcore/analysis.h): loudness against EBU Tech 3341 and 3342's test
  * signals, timbre from synthetic ones, and how results are stored, scanned and synced. */
 #include <math.h>
 #include <stdatomic.h>

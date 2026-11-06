@@ -1,4 +1,4 @@
-/* Makes a radio mix (musiccore/radio.h) and saves it in the library as an ordinary playlist,
+/* Makes a radio mix (kithcore/radio.h) and saves it in the library as an ordinary playlist,
  * for judging mixes by ear before there's a radio to play them.
  *
  *   manual_radio <library folder> [--seed <text>] [--count <n>] [--name <playlist name>]

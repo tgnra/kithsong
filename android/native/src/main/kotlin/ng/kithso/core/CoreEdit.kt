@@ -1,7 +1,7 @@
 package ng.kithso.core
 
 // Editing an album's, artist's or track's tags, an album's flags and cover and a single's mix on
-// an open CoreLibrary, and matching an album to another MusicBrainz release (musiccore/edit.h),
+// an open CoreLibrary, and matching an album to another MusicBrainz release (kithcore/edit.h),
 // bound in jni_edit.c.
 // The rows are what's edited and the files follow, so a set can rewrite and move files, and a
 // search or a new release waits for MusicBrainz: keep them all off the main thread. Each throws

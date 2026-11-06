@@ -1,4 +1,4 @@
-/* Stress test libraries (musiccore/stress.h). Rows go straight into the tables, as the importer
+/* Stress test libraries (kithcore/stress.h). Rows go straight into the tables, as the importer
  * would have left them, with the triggers' logging off: nothing here ever syncs, and writing the
  * changelog as well would take most of the time. Generated from a fixed seed, uids included, so
  * a preset is the same library every time. */

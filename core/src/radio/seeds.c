@@ -1,4 +1,4 @@
-/* See musiccore/radio_seeds.h. */
+/* See kithcore/radio_seeds.h. */
 #include "kithcore/radio_seeds.h"
 
 #include <stdint.h>

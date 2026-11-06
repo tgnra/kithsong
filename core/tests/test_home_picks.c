@@ -1,4 +1,4 @@
-/* What goes in the Home page's rows (musiccore/home_picks.h). */
+/* What goes in the Home page's rows (kithcore/home_picks.h). */
 #include <stdio.h>
 #include <string.h>
 #include <time.h>

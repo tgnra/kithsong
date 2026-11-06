@@ -1,4 +1,4 @@
-// musiccore built with the NDK, plus the JNI bridge and its Kotlin bindings. Shared by the
+// kithcore built with the NDK, plus the JNI bridge and its Kotlin bindings. Shared by the
 // phone (:app) and watch (:wear) apps; each app picks the ABIs it ships with abiFilters.
 plugins {
     id("com.android.library")

@@ -1,6 +1,6 @@
 package ng.kithso.core
 
-// Deleting albums and tracks from an open CoreLibrary (musiccore/delete.h), bound in
+// Deleting albums and tracks from an open CoreLibrary (kithcore/delete.h), bound in
 // jni_delete.c. Android has no trash, so a delete removes the files for good
 // (mc_delete_run_permanently); like any change it's logged, so sync deletes the tracks on every
 // device. In a group ([binOffered]) it goes to the recycle bin as well (mc_delete_run_to_bin),

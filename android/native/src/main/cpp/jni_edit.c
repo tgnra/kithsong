@@ -1,7 +1,7 @@
 /* JNI bindings for ng.kithso.core.EditNatives: editing tags, an album's flags and cover and a
- * single's mix, and searching for another release (musiccore/edit.h), on an open CoreLibrary's
+ * single's mix, and searching for another release (kithcore/edit.h), on an open CoreLibrary's
  * handle. Kept apart from
- * jni_bridge.c; as thin as it is: marshal arguments, call musiccore, convert results. Failures
+ * jni_bridge.c; as thin as it is: marshal arguments, call kithcore, convert results. Failures
  * throw ng.kithso.core.KithCoreException, with the status to tell them apart by.
  *
  * What goes into a tag comes as a byte[] of UTF-8, not a jstring: what a jstring gives is

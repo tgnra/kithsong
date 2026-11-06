@@ -1,4 +1,4 @@
-/* See musiccore/radio.h. Every candidate is compared at each pick: a library's results fit in
+/* See kithcore/radio.h. Every candidate is compared at each pick: a library's results fit in
  * a few MB and picks are few, so there's no index to keep. A mix is a station told to end, so
  * the two pick alike. */
 #ifndef _WIN32

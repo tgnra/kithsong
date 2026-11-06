@@ -26,7 +26,7 @@ mc_status mc_delete_save_record(sqlite3 *store, mc_library *lib, const char *abs
                                 int64_t size, int64_t mtime, const char *sha, const char *rows);
 void mc_delete_records_close(sqlite3 *store);
 
-/* --- The recycle bin (musiccore/delete.h), for sync (sync/here.c and session.c) --- */
+/* --- The recycle bin (kithcore/delete.h), for sync (sync/here.c and session.c) --- */
 
 /* An album or track a taken-back entry named: the device keeps it off itself. */
 typedef struct mc_bin_item {

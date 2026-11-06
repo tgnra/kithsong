@@ -22,7 +22,7 @@ typedef struct scroller {
   int pos, target;     /* pixels scrolled, and where an animation is heading */
   BOOL animating, shown, hot, dragging;
   int drag_dy; /* where on the thumb it was grabbed */
-  /* For the profiler (musiccore/perf.h): the series its frames go in, NULL for none, the
+  /* For the profiler (kithcore/perf.h): the series its frames go in, NULL for none, the
    * position last painted and when the paint under way began. */
   const char *perf_name;
   int perf_pos;
