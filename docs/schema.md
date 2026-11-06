@@ -362,6 +362,42 @@ One decode of a file, all of it:
   12. The mean and variance of each over the track are kept. Frames under -70 dBFS are left out,
   so silence isn't timbre. A band reads no lower than 100 dB under its own frame's power, so a
   gain moves MFCC 0 and nothing else.
+- **Change.** The RMS difference of each MFCC from the frame two back, which is the nearest frame
+  sharing no samples, 46 ms ago. That's what tells a held sound from a choppy one with the same
+  spectrum. A silent frame starts it over, so a gap is never counted as a change. Differences of dB
+  don't move with a gain, MFCC 0's included.
+- **Bands.** Straight from the power bins, since only about two mel bands sit under 150 Hz: each
+  frame's share of its energy in sub (32 to 75 Hz), bass (to 248 Hz), low mid (to 506 Hz), mid (to
+  2.1 kHz) and high (to 10.7 kHz), averaged over the frames, in dB, -60 at the least. Bins are
+  21.5 Hz, so those edges are whole bins. Sub starts above bin 1, where a DC offset leaks, and
+  stops where the body of a kick starts; high stops under the resampler's cutoff; the rest are
+  about the octaves producers talk in. Each band also has a spectral flatness, the geometric over
+  the arithmetic mean of its bins in dB: about -2.5 for noise, whatever the level, and far lower
+  for tones, so tonal and noisy or distorted sound come apart. It's worked out in blocks of about
+  300 Hz, joined by energy, as across a wide band it would only measure the tilt of the spectrum,
+  and sub and bass count as one band for it, as sub is two bins. A band under -60 dB of a frame says
+  nothing in that frame, and one that's never over that is NaN.
+- **Rhythm.** Each frame's onset strength is what rose since the last, in dB: the mean over the 40
+  mel bands of the rise, counting only 60 dB under the frame's top band. It comes from what the
+  MFCCs already worked out, in the same decode, and a gain doesn't move it. After a silent frame a
+  sound rises from that floor, up to 15 dB. Silence only counts as time between two sounds and up
+  to 2 s, so silence around a track leaves no mark and a hidden track is spliced on. Strengths go
+  through a window of 512 frames (11.9 s), 256 new each time, so a track hours long takes no more
+  memory. In each window they're reduced to what stands over a 1 s local mean, and their
+  autocorrelation up to 3 s is scaled by the window's own energy and added to a sum. Over the track
+  that gives:
+  - a rhythm profile: the mean autocorrelation by lag in 32 log-spaced bins from 186 ms to 3 s, 8 to
+    the octave, each lag spread over the 1.5 bins either side so that tempos 5% apart stay close.
+    Before that a lag loses what its fractions explain: a beat's multiples repeat too, and they
+    would keep two tempos an octave apart from looking alike.
+  - pulse, the highest autocorrelation of each window from 186 ms up, averaged: 0 for no pulse, 1
+    for a metronome.
+  - the onset rate, as peaks at least 1.5 dB over the local mean, a second, averaged over windows.
+  - `bpm`, a best estimate: the strongest lag of the autocorrelation, with a tempo favoured the
+    nearer it is to 140 on a log scale, made exact from where its multiples fall. 0 when pulse is
+    under 0.1. It can be an octave out, which nothing relies on: it's stored, and neither shown nor
+    compared.
+  Under 3 s of sound there's nothing to repeat, and all of these are 0.
 - **Loudness.** Integrated loudness in LUFS (BS.1770-4: K-weighting worked out for the file's
   rate, 400 ms blocks with 75% overlap, gates at -70 LUFS and -10 LU), loudness range in LU (EBU
   Tech 3342: 3 s blocks, gates at -70 LUFS and -20 LU, 10th to 95th percentile) and true peak in
@@ -384,18 +420,25 @@ again on devices that scan; a result of a newer version than a device's is left 
 | `features` | the BLOB below |
 | `lufs`, `lra`, `true_peak` | REAL; NULL when undefined: a track that's silent or under 400 ms has no `lufs`, one under 3 s no `lra`, a silent one no `true_peak` |
 
-`features` is 116 bytes, the same on every platform. All numbers are little-endian IEEE 754
+`features` is 344 bytes, the same on every platform. All numbers are little-endian IEEE 754
 binary32:
 
 | Offset | Size | |
 |--------|------|---|
-| 0 | 1 | layout, 1 |
+| 0 | 1 | layout, 2 |
 | 1 | 1 | N, the MFCC count, 13 |
 | 2 | 2 | reserved, 0 |
 | 4 | 4N | mean of MFCC 0 to N-1, dB |
 | 4 + 4N | 4N | variance of the same, dB squared |
 | 4 + 8N | 4 | mean spectral centroid, Hz |
 | 8 + 8N | 4 | variance of the centroid, Hz squared |
+| 12 + 8N | 4N | RMS change of MFCC 0 to N-1 over 46 ms, dB |
+| 12 + 12N | 128 | rhythm profile, 32 lag bins from 186 ms up, 8 to the octave |
+| 140 + 12N | 4 | pulse, 0 to 1 |
+| 144 + 12N | 4 | onset rate, a second |
+| 148 + 12N | 4 | `bpm`, 0 if there's no clear pulse |
+| 152 + 12N | 20 | share of energy in sub, bass, low mid, mid and high, dB |
+| 172 + 12N | 16 | flatness of sub and bass, low mid, mid and high, dB, NaN for a band that's empty |
 
 A reader skips a BLOB of a layout or N it doesn't know. A new layout needs a new
 `analysis_version`; a new version needn't change the layout.
@@ -485,29 +528,44 @@ can't be opened for now, or changed while it was read.
 
 ### Distance
 
-`mc_analysis_distance()` is a weighted Euclidean distance over 29 numbers in four groups:
+`mc_analysis_distance()` is a weighted Euclidean distance over 61 numbers in seven groups:
 
 | Group | Weight | Numbers |
 |-------|--------|---------|
-| shape | 0.45 | the means of MFCCs 1 to 12 |
-| texture | 0.25 | the standard deviations of MFCCs 0 to 12 |
-| brightness | 0.20 | the mean centroid in octaves, and its standard deviation as a fraction of the mean |
-| energy | 0.10 | `lufs`, `lra` |
+| shape | 0.30 | the means of MFCCs 1 to 12 |
+| texture | 0.18 | the standard deviations of MFCCs 0 to 12 |
+| brightness | 0.12 | the mean centroid in octaves, and its standard deviation as a fraction of the mean |
+| energy | 0.05 | `lufs`, `lra` |
+| rhythm | 0.10 | the rhythm profile folded into one octave (8 numbers), pulse, and the onset rate in octaves |
+| balance | 0.15 | each band's share of energy, and the flatness of each |
+| motion | 0.10 | the RMS changes of MFCCs 0 to 12 |
 
 - MFCC 0's mean is left out: it's the level, and the same recording mastered louder has the same
   timbre. The loudness it would have said counts for what it is, under energy, at a low weight.
+- The rhythm profile is folded by adding up each of its 8 places in the octave over the 4 octaves,
+  so a tempo and its double are the same numbers, and a tempo heard an octave out does no harm: 85
+  and 170 are near, and 85 and 120 aren't. Only the onset rate still tells them apart, as a track
+  with twice the onsets is busier. Being summed over a profile with the multiples taken out, this
+  needs no search over octaves, and the distance stays a plain Euclidean one.
 - Raw coefficients do need scaling: they differ in unit and their spreads by an order of
   magnitude, so MFCC 1 alone would decide. Each number is divided by its standard deviation over
   the library (`mc_analysis_stats_load()`, one result per track, worked out once and handed in).
   Every device has the same rows, so every device gets the same scales.
 - The diagonal only, not a full covariance: MFCCs are close to uncorrelated by construction, and a
-  covariance needs far more tracks than 29 numbers to be stable in a small library.
+  covariance needs far more tracks than 61 numbers to be stable in a small library.
 - Within a group the squared z-scores are averaged, so its weight doesn't depend on how many
   numbers it has. Halved, as two random tracks differ by 2 on average, it gives about 1 for two
   random tracks of the library and 0 for the same features.
 - A small library's spread says little, so the fixed scales in `analysis.c` count for 16 tracks'
-  worth; with no stats they're all there is. They and the weights were set from reasoning and
-  synthetic signals, not tuned on real music.
+  worth; with no stats they're all there is. Those of the first four groups were set from reasoning
+  and synthetic signals, and the rest at about 1.4 times the spread in one real library, which
+  leaves distances on the fixed scales where they were.
+- The weights were reasoned out, then checked on one real library of 1,107 tracks, mostly hardcore
+  and other dance music. Going by how many of a track's 5 nearest are by the same artist, on other
+  albums at that, they did better than the old four groups (0.32 against 0.28), and nearby sets of
+  weights did as well, so that's a check and not a tuning. Rhythm helped most. Balance's distances
+  run close to shape's (a correlation of 0.89 over pairs), so together they're 0.45, the weight
+  shape used to have alone, and motion added little there. None of this has been judged by ear.
 - A number that's undefined (`lufs` of a silent track) counts as no difference. Results of
   different versions aren't compared at all: the distance is -1.
 
@@ -592,8 +650,8 @@ the pause was, so it counts as a skip, which the play it starts takes back if it
 
 Each pairing then reaches this station by how close its seed is to this station's seed, and each
 candidate by how close it is to the skipped track. Both go from 1 at a distance of 0 straight down
-to nothing at 0.6, on the library's scales, where two random tracks are about 1 apart and a track's
-nearest few about 0.45. So those few get a quarter, and an unrelated station gets exactly nothing,
+to nothing at 0.7, on the library's scales, where two random tracks are about 1 apart and a track's
+nearest few about 0.52. So those few get a quarter, and an unrelated station gets exactly nothing,
 not just very little. A score gets worse by 0.05 for each skip that arrives. That's `DRAW_SOFTNESS`,
 so among tracks otherwise level a fresh skip leaves a track about a third as likely to be drawn.
 However many skips agree, a track's score goes up by 0.15 at most, what being played just now
@@ -644,7 +702,7 @@ other on the library's scales.
    from a start spread out by farthest-point selection. It's k-medoids because distances are all
    there is to go on, and because a centre is then a real track.
 3. **Choosing.** The count with the highest mean silhouette, which says how much nearer each track
-   is to its own group than to the next, from 0 to 1. It has to reach 0.22, or the library is one
+   is to its own group than to the next, from 0 to 1. It has to reach 0.2, or the library is one
    kind, unless a count of 12 to 32 reaches it: 8 centres can't fit a library of 30 kinds however
    plain they are, so that keeps its best count up to 8. Two centres under 0.6 apart on the fixed
    scales rule a count out, as the library's own
@@ -654,10 +712,10 @@ other on the library's scales.
 4. **Belonging.** Every track, left out or not, goes to its nearest centre. A group that comes to too
    few tracks across the library is let go, its tracks going to the next nearest.
 
-The 0.22 comes from one real library of 1,026 such tracks, which divided into 863 and 163 at 0.36, and
-each of whose two groups, as a library by itself, scored 0.14 and 0.19. Cut into 12 or more it never
+The 0.2 comes from one real library of 1,026 such tracks, which divided into 780 and 246 at 0.25, and
+each of whose two groups, as a library by itself, scored 0.12 and 0.17. Cut into 12 or more it never
 passed 0.09, where 30 made-up sounds reached 0.48. The 0.6 comes from that
-library at 700 tracks, where two tracks of one album were 0.51 apart at the median and any two 0.62.
+library, where two tracks of one album were 0.51 apart at the median and any two 0.68.
 Like the distance's weights, neither has been tuned by ear. There are never more than 8 stations,
 which a library of more kinds than that shares out among the 8.
 
@@ -665,8 +723,8 @@ which a library of more kinds than that shares out among the 8.
 groups belongs to the nearer of them, the first of two as near. It can play there like any other,
 since it's music the library holds, but it's never where a station starts, nor what one is named
 after: for that a track has to be typical of its group, within 80% of the distance to the next
-centre, and no further from its own than 1.5 times the group's median (0.45 at the least). In that
-real library 89% and 58% of the two groups' tracks were.
+centre, and no further from its own than 1.5 times the group's median (0.52 at the least). In that
+real library 80% and 55% of the two groups' tracks were.
 
 A station only draws from its seed's group, on the library's scales as ever. That's true of every
 station and mix, so one started from a track's menu keeps to that track's kind too. In a library of
@@ -676,7 +734,7 @@ started.
 
 **The seed.** Each station has a seed, which is what it is: it names the station, and it's what its
 Recents row and its plays go by. It starts as its group's centre, and may move to any track of the
-group that's typical of it and within 0.45 of the centre, on the library's scales. It moves to an
+group that's typical of it and within 0.52 of the centre, on the library's scales. It moves to an
 artist no other station has, then to a track with a cover, then to what's been played most, counted
 in doublings. The stations are shown most played first.
 

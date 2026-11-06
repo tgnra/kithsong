@@ -253,13 +253,16 @@ mc_status mc_analysis_get(mc_library *lib, const char *track_uid, mc_analysis *o
 
 /* --- Distance ---
  *
- * What's compared, as a vector of MC_ANALYSIS_DIMS, in four groups:
+ * What's compared, as a vector of MC_ANALYSIS_DIMS, in seven groups:
  *  - shape:      the means of MFCCs 1 to 12, the spectrum's outline. Not 0, which is the level:
  *                the same recording mastered louder is the same timbre.
  *  - texture:    the standard deviations of all 13, how much the sound moves.
  *  - brightness: the centroid, in octaves as hearing goes, and how much it moves as a fraction
  *                of itself.
  *  - energy:     integrated loudness and loudness range.
+ *  - rhythm:     the lag profile folded into one octave, pulse, and the onset rate in octaves.
+ *  - balance:    each band's share of energy, and how flat they are.
+ *  - motion:     how fast each MFCC changes.
  * Each dimension is a z-score against the library's own spread, as the raw numbers are in
  * unlike units with spreads an order of magnitude apart. Within a group a squared difference is
  * averaged, so a group's weight doesn't depend on how many dimensions it has, and the weights
@@ -288,11 +291,11 @@ static const float k_prior_scale[MC_ANALYSIS_DIMS] = {
   8, 4, 2.5f, 2, 1.5f, 1.5f, 1, 1, 1, 1, 1, 1, 1,        /* texture */
   0.7f, 0.2f,                                            /* brightness */
   4, 4,                                                  /* energy */
-  0.15f, 0.15f, 0.15f, 0.15f, 0.15f, 0.15f, 0.15f, 0.15f, /* rhythm: the octave */
-  0.2f, 1,                                               /* rhythm: pulse, onset rate */
-  8, 6, 4, 3, 5,                                         /* balance: shares */
-  3, 3, 2, 1,                                            /* balance: flatness */
-  10, 5, 3, 2.5f, 2, 2, 1.5f, 1.5f, 1.5f, 1, 1, 1, 1,    /* motion */
+  0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f,       /* rhythm: the octave */
+  0.2f, 0.7f,                                            /* rhythm: pulse, onset rate */
+  6, 3, 3, 2.5f, 4,                                      /* balance: shares */
+  3, 2.5f, 2.5f, 1.5f,                                   /* balance: flatness */
+  14, 6, 3.5f, 2, 2, 1.6f, 1.4f, 1.2f, 1.2f, 1.2f, 1, 1, 1, /* motion */
 };
 /* How many results the fixed scales count for, against the library's. */
 #define PRIOR_WEIGHT 16.0

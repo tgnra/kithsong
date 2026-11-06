@@ -79,6 +79,9 @@ static void add_track(mc_library *lib, const char *uid, const char *title, const
   memset(&a, 0, sizeof a);
   a.version = MC_ANALYSIS_VERSION;
   for (int i = 1; i < MC_ANALYSIS_MFCCS; i++) a.mfcc_mean[i] = (float)(sound * (i % 3 + 1));
+  for (int i = 0; i < MC_ANALYSIS_MFCCS; i++) a.mfcc_delta[i] = (float)(sound * (i % 3 + 1));
+  for (int i = 0; i < MC_ANALYSIS_BANDS; i++) a.band_share[i] = (float)(sound * (i % 3 + 1));
+  for (int i = 0; i < MC_ANALYSIS_FLATNESS; i++) a.band_flatness[i] = (float)(sound * (i % 3 + 1));
   a.centroid_mean = (float)(1000.0 + 100.0 * sound);
   a.lufs = -14.0;
   a.lra = 6.0;
@@ -610,7 +613,7 @@ static void test_skip_fixture(const char *scratch) {
   CHECK(mc_analysis_get(lib, "up3", &up_last) == MC_OK);
   CHECK(mc_analysis_get(lib, "down0", &down) == MC_OK);
   CHECK(mc_analysis_get(lib, "far0", &far) == MC_OK);
-  double reach = 0.6; /* SKIP_REACH */
+  double reach = 0.7; /* SKIP_REACH */
   CHECK(mc_analysis_distance(&seed, &nearseed, &stats) < reach / 2);
   CHECK(mc_analysis_distance(&up, &up_last, &stats) < reach / 4);
   CHECK(mc_analysis_distance(&up, &down, &stats) > reach);

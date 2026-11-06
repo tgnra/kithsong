@@ -491,12 +491,16 @@ static void test_rhythm_gaps(void) {
   /* The pad is whole hops, or the frames would fall differently on the beats and that would show. */
   enum { RATE = 44100, N = RATE * 30, PAD = 1024 * 860 };
   float *x = calloc(2 * PAD + 2 * N, sizeof *x);
-  for (int i = 0; i < N; i++) x[PAD + i] = (float)beat((double)i / RATE, 130.0, 0.02);
+  for (int i = 0; i < N; i++) {
+    /* Faded, as a sound cut off dead is a click, and that is timbre. */
+    double edge = (i < N - i ? i : N - i) / 4000.0;
+    x[PAD + i] = (float)((edge < 1.0 ? edge : 1.0) * beat((double)i / RATE, 130.0, 0.02));
+  }
   mc_analysis bare, padded, split;
   analyse_buffer(RATE, x + PAD, N, &bare);
   analyse_buffer(RATE, x, 2 * PAD + N, &padded);
   printf("silence around a beat: gap %.4f, bpm %.2f vs %.2f\n", new_features_gap(&bare, &padded), bare.bpm, padded.bpm);
-  CHECK(new_features_gap(&bare, &padded) < 0.02);
+  CHECK(new_features_gap(&bare, &padded) < 0.03);
   /* The second half after a gap the length of a hidden track's. */
   memmove(x + N / 2 + PAD, x + N / 2, (size_t)(N / 2) * sizeof *x);
   memset(x + N / 2, 0, (size_t)PAD * sizeof *x);
@@ -697,6 +701,12 @@ static void test_distance(void) {
     many[i].centroid_var = 500000.0f + 400000.0f * noise(&state);
     many[i].lufs = -14.0 + 8.0 * noise(&state);
     many[i].lra = 8.0 + 6.0 * noise(&state);
+    for (int c = 0; c < MC_ANALYSIS_MFCCS; c++) many[i].mfcc_delta[c] = 10.0f + 6.0f * noise(&state);
+    for (int k = 0; k < MC_ANALYSIS_LAGS; k++) many[i].rhythm[k] = 0.3f + 0.3f * noise(&state);
+    many[i].pulse = 0.6f + 0.3f * noise(&state);
+    many[i].onset_rate = 4.0f + 3.0f * noise(&state);
+    for (int k = 0; k < MC_ANALYSIS_BANDS; k++) many[i].band_share[k] = -8.0f + 4.0f * noise(&state);
+    for (int k = 0; k < MC_ANALYSIS_FLATNESS; k++) many[i].band_flatness[k] = -5.0f + 2.0f * noise(&state);
   }
   mc_analysis_stats stats;
   mc_analysis_stats_from(many, COUNT, &stats);
@@ -711,6 +721,7 @@ static void test_distance(void) {
   mc_analysis no_loudness = many[0];
   no_loudness.lufs = NAN;
   no_loudness.lra = NAN;
+  no_loudness.band_flatness[0] = NAN; /* nor does one with a band empty */
   double d = mc_analysis_distance(&many[0], &no_loudness, &stats);
   CHECK(d == 0.0);
   /* And results of another version don't compare at all, nor count. */

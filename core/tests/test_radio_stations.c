@@ -626,7 +626,7 @@ static void test_many_kinds(const char *scratch) {
       add_track(lib, uid, uid, "Many", "many", TRACK_MS, 0, 0, 0, 1);
       mc_analysis a;
       result_of(0, i, &a);
-      a.mfcc_mean[1 + c % 12] += c < 12 ? 60.0f : -60.0f;
+      a.mfcc_mean[1 + c % 12] += c < 12 ? 75.0f : -75.0f;
       CHECK(mc_analysis_store(lib, uid, NULL, MC_ANALYSIS_ORIGINAL, &a) == MC_OK);
     }
   }
