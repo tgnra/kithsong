@@ -428,8 +428,10 @@ static BOOL start_station(const char *seed, const char *start) {
 
 void playback_play_station(const char *seed_track_uid, const char *start_uid) {
   if (!s.lib || !seed_track_uid) return;
-  if (start_uid && start_uid[0] && start_station(seed_track_uid, start_uid)) return;
-  if (!start_station(seed_track_uid, seed_track_uid)) now_playing_notice(mc_wstr(MC_STR_STATION_CANT_PLAY));
+  char seed[MC_UID_STRLEN]; /* it can be the queue's own, which playing frees */
+  snprintf(seed, sizeof seed, "%s", seed_track_uid);
+  if (start_uid && start_uid[0] && start_station(seed, start_uid)) return;
+  if (!start_station(seed, seed)) now_playing_notice(mc_wstr(MC_STR_STATION_CANT_PLAY));
 }
 
 void playback_play_radio(const char *seed_track_uid) {

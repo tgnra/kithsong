@@ -645,7 +645,9 @@ other on the library's scales.
    there is to go on, and because a centre is then a real track.
 3. **Choosing.** The count with the highest mean silhouette, which says how much nearer each track
    is to its own group than to the next, from 0 to 1. It has to reach 0.22, or the library is one
-   kind. Two centres under 0.6 apart on the fixed scales rule a count out, as the library's own
+   kind, unless a count of 12 to 32 reaches it: 8 centres can't fit a library of 30 kinds however
+   plain they are, so that keeps its best count up to 8. Two centres under 0.6 apart on the fixed
+   scales rule a count out, as the library's own
    scales put any library's tracks about 1 apart however alike they sound. So does a group under 12
    tracks, about an album, or under 2% of the library, an odd album in a big one being no kind of
    music of its own.
@@ -653,7 +655,8 @@ other on the library's scales.
    few tracks across the library is let go, its tracks going to the next nearest.
 
 The 0.22 comes from one real library of 1,026 such tracks, which divided into 863 and 163 at 0.36, and
-each of whose two groups, as a library by itself, scored 0.14 and 0.19. The 0.6 comes from that
+each of whose two groups, as a library by itself, scored 0.14 and 0.19. Cut into 12 or more it never
+passed 0.09, where 30 made-up sounds reached 0.48. The 0.6 comes from that
 library at 700 tracks, where two tracks of one album were 0.51 apart at the median and any two 0.62.
 Like the distance's weights, neither has been tuned by ear. There are never more than 8 stations,
 which a library of more kinds than that shares out among the 8.

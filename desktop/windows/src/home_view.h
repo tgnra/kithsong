@@ -20,8 +20,8 @@
  * and Right move the focus along a row, Up and Down between rows, and Page Up, Page Down, Home
  * and End scroll the page.
  *
- * Clicking a tile (or Enter on it) opens it, HVN_OPEN. A Radio station plays instead, from its
- * seed track (playback_play_radio()), and its tooltip says what it's like. Radio's row is left
+ * Clicking a tile (or Enter on it) opens it, HVN_OPEN. A Radio station plays instead, from a track
+ * of its kind drawn for it (playback_play_station()), and its tooltip says what it's like. Radio's row is left
  * out until the library has stations.
  *
  * Right-clicking a tile, or the Menu key or Shift+F10 on the focused one, opens what the same

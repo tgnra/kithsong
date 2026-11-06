@@ -610,13 +610,28 @@ static void test_small_groups(const char *scratch) {
   }
 }
 
-/* Only so much is ever offered, however many kinds there are. */
+/* Only so much is ever offered, and more kinds than that aren't taken for one, for all that so few
+ * centres can't fit them well. Each sound goes its own way from the rest, as on a line a few centres
+ * would do. */
 static void test_many_kinds(const char *scratch) {
   mc_library *lib = open_library(scratch, "test_stations_many.d");
   if (!lib) return;
-  add_clusters(lib, MC_RADIO_STATIONS_MAX + 2, 30);
+  enum { SOUNDS = 24, PER = 14 };
+  add_artist(lib, "Many");
+  add_album(lib, "many", "Many", 0);
+  char uid[32];
+  for (int c = 0; c < SOUNDS; c++) {
+    for (int i = 0; i < PER; i++) {
+      snprintf(uid, sizeof uid, "k%d-%d", c, i);
+      add_track(lib, uid, uid, "Many", "many", TRACK_MS, 0, 0, 0, 1);
+      mc_analysis a;
+      result_of(0, i, &a);
+      a.mfcc_mean[1 + c % 12] += c < 12 ? 60.0f : -60.0f;
+      CHECK(mc_analysis_store(lib, uid, NULL, MC_ANALYSIS_ORIGINAL, &a) == MC_OK);
+    }
+  }
   mc_radio_station_list *list = stations(lib, noon_ms());
-  CHECK(list && list->count >= 2 && list->count <= MC_RADIO_STATIONS_MAX);
+  CHECK(list && list->count > 1 && list->count <= MC_RADIO_STATIONS_MAX);
   mc_radio_station_list_free(list);
   mc_library_close(lib);
 }

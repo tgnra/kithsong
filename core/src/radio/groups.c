@@ -18,7 +18,8 @@ enum {
   MIN_TRACKS = 12,
   /* Nor is one smaller than 1 / this of the library, an odd album in a big one being no kind of
    * music of its own. */
-  MIN_SHARE = 50
+  MIN_SHARE = 50,
+  MOST_TRIED = 32 /* the most groups a library is ever divided into, to see */
 };
 
 /* A track further from its neighbours than this many times the usual is too alone to tell
@@ -177,11 +178,11 @@ static void divide(const field *f, int *centres, int count) {
 
 /* The mean silhouette of the division in f->labels. */
 static double silhouette(const field *f, int count) {
-  int sizes[MC_RADIO_STATIONS_MAX] = {0};
+  int sizes[MOST_TRIED] = {0};
   for (int i = 0; i < f->m; i++) sizes[f->labels[i]]++;
   double total = 0;
   for (int i = 0; i < f->m; i++) {
-    double sums[MC_RADIO_STATIONS_MAX] = {0};
+    double sums[MOST_TRIED] = {0};
     for (int k = 0; k < f->m; k++) sums[f->labels[k]] += dist_of(f, i, k);
     int own = f->labels[i];
     if (sizes[own] < 2) continue; /* a group of one says nothing, and counts as 0 */
@@ -202,7 +203,7 @@ static int smallest_group(int tracks) {
 /* Whether what divide() came to can stand: no two centres that sound alike, nor a group too
  * small, going by its share of the sample. */
 static int stands(const field *f, const mc_analysis *results, const int *centres, int count, int tracks) {
-  int sizes[MC_RADIO_STATIONS_MAX] = {0};
+  int sizes[MOST_TRIED] = {0};
   for (int i = 0; i < f->m; i++) sizes[f->labels[i]]++;
   for (int g = 0; g < count; g++) {
     if ((int64_t)sizes[g] * tracks < (int64_t)smallest_group(tracks) * f->m) return 0;
@@ -213,16 +214,33 @@ static int stands(const field *f, const mc_analysis *results, const int *centres
   return 1;
 }
 
-/* The count that divides f most clearly, its centres in best, or 1 if none does so well enough. */
+/* Whether f divides clearly into more groups than there can be stations, as a library of many kinds
+ * does, whose best into 8 can't score well however plain the kinds: 8 centres can't fit 30 sounds.
+ * A library with no such shape only scores worse the more it's cut up. In a real one 12 and up gave
+ * under 0.09, and 30 made-up sounds gave 0.48 at 32. chosen has MOST_TRIED members. */
+static int many_kinds(const field *f, const int *chosen, int tracks) {
+  static const int tries[] = {12, 16, 24, MOST_TRIED};
+  for (size_t i = 0; i < sizeof tries / sizeof tries[0]; i++) {
+    int centres[MOST_TRIED], k = tries[i];
+    if (k * MIN_TRACKS > tracks || k > f->m) break;
+    memcpy(centres, chosen, (size_t)k * sizeof *centres);
+    divide(f, centres, k);
+    if (silhouette(f, k) >= MIN_SILHOUETTE) return 1;
+  }
+  return 0;
+}
+
+/* The count that divides f most clearly, its centres in best, or 1 if the library is one kind. */
 static int best_division(const field *f, const mc_analysis *results, int tracks, int *best, mc_radio_groups *out) {
-  int most = tracks / smallest_group(tracks), chosen[MC_RADIO_STATIONS_MAX], count = 1;
+  int most = tracks / smallest_group(tracks), chosen[MOST_TRIED], count = 1;
   if (most > MC_RADIO_STATIONS_MAX) most = MC_RADIO_STATIONS_MAX;
+  if (most > f->m) most = f->m;
   if (most < 1) most = 1;
-  spread(f, most, chosen);
+  spread(f, f->m < MOST_TRIED ? f->m : MOST_TRIED, chosen);
   best[0] = chosen[0];
-  double clearest = MIN_SILHOUETTE;
+  double clearest = -1;
   for (int k = 2; k <= most; k++) {
-    int centres[MC_RADIO_STATIONS_MAX];
+    int centres[MOST_TRIED];
     memcpy(centres, chosen, (size_t)k * sizeof *centres);
     divide(f, centres, k);
     double score = silhouette(f, k);
@@ -232,7 +250,9 @@ static int best_division(const field *f, const mc_analysis *results, int tracks,
     count = k;
     memcpy(best, centres, (size_t)k * sizeof *best);
   }
-  return count;
+  if (clearest >= MIN_SILHOUETTE || (count > 1 && most == MC_RADIO_STATIONS_MAX && many_kinds(f, chosen, tracks))) return count;
+  best[0] = chosen[0];
+  return 1;
 }
 
 int mc_radio_group_of(const mc_radio_groups *groups, const mc_analysis *result) {
