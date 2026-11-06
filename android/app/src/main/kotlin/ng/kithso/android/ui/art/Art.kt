@@ -27,18 +27,17 @@ import coil3.SingletonImageLoader
 import coil3.asImage
 import coil3.compose.AsyncImage
 import coil3.decode.DataSource
-import coil3.decode.ImageSource
 import coil3.disk.DiskCache
 import coil3.disk.directory
 import coil3.fetch.FetchResult
 import coil3.fetch.Fetcher
 import coil3.fetch.ImageFetchResult
-import coil3.fetch.SourceFetchResult
 import coil3.key.Keyer
 import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.request.allowHardware
+import coil3.request.bitmapConfig
 import coil3.request.Options
 import coil3.size.Precision
 import coil3.size.pxOrElse
@@ -161,12 +160,12 @@ private class ArtFetcher(
         // Placeholders draw faster than they'd read back, so only art from files goes on disk.
         val cache = diskCache?.takeIf { art.file != null }
         val diskKey = "${art.key()}@$px"
-        cache?.openSnapshot(diskKey)?.let { snapshot ->
-            return SourceFetchResult(
-                ImageSource(snapshot.data, cache.fileSystem, diskKey, snapshot),
-                mimeType = "image/jpeg",
-                dataSource = DataSource.DISK,
-            )
+        // Decoded here rather than handed to Coil's decoder. That one judges only by its own
+        // scaling, so a copy already the size asked for would count as the whole image, and
+        // the memory cache would then serve it to any larger view, however small it is.
+        cache?.openSnapshot(diskKey)?.use { snapshot ->
+            val decoding = BitmapFactory.Options().apply { inPreferredConfig = options.bitmapConfig }
+            BitmapFactory.decodeFile(snapshot.data.toString(), decoding)?.let { return fetched(it, px) }
         }
 
         val bitmap = source.load(art, px) ?: return null
@@ -178,9 +177,16 @@ private class ArtFetcher(
                 editor.abort()
             }
         }
-        // Smaller than asked for only when the original is, and then it's the whole image.
-        return ImageFetchResult(bitmap.asImage(), isSampled = bitmap.width >= px, dataSource = DataSource.DISK)
+        return fetched(bitmap, px)
     }
+
+    // Smaller than asked for only when the original is, and then it's the whole image. Anything
+    // else is a reduced copy, which the memory cache won't use for a view larger than it.
+    private fun fetched(bitmap: Bitmap, px: Int) = ImageFetchResult(
+        bitmap.asImage(),
+        isSampled = minOf(bitmap.width, bitmap.height) >= px,
+        dataSource = DataSource.DISK,
+    )
 
     class Factory(private val source: ArtSource) : Fetcher.Factory<ArtRef> {
         override fun create(data: ArtRef, options: Options, imageLoader: ImageLoader): Fetcher =
