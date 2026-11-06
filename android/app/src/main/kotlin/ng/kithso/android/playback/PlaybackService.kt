@@ -33,11 +33,14 @@ import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * Plays in the background: the media session around [CoreMediaPlayer], which gives the
@@ -49,16 +52,26 @@ import kotlinx.coroutines.withContext
  * It's a library session, so Android Auto and other media browsers can browse the library
  * ([BrowseTree]) and play from it, by id or by voice search; the app's own queues come with
  * their files and are played as they are.
+ *
+ * The queue and the place in it are kept as they go along ([QueueMemory]), so the process can go
+ * at any time. The next one starts paused where this left off, and a play button (Bluetooth, say)
+ * that starts the process goes on from there. A station keeps only its track, and starts from
+ * it again.
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     private val scope = MainScope()
     private var session: MediaLibrarySession? = null
+    private lateinit var memory: QueueMemory
+    private val saving = Dispatchers.IO.limitedParallelism(1)
+    // Nothing is saved until what's kept has been read: the empty player would replace it.
+    private var restored = false
 
     override fun onCreate() {
         super.onCreate()
         val app = application as KithsongApp
         val settings = app.settings
+        memory = QueueMemory(File(noBackupFilesDir, "queue"))
         val player = CoreMediaPlayer(
             this,
             settings.shuffle,
@@ -93,9 +106,20 @@ class PlaybackService : MediaLibraryService() {
         this.session = session
         player.addListener(object : Player.Listener {
             private var buttons: Boolean? = settings.shuffle
+            private var saver: Job? = null
 
             // What the button says: on or off, or with null, no button as a station plays.
             override fun onEvents(player: Player, events: Player.Events) {
+                if (events.containsAny(*QUEUE_EVENTS)) save(player)
+                if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
+                    saver?.cancel()
+                    saver = if (!player.isPlaying) null else scope.launch {
+                        while (true) {
+                            delay(SAVE_MS)
+                            save(player)
+                        }
+                    }
+                }
                 val station = player.currentMediaItem?.playOrigin?.context == CorePlayer.PlayContext.Radio
                 val wanted = player.shuffleModeEnabled.takeIf { !station }
                 if (wanted == buttons) return
@@ -103,6 +127,14 @@ class PlaybackService : MediaLibraryService() {
                 session.setMediaButtonPreferences(wanted?.let { shuffleButtons(it) }.orEmpty())
             }
         })
+        scope.launch {
+            val items = try {
+                savedItems()
+            } finally {
+                restored = true
+            }
+            if (items != null && player.mediaItemCount == 0) player.setMediaItems(items.mediaItems, items.startIndex, items.startPositionMs)
+        }
         // Stopped is how the app quits with a track paused, which leaves nothing behind.
         setShowNotificationForIdlePlayer(SHOW_NOTIFICATION_FOR_IDLE_PLAYER_NEVER)
         setMediaNotificationProvider(
@@ -121,12 +153,38 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onDestroy() {
         session?.run {
+            if (restored) memory.write(snapshot(player))
             player.release()
             release()
         }
         session = null
         scope.cancel()
         super.onDestroy()
+    }
+
+    private fun save(player: Player) {
+        if (!restored) return
+        val queue = snapshot(player)
+        scope.launch(saving) { memory.write(queue) }
+    }
+
+    private fun snapshot(player: Player): SavedQueue? {
+        val current = player.currentMediaItem ?: return null
+        val origin = current.playOrigin
+        if (origin.context == CorePlayer.PlayContext.Radio) return SavedQueue(listOf(current.mediaId), 0, 0, origin)
+        val uids = List(player.mediaItemCount) { player.getMediaItemAt(it).mediaId }
+        return SavedQueue(uids, player.currentMediaItemIndex, player.currentPosition, origin)
+    }
+
+    // The queue kept from last time, but for tracks it can't play any more; null for none.
+    private suspend fun savedItems(): MediaItemsWithStartPosition? {
+        val saved = withContext(saving) { memory.read() } ?: return null
+        val tracks = (application as KithsongApp).library.tracks(saved.uids)
+        val left = saved.keeping { tracks[it]?.path != null } ?: return null
+        val playable = tracks.filterNotNull().filter { it.path != null }
+        // Finding a cover's URI touches the disk.
+        val items = withContext(Dispatchers.IO) { queueItems(this@PlaybackService, playable, left.origin) }
+        return MediaItemsWithStartPosition(items, left.index, left.positionMs)
     }
 
     // The shuffle button, which shows whether it's on and turns it the other way.
@@ -203,6 +261,15 @@ class PlaybackService : MediaLibraryService() {
             }
         }
 
+        // A play button with nothing loaded, the process having just started, say.
+        override fun onPlaybackResumption(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            isForPlayback: Boolean,
+        ): ListenableFuture<MediaItemsWithStartPosition> = future {
+            savedItems() ?: throw UnsupportedOperationException("Nothing to go back to")
+        }
+
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
@@ -276,6 +343,13 @@ class PlaybackService : MediaLibraryService() {
             return if (from >= size) emptyList() else subList(from.toInt(), minOf(size.toLong(), from + pageSize).toInt())
         }
 
+        const val SAVE_MS = 15_000L
+        val QUEUE_EVENTS = intArrayOf(
+            Player.EVENT_TIMELINE_CHANGED,
+            Player.EVENT_MEDIA_ITEM_TRANSITION,
+            Player.EVENT_POSITION_DISCONTINUITY,
+            Player.EVENT_IS_PLAYING_CHANGED,
+        )
         const val ACTION_SHUFFLE_ON = "ng.kithso.SHUFFLE_ON"
         const val ACTION_SHUFFLE_OFF = "ng.kithso.SHUFFLE_OFF"
         val SHUFFLE_ON = SessionCommand(ACTION_SHUFFLE_ON, Bundle.EMPTY)

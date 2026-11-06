@@ -94,6 +94,15 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+        <!-- A play button (Bluetooth, say) with the process gone: the session goes on from the
+             queue PlaybackService kept. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
         <!-- Android Auto: the app is a media app, which Auto browses through PlaybackService. -->
         <meta-data
             android:name="com.google.android.gms.car.application"
