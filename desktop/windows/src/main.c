@@ -46,7 +46,8 @@
  * title, the playing track. Its Add to Playlist submenu is add_to_playlist.c, and the New,
  * Rename and Delete Playlist dialogs playlist_dialogs.c; the track list asks for playlist
  * changes (a smart playlist's too: its rule's editor is smart_editor.c) and they're made
- * here. The toolbar buttons, the shuffle toggle after the seekbar ([S]) and the speaker
+ * here. The toolbar buttons, the shuffle toggle after the seekbar ([S]), the queue button
+ * beside it, whose drop-down is queue_popup.c, and the speaker
  * next to it ([V]) are owner-drawn here; shuffle is kept in the settings, as is the volume,
  * which the speaker's drop-down (volume_popup.c) and the keyboard change.
  *
@@ -120,6 +121,7 @@
 #include "theme.h"
 #include "track_list.h"
 #include "track_menu.h"
+#include "queue_popup.h"
 #include "volume_popup.h"
 #include "scroller.h"
 #include "testing_view.h"
@@ -137,7 +139,8 @@ enum {
   ID_SEARCH,
   ID_ARTISTS,
   ID_SHUFFLE, /* after the seekbar */
-  ID_VOLUME,  /* after shuffle: opens volume_popup.c */
+  ID_QUEUE,   /* after shuffle: opens queue_popup.c */
+  ID_VOLUME,  /* after the queue: opens volume_popup.c */
   ID_WAITING, /* the waiting banner, above the album grid */
   ID_HOME,
   NUM_BUTTONS = ID_NEXT - ID_PREV + 1
@@ -155,7 +158,7 @@ enum {
   ICON_GAP = 2,         /* between neighbouring icon buttons */
   NOW_PLAYING_GAP = 16, /* between the playback buttons and the seekbar strip */
   SHUFFLE_GAP = 6,      /* between the seekbar strip and the shuffle button */
-  NOW_PLAYING_MAX = 640 + ICON_GAP + ICON_BTN, /* the strip, shuffle and the speaker */
+  NOW_PLAYING_MAX = 640 + 2 * (ICON_GAP + ICON_BTN), /* the strip, shuffle, the queue and the speaker */
 };
 
 /* The main window's timers. */
@@ -182,6 +185,7 @@ typedef struct app {
   HWND wnd;
   HWND buttons[NUM_BUTTONS];
   HWND shuffle; /* a toggle, drawn like the playback buttons */
+  HWND queue;   /* opens the play queue, drawn like them too */
   HWND volume;  /* the speaker, drawn like them too */
   HWND tooltip;
   HWND sidebar;
@@ -280,7 +284,9 @@ static void update_font(void) {
   for (int i = 0; i < NUM_BUTTONS; i++) InvalidateRect(g_app.buttons[i], NULL, FALSE);
   InvalidateRect(g_app.shuffle, NULL, FALSE);
   InvalidateRect(g_app.volume, NULL, FALSE);
+  InvalidateRect(g_app.queue, NULL, FALSE);
   volume_popup_close(); /* it opens again at the new size */
+  queue_popup_close();
 
   if (g_app.font) DeleteObject(g_app.font);
   g_app.font = font;
@@ -363,7 +369,7 @@ static void layout(void) {
   int x = logo_rect().right + pad;
   for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(ICON_GAP))
     dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
-  /* The seekbar, with the shuffle and speaker buttons after it, takes the space between the
+  /* The seekbar, with the shuffle, queue and speaker buttons after it, takes the space between the
    * playback buttons and the caption buttons, up to a point, centred in the window where
    * that leaves it clear of both. */
   int min_left = x - scale(ICON_GAP) + scale(NOW_PLAYING_GAP);
@@ -373,11 +379,13 @@ static void layout(void) {
   int np_left = (w - np_w) / 2;
   if (np_left + np_w > max_right) np_left = max_right - np_w;
   if (np_left < min_left) np_left = min_left;
-  int strip_w = max(0, np_w - 2 * icon - scale(SHUFFLE_GAP) - scale(ICON_GAP));
+  int strip_w = max(0, np_w - 3 * icon - scale(SHUFFLE_GAP) - 2 * scale(ICON_GAP));
   int shuffle_x = np_left + strip_w + scale(SHUFFLE_GAP);
   dwp = DeferWindowPos(dwp, g_app.now_playing, NULL, np_left, 0, strip_w, bar, SWP_NOZORDER);
   dwp = DeferWindowPos(dwp, g_app.shuffle, NULL, shuffle_x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
-  dwp = DeferWindowPos(dwp, g_app.volume, NULL, shuffle_x + icon + scale(ICON_GAP), (bar - icon) / 2, icon, icon,
+  dwp = DeferWindowPos(dwp, g_app.queue, NULL, shuffle_x + icon + scale(ICON_GAP), (bar - icon) / 2, icon, icon,
+                       SWP_NOZORDER);
+  dwp = DeferWindowPos(dwp, g_app.volume, NULL, shuffle_x + 2 * (icon + scale(ICON_GAP)), (bar - icon) / 2, icon, icon,
                        SWP_NOZORDER);
   dwp = DeferWindowPos(dwp, g_app.sidebar, NULL, 0, bar + side_top, side_w, h - bar - side_top, SWP_NOZORDER);
   UINT library = library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW;
@@ -491,10 +499,10 @@ static void show_page(sidebar_page page) {
   perf_view_shown();
 }
 
-/* Previous and Next need a track to go from; Play needs one, or a shown album with something
- * to play. Disabled buttons are greyed out. */
+/* Previous needs a track to go from, and Next one or the queue; Play needs one, the queue, or a
+ * shown album with something to play. Disabled buttons are greyed out. */
 static void update_buttons(void) {
-  BOOL playable = playback_has_current();
+  BOOL playable = playback_has_current() || playback_up_next_count() > 0;
   for (int i = 0, n = track_list_count(); !playable && i < n; i++) playable = track_list_item_at(i).path != NULL;
   EnableWindow(g_app.buttons[ID_PREV - ID_PREV], playback_has_current());
   EnableWindow(g_app.buttons[ID_PLAY - ID_PREV], playable);
@@ -723,11 +731,11 @@ static void draw_button(const DRAWITEMSTRUCT *dis) {
   canvas_clear(c, &rc, theme.frame, theme.mica ? 0 : 255);
 
   BOOL shuffle = dis->CtlID == ID_SHUFFLE, on = shuffle && playback_shuffle();
-  BOOL volume = dis->CtlID == ID_VOLUME;
+  BOOL volume = dis->CtlID == ID_VOLUME, queue = dis->CtlID == ID_QUEUE;
   BOOL pressed = (dis->itemState & ODS_SELECTED) != 0, disabled = (dis->itemState & ODS_DISABLED) != 0;
   control_state state = disabled ? STATE_NORMAL
                         : pressed ? STATE_PRESSED
-                        : volume && volume_popup_is_open() ? STATE_SELECTED
+                        : (volume && volume_popup_is_open()) || (queue && queue_popup_is_open()) ? STATE_SELECTED
                         : dis->hwndItem == g_app.hot_button ? STATE_HOT
                                                             : STATE_NORMAL;
   int radius = scale(6);
@@ -735,6 +743,7 @@ static void draw_button(const DRAWITEMSTRUCT *dis) {
   if (disabled) color = theme.text3;
   else if (on && state != STATE_PRESSED) color = theme.accent;
   wchar_t glyph = shuffle ? 0xE8B1                                         /* Shuffle */
+                  : queue ? 0xE8FD /* BulletedList */
                   : volume ? volume_popup_glyph()
                   : dis->CtlID == ID_PLAY && playback_is_playing() ? 0xE769 /* Pause */
                                                                    : glyphs[dis->CtlID - ID_PREV];
@@ -766,6 +775,7 @@ static void apply_theme(void) {
   waiting_banner_theme_changed();
   device_view_theme_changed();
   volume_popup_close(); /* it opens again in the new colours */
+  queue_popup_close();
   layout();
   RedrawWindow(g_app.wnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
@@ -809,6 +819,11 @@ static void create_controls(void) {
   set_button_label(g_app.buttons[ID_NEXT - ID_PREV], MC_STR_NEXT_TRACK, MC_STR_WINDOWS_SHORTCUT_NEXT);
   set_button_label(g_app.buttons[ID_PLAY - ID_PREV], MC_STR_PLAY, MC_STR_WINDOWS_SHORTCUT_PLAY_PAUSE);
   set_button_label(g_app.shuffle, MC_STR_SHUFFLE_OFF, MC_STR_WINDOWS_SHORTCUT_SHUFFLE);
+  g_app.queue = child(WC_BUTTONW, mc_wstr(MC_STR_WINDOWS_QUEUE), BS_OWNERDRAW, ID_QUEUE);
+  SetWindowSubclass(g_app.queue, button_proc, 0, 0);
+  ti.uId = (UINT_PTR)g_app.queue;
+  ti.lpszText = (wchar_t *)mc_wstr(MC_STR_WINDOWS_QUEUE);
+  SendMessageW(g_app.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
   /* Its name and tooltip stay "Volume"; the drop-down says the level. */
   g_app.volume = child(WC_BUTTONW, mc_wstr(MC_STR_VOLUME), BS_OWNERDRAW, ID_VOLUME);
   SetWindowSubclass(g_app.volume, button_proc, 0, 0);
@@ -1904,6 +1919,9 @@ static void on_command(int id, int code) {
     case ID_SHUFFLE:
       set_shuffle(!playback_shuffle());
       break;
+    case ID_QUEUE:
+      queue_popup_toggle(g_app.queue, g_app.dpi);
+      break;
     case ID_VOLUME:
       volume_popup_toggle(g_app.volume, g_app.dpi, &volume_host);
       break;
@@ -1955,6 +1973,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       playback_init(wnd, playback_changed);
       playback_on_recents_changed(refresh_recents);
       playback_on_shuffle_requested(set_shuffle_flash);
+      playback_on_up_next_changed(queue_popup_update);
       theme_apply_window(wnd, TRUE);
       create_controls();
       playback_set_shuffle(mc_settings_shuffle(g_app.settings)); /* as it was left */
@@ -2048,7 +2067,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DRAWITEM: {
       const DRAWITEMSTRUCT *dis = (const DRAWITEMSTRUCT *)lp;
       if ((dis->CtlID >= ID_PREV && dis->CtlID < ID_PREV + NUM_BUTTONS) || dis->CtlID == ID_SHUFFLE ||
-          dis->CtlID == ID_VOLUME)
+          dis->CtlID == ID_QUEUE || dis->CtlID == ID_VOLUME)
         draw_button(dis);
       else device_view_draw_item(dis);
       return TRUE;

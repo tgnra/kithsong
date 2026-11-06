@@ -74,6 +74,12 @@ mc_status mc_settings_set_shuffle(mc_settings *s, int on);
 int mc_settings_album_in_order(const mc_settings *s);
 mc_status mc_settings_set_album_in_order(mc_settings *s, int on);
 
+/* Whether an album or anything else added to the queue as a whole goes in as one entry per track
+ * (mc_up_next_add.title NULL) rather than as one block. Only what's added from then on. Off if
+ * never set. */
+int mc_settings_queue_tracks(const mc_settings *s);
+mc_status mc_settings_set_queue_tracks(mc_settings *s, int on);
+
 /* The playback volume (mc_player_set_volume()), 0 to 100, as it was left. 100 if never set. */
 int mc_settings_volume(const mc_settings *s);
 mc_status mc_settings_set_volume(mc_settings *s, int volume);

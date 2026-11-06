@@ -9,6 +9,9 @@
  * Plays are counted in the library and scrobbled when the player says they count, and each
  * one, counted or not, goes in the library's play log when it ends.
  *
+ * The queue the app shows, Play Next and Play Last, is the core's up next: its tracks are items
+ * like the rest, and queue_popup.c shows the list. It goes with the library, as its tracks do.
+ *
  * The player is created on first play. Everything here runs on the UI thread.
  */
 #ifndef KITHSONG_PLAYBACK_H
@@ -90,7 +93,37 @@ void playback_set_muted(BOOL muted);
 BOOL playback_muted(void);
 
 BOOL playback_is_playing(void);
-/* The queue's tracks, by uid ("" for one without), e.g. to stop before their files go. */
+
+/* What can be added to the queue, which is the core's up next (mc_player_play_next()). Not
+ * stations: nothing of radio goes in it. */
+typedef enum playback_what {
+  PLAYBACK_TRACK,
+  PLAYBACK_ALBUM,
+  PLAYBACK_ARTIST,
+  PLAYBACK_PLAYLIST,
+  PLAYBACK_SMART_PLAYLIST,
+  PLAYBACK_GROUP,
+  PLAYBACK_SMART_GROUP,
+} playback_what;
+
+/* Adds it to the front of the queue (Play Next) or the end (Play Last), and the now-playing strip
+ * says so, or that it has nothing with a file on this device. Nothing starts playing. Anything but
+ * a track goes in as one block, named name, unless playback_set_queue_tracks() says otherwise. */
+void playback_add(playback_what what, const char *uid, const wchar_t *name, BOOL next);
+/* Whether things go in the queue as a track each (mc_settings_queue_tracks()). Off to begin
+ * with; settings_view.c keeps it. */
+void playback_set_queue_tracks(BOOL on);
+/* changed is called when the queue changes, whatever changed it. */
+void playback_on_up_next_changed(void (*changed)(void));
+int playback_up_next_count(void);
+/* The queue as it is, NULL if there's no player yet. Free with mc_up_next_list_free(). */
+mc_up_next_list *playback_up_next(void);
+void playback_up_next_move(uint32_t id, int to);
+void playback_up_next_remove(uint32_t id);
+/* Empties the queue; playback goes on. */
+void playback_up_next_clear(void);
+
+/* The tracks the player has, by uid ("" for one without), e.g. to stop before their files go. */
 int playback_queue_count(void);
 const char *playback_queue_uid(int i);
 /* Whether there's a current track, and one after it (always, shuffled). */
