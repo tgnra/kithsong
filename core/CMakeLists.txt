@@ -87,6 +87,7 @@ add_library(kithcore STATIC
   src/analysis/analysis.c
   src/analysis/loudness.c
   src/analysis/scanner.c
+  src/analysis/rhythm.c
   src/analysis/timbre.c
   src/radio/groups.c
   src/radio/radio.c

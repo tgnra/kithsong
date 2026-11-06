@@ -32,14 +32,14 @@ enum {
 
 /* Two centres closer than this aren't different kinds of music. It's on the fixed scales, as the
  * library's own put any library's tracks about 1 apart, however alike they all sound. In a real
- * library of 700 tracks two tracks of an album were 0.51 apart at the median and any two 0.62, so
+ * library of 1,026 tracks two tracks of an album were 0.51 apart at the median and any two 0.68, so
  * this asks for about what two tracks picked at random from a varied library have. */
 #define MIN_APART 0.6
 
 /* How clearly a library must divide to count as more than one kind, as a mean silhouette: for each
  * track, how much nearer it is to its own group than to the next, from 0 for no nearer to 1. In a
- * real library of two plain kinds it was 0.36, and each kind alone divided at 0.14 and 0.19. */
-#define MIN_SILHOUETTE 0.22
+ * real library of two plain kinds it was 0.25, and each kind alone divided at 0.12 and 0.17. */
+#define MIN_SILHOUETTE 0.2
 
 /* A track further than this share of the way to the next centre sits between two groups. */
 #define BETWEEN 0.8

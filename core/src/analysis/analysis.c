@@ -130,6 +130,15 @@ void mc_analysis_pack(const mc_analysis *a, unsigned char out[MC_ANALYSIS_BLOB_S
   for (int i = 0; i < MC_ANALYSIS_MFCCS; i++, p += 4) put_f32(p, a->mfcc_var[i]);
   put_f32(p, a->centroid_mean);
   put_f32(p + 4, a->centroid_var);
+  p += 8;
+  for (int i = 0; i < MC_ANALYSIS_MFCCS; i++, p += 4) put_f32(p, a->mfcc_delta[i]);
+  for (int i = 0; i < MC_ANALYSIS_LAGS; i++, p += 4) put_f32(p, a->rhythm[i]);
+  put_f32(p, a->pulse);
+  put_f32(p + 4, a->onset_rate);
+  put_f32(p + 8, a->bpm);
+  p += 12;
+  for (int i = 0; i < MC_ANALYSIS_BANDS; i++, p += 4) put_f32(p, a->band_share[i]);
+  for (int i = 0; i < MC_ANALYSIS_FLATNESS; i++, p += 4) put_f32(p, a->band_flatness[i]);
 }
 
 int mc_analysis_unpack(const void *blob, int len, mc_analysis *a) {
@@ -141,6 +150,15 @@ int mc_analysis_unpack(const void *blob, int len, mc_analysis *a) {
   for (int i = 0; i < MC_ANALYSIS_MFCCS; i++, p += 4) a->mfcc_var[i] = get_f32(p);
   a->centroid_mean = get_f32(p);
   a->centroid_var = get_f32(p + 4);
+  p += 8;
+  for (int i = 0; i < MC_ANALYSIS_MFCCS; i++, p += 4) a->mfcc_delta[i] = get_f32(p);
+  for (int i = 0; i < MC_ANALYSIS_LAGS; i++, p += 4) a->rhythm[i] = get_f32(p);
+  a->pulse = get_f32(p);
+  a->onset_rate = get_f32(p + 4);
+  a->bpm = get_f32(p + 8);
+  p += 12;
+  for (int i = 0; i < MC_ANALYSIS_BANDS; i++, p += 4) a->band_share[i] = get_f32(p);
+  for (int i = 0; i < MC_ANALYSIS_FLATNESS; i++, p += 4) a->band_flatness[i] = get_f32(p);
   return 1;
 }
 
@@ -235,29 +253,35 @@ mc_status mc_analysis_get(mc_library *lib, const char *track_uid, mc_analysis *o
 
 /* --- Distance ---
  *
- * What's compared, as a vector of MC_ANALYSIS_DIMS, in four groups:
+ * What's compared, as a vector of MC_ANALYSIS_DIMS, in seven groups:
  *  - shape:      the means of MFCCs 1 to 12, the spectrum's outline. Not 0, which is the level:
  *                the same recording mastered louder is the same timbre.
  *  - texture:    the standard deviations of all 13, how much the sound moves.
  *  - brightness: the centroid, in octaves as hearing goes, and how much it moves as a fraction
  *                of itself.
  *  - energy:     integrated loudness and loudness range.
+ *  - rhythm:     the lag profile folded into one octave, pulse, and the onset rate in octaves.
+ *  - balance:    each band's share of energy, and how flat they are.
+ *  - motion:     how fast each MFCC changes.
  * Each dimension is a z-score against the library's own spread, as the raw numbers are in
  * unlike units with spreads an order of magnitude apart. Within a group a squared difference is
  * averaged, so a group's weight doesn't depend on how many dimensions it has, and the weights
  * sum to one. Two random tracks differ by 2 in a squared z-score on average, so halving makes
  * that a distance of 1. */
 
-enum { SHAPE = 0, TEXTURE = 12, BRIGHTNESS = 25, ENERGY = 27 };
+enum { SHAPE = 0, TEXTURE = 12, BRIGHTNESS = 25, ENERGY = 27, RHYTHM = 29, BALANCE = 39, MOTION = 48 };
 
 static const struct {
   int first, count;
   double weight;
 } k_groups[] = {
-  {SHAPE, 12, 0.45},
-  {TEXTURE, 13, 0.25},
-  {BRIGHTNESS, 2, 0.20},
-  {ENERGY, 2, 0.10},
+  {SHAPE, 12, 0.30},
+  {TEXTURE, 13, 0.18},
+  {BRIGHTNESS, 2, 0.12},
+  {ENERGY, 2, 0.05},
+  {RHYTHM, 10, 0.10},
+  {BALANCE, 9, 0.15},
+  {MOTION, 13, 0.10},
 };
 
 /* Typical spreads, for a library too small to say, or none. Rough, and meant to be: they only
@@ -267,9 +291,15 @@ static const float k_prior_scale[MC_ANALYSIS_DIMS] = {
   8, 4, 2.5f, 2, 1.5f, 1.5f, 1, 1, 1, 1, 1, 1, 1,        /* texture */
   0.7f, 0.2f,                                            /* brightness */
   4, 4,                                                  /* energy */
+  0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f, 0.3f,       /* rhythm: the octave */
+  0.2f, 0.7f,                                            /* rhythm: pulse, onset rate */
+  6, 3, 3, 2.5f, 4,                                      /* balance: shares */
+  3, 2.5f, 2.5f, 1.5f,                                   /* balance: flatness */
+  14, 6, 3.5f, 2, 2, 1.6f, 1.4f, 1.2f, 1.2f, 1.2f, 1, 1, 1, /* motion */
 };
 /* How many results the fixed scales count for, against the library's. */
 #define PRIOR_WEIGHT 16.0
+#define MIN_ONSET_RATE 0.25f /* a second: sparser than this, a track has no onset rate to speak of */
 
 static void features_of(const mc_analysis *a, float *v) {
   int d = 0;
@@ -280,6 +310,18 @@ static void features_of(const mc_analysis *a, float *v) {
   v[d++] = sqrtf(a->centroid_var) / centroid;
   v[d++] = (float)a->lufs; /* NaN if there's none: no difference is counted for it */
   v[d++] = (float)a->lra;
+  /* Folded into one octave: a tempo and its double are one place, which is what lets a track at
+   * 85 and one at 170 sit together, and a tempo guessed an octave out does no harm. */
+  for (int b = 0; b < MC_ANALYSIS_LAGS_PER_OCTAVE; b++) {
+    float sum = 0.0f;
+    for (int i = b; i < MC_ANALYSIS_LAGS; i += MC_ANALYSIS_LAGS_PER_OCTAVE) sum += a->rhythm[i];
+    v[d++] = sum;
+  }
+  v[d++] = a->pulse;
+  v[d++] = log2f(a->onset_rate > MIN_ONSET_RATE ? a->onset_rate : MIN_ONSET_RATE);
+  for (int i = 0; i < MC_ANALYSIS_BANDS; i++) v[d++] = a->band_share[i];
+  for (int i = 0; i < MC_ANALYSIS_FLATNESS; i++) v[d++] = a->band_flatness[i];
+  for (int c = 0; c < MC_ANALYSIS_MFCCS; c++) v[d++] = a->mfcc_delta[c];
 }
 
 void mc_analysis_stats_from(const mc_analysis *results, int count, mc_analysis_stats *out) {

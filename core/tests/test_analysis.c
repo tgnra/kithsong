@@ -292,6 +292,27 @@ static double mfcc_gap(const mc_analysis *a, const mc_analysis *b) {
   return sum / (MC_ANALYSIS_MFCCS - 1);
 }
 
+/* The biggest difference in what the frames add beyond the MFCCs' means and variances. They're in
+ * unlike units, so each is put on about the same footing: the rhythm as it is, dB in 3 dB, and the
+ * MFCCs' changes, which run from 1 to 150, as a share of themselves. */
+static double new_features_gap(const mc_analysis *a, const mc_analysis *b) {
+  double worst = 0.0;
+#define GAP(x, y, scale)                                   \
+  do {                                                     \
+    double d_ = fabs((double)(x) - (double)(y)) / (scale); \
+    if (d_ > worst) worst = d_;                            \
+  } while (0)
+  for (int c = 0; c < MC_ANALYSIS_MFCCS; c++) GAP(a->mfcc_delta[c], b->mfcc_delta[c], 1.0 + 0.1 * a->mfcc_delta[c]);
+  for (int i = 0; i < MC_ANALYSIS_LAGS; i++) GAP(a->rhythm[i], b->rhythm[i], 1.0);
+  GAP(a->pulse, b->pulse, 1.0);
+  GAP(a->onset_rate, b->onset_rate, 1.0);
+  for (int i = 0; i < MC_ANALYSIS_BANDS; i++) GAP(a->band_share[i], b->band_share[i], 3.0);
+  for (int i = 0; i < MC_ANALYSIS_FLATNESS; i++)
+    if (!isnan(a->band_flatness[i]) || !isnan(b->band_flatness[i])) GAP(a->band_flatness[i], b->band_flatness[i], 3.0);
+#undef GAP
+  return worst;
+}
+
 static void test_noise_and_sine(void) {
   enum { RATE = 44100, N = RATE * 5 };
   float *x = malloc(N * sizeof *x);
@@ -340,6 +361,7 @@ static void test_rates(void) {
     CHECK(var_gap / MC_ANALYSIS_MFCCS < 0.1);
     CHECK_NEAR(a.centroid_mean, ref.centroid_mean, ref.centroid_mean * 0.01);
     CHECK_NEAR(a.lufs, ref.lufs, 0.05);
+    CHECK(new_features_gap(&a, &ref) < 0.1);
   }
 }
 
@@ -357,6 +379,8 @@ static void test_invariants(void) {
   CHECK(mfcc_gap(&loud, &stereo) < 0.001);
   CHECK_NEAR(stereo.lufs - loud.lufs, 3.01, 0.02);
   CHECK(mc_analysis_distance(&loud, &quiet, NULL) < 0.8); /* only loudness differs */
+  CHECK(new_features_gap(&loud, &quiet) < 0.05);
+  CHECK(new_features_gap(&loud, &stereo) < 0.01);
 
   /* Silence before and after a sound isn't its timbre. */
   enum { RATE = 44100, N = RATE * 3 };
@@ -390,14 +414,262 @@ static void test_silent_and_short(void) {
   analyse_buffer(44100, zeros, 8192, &a);
   CHECK(isnan(a.lufs) && isnan(a.true_peak));
   CHECK(a.centroid_mean == 0.0f && a.mfcc_mean[0] == 0.0f);
+  CHECK(a.bpm == 0.0f && a.pulse == 0.0f && a.onset_rate == 0.0f);
+  CHECK(isnan(a.band_flatness[0]) && a.band_share[0] == -60.0f);
   CHECK(isfinite(mc_analysis_distance(&a, &a, NULL)));
   /* Shorter than a frame. */
   float blip[300];
   for (int i = 0; i < 300; i++) blip[i] = 0.5f * (float)sin(i * 0.3);
   analyse_buffer(44100, blip, 300, &a);
   CHECK(a.centroid_mean > 0.0f);
+  CHECK(a.bpm == 0.0f); /* too short to repeat */
   CHECK(mc_analyzer_new(0, 2) == NULL);
   CHECK(mc_analyzer_new(44100, 0) == NULL);
+}
+
+/* --- Rhythm, bands and movement --- */
+
+/* A beat a kick and a hat make: a falling low thump and a short high tick, from t alone, so that
+ * every rate has the same sound, over a pad if there is one. */
+static double beat(double t, double bpm, double pad) {
+  double period = 60.0 / bpm, since = fmod(t, period);
+  double thump = exp(-since * 30.0) * sin(2.0 * PI * (60.0 * since + 1.5 * (1.0 - exp(-since * 40.0))));
+  double tick = exp(-since * 200.0) * (sin(2.0 * PI * 3100.0 * t) + sin(2.0 * PI * 4700.0 * t + 1.0));
+  double held = sin(2.0 * PI * 220.0 * t) + 0.5 * sin(2.0 * PI * 330.0 * t + 1.0);
+  return 0.5 * thump + 0.2 * tick + pad * held;
+}
+
+static void analyse_beat(unsigned rate, double bpm, double pad, double gain, double seconds, mc_analysis *out) {
+  size_t total = (size_t)(seconds * rate);
+  float *x = malloc(total * sizeof *x);
+  for (size_t i = 0; i < total; i++) x[i] = (float)(gain * beat((double)i / rate, bpm, pad));
+  analyse_buffer(rate, x, total, out);
+  free(x);
+}
+
+static void test_tempo(void) {
+  static const double tempos[] = {60.0, 85.0, 100.0, 120.0, 140.0, 170.0, 200.0};
+  for (size_t i = 0; i < sizeof tempos / sizeof tempos[0]; i++) {
+    for (int pad = 0; pad < 2; pad++) {
+      mc_analysis a;
+      analyse_beat(44100, tempos[i], pad ? 0.02 : 0.0, 1.0, 40.0, &a);
+      printf("%.0f bpm, %s: found %.2f, pulse %.2f, %.2f onsets a second\n", tempos[i], pad ? "on a pad" : "in silence",
+             a.bpm, a.pulse, a.onset_rate);
+      CHECK_NEAR(a.bpm, tempos[i], tempos[i] * 0.01);
+      CHECK(a.pulse > 0.5f);
+      CHECK_NEAR(a.onset_rate, tempos[i] / 60.0, tempos[i] / 60.0 * 0.15);
+    }
+  }
+}
+
+/* a with only b's rhythm, so its distance from a is what the rhythm alone comes to. A real octave
+ * apart has twice the beats, which is a different sound too, and that isn't what's asked here. */
+static double rhythm_distance(const mc_analysis *a, const mc_analysis *b) {
+  mc_analysis c = *a;
+  memcpy(c.rhythm, b->rhythm, sizeof c.rhythm);
+  c.pulse = b->pulse;
+  c.onset_rate = b->onset_rate;
+  return mc_analysis_distance(a, &c, NULL);
+}
+
+/* An octave apart is near, as tempo guesses go that way; a third apart isn't. */
+static void test_tempo_distance(void) {
+  mc_analysis a85, a170, a120, a87;
+  analyse_beat(44100, 85.0, 0.02, 1.0, 40.0, &a85);
+  analyse_beat(44100, 170.0, 0.02, 1.0, 40.0, &a170);
+  analyse_beat(44100, 120.0, 0.02, 1.0, 40.0, &a120);
+  analyse_beat(44100, 87.0, 0.02, 1.0, 40.0, &a87);
+  double octave = rhythm_distance(&a85, &a170), other = rhythm_distance(&a85, &a120);
+  double close = rhythm_distance(&a85, &a87);
+  printf("in rhythm alone, 85 bpm from 170: %.3f, from 120: %.3f, from 87: %.3f\n", octave, other, close);
+  CHECK(octave < 0.6 * other);
+  CHECK(close < 0.6 * other);
+}
+
+/* Silence around a beat, or a long gap inside it, changes none of this. */
+static void test_rhythm_gaps(void) {
+  /* The pad is whole hops, or the frames would fall differently on the beats and that would show. */
+  enum { RATE = 44100, N = RATE * 30, PAD = 1024 * 860 };
+  float *x = calloc(2 * PAD + 2 * N, sizeof *x);
+  for (int i = 0; i < N; i++) {
+    /* Faded, as a sound cut off dead is a click, and that is timbre. */
+    double edge = (i < N - i ? i : N - i) / 4000.0;
+    x[PAD + i] = (float)((edge < 1.0 ? edge : 1.0) * beat((double)i / RATE, 130.0, 0.02));
+  }
+  mc_analysis bare, padded, split;
+  analyse_buffer(RATE, x + PAD, N, &bare);
+  analyse_buffer(RATE, x, 2 * PAD + N, &padded);
+  printf("silence around a beat: gap %.4f, bpm %.2f vs %.2f\n", new_features_gap(&bare, &padded), bare.bpm, padded.bpm);
+  CHECK(new_features_gap(&bare, &padded) < 0.03);
+  /* The second half after a gap the length of a hidden track's. */
+  memmove(x + N / 2 + PAD, x + N / 2, (size_t)(N / 2) * sizeof *x);
+  memset(x + N / 2, 0, (size_t)PAD * sizeof *x);
+  memmove(x, x + PAD, (size_t)(N / 2) * sizeof *x);
+  memset(x + N / 2, 0, (size_t)PAD * sizeof *x);
+  for (int i = 0; i < N / 2; i++) x[N / 2 + PAD + i] = (float)beat((double)(i + N / 2) / RATE, 130.0, 0.02);
+  analyse_buffer(RATE, x, N + PAD, &split);
+  free(x);
+  printf("a gap inside a beat: bpm %.2f, pulse %.2f vs %.2f\n", split.bpm, split.pulse, bare.pulse);
+  CHECK_NEAR(split.bpm, 130.0, 1.5);
+  CHECK_NEAR(split.pulse, bare.pulse, 0.1);
+}
+
+/* A beat is the same beat louder and from another rate. */
+static void test_rhythm_invariants(void) {
+  mc_analysis ref, a;
+  analyse_beat(44100, 128.0, 0.02, 1.0, 30.0, &ref);
+  analyse_beat(44100, 128.0, 0.02, 0.1, 30.0, &a);
+  printf("beat at a tenth of the level: gap %.4f\n", new_features_gap(&ref, &a));
+  CHECK(new_features_gap(&ref, &a) < 0.02);
+  CHECK_NEAR(a.bpm, ref.bpm, 0.01);
+  static const unsigned rates[] = {22050, 48000, 96000};
+  for (size_t i = 0; i < sizeof rates / sizeof rates[0]; i++) {
+    analyse_beat(rates[i], 128.0, 0.02, 1.0, 30.0, &a);
+    printf("beat at %u: gap %.4f, bpm %.2f vs %.2f\n", rates[i], new_features_gap(&ref, &a), a.bpm, ref.bpm);
+    CHECK(new_features_gap(&ref, &a) < 0.15);
+    CHECK_NEAR(a.bpm, ref.bpm, 0.2);
+  }
+}
+
+/* What's steady has no rhythm, however regular its frames. */
+static void test_no_rhythm(void) {
+  enum { RATE = 44100, N = RATE * 30 };
+  float *x = malloc(N * sizeof *x);
+  mc_analysis a;
+  for (int i = 0; i < N; i++) x[i] = (float)(0.3 * sin(2.0 * PI * 440.0 * i / RATE) + 0.2 * sin(2.0 * PI * 997.0 * i / RATE));
+  analyse_buffer(RATE, x, N, &a);
+  printf("steady tones: pulse %.3f, %.2f onsets a second, bpm %.1f\n", a.pulse, a.onset_rate, a.bpm);
+  CHECK(a.pulse < 0.1f && a.bpm == 0.0f && a.onset_rate < 0.1f);
+  uint32_t state = 11;
+  for (int i = 0; i < N; i++) x[i] = 0.3f * noise(&state);
+  analyse_buffer(RATE, x, N, &a);
+  free(x);
+  printf("white noise: pulse %.3f, %.2f onsets a second, bpm %.1f\n", a.pulse, a.onset_rate, a.bpm);
+  CHECK(a.pulse < 0.25f && a.onset_rate < 1.0f);
+}
+
+/* Noise through two bandpass biquads around hz. */
+static void band_noise(float *x, int n, unsigned rate, double hz, double q) {
+  double w = 2.0 * PI * hz / rate, alpha = sin(w) / (2.0 * q), a0 = 1.0 + alpha;
+  double b0 = alpha / a0, a1 = -2.0 * cos(w) / a0, a2 = (1.0 - alpha) / a0;
+  double s[2][4] = {{0}};
+  uint32_t state = 5;
+  double peak = 1e-9;
+  for (int i = 0; i < n; i++) {
+    double v = noise(&state);
+    for (int k = 0; k < 2; k++) {
+      double y = b0 * v - b0 * s[k][1] - a1 * s[k][2] - a2 * s[k][3];
+      s[k][1] = s[k][0];
+      s[k][0] = v;
+      s[k][3] = s[k][2];
+      s[k][2] = y;
+      v = y;
+    }
+    x[i] = (float)v;
+    if (fabs(v) > peak) peak = fabs(v);
+  }
+  for (int i = 0; i < n; i++) x[i] = (float)(x[i] / peak * 0.5);
+}
+
+static void test_bands(void) {
+  enum { RATE = 44100, N = RATE * 8 };
+  static const double centres[MC_ANALYSIS_BANDS] = {50.0, 140.0, 350.0, 1000.0, 4500.0};
+  float *x = malloc(N * sizeof *x);
+  for (int b = 0; b < MC_ANALYSIS_BANDS; b++) {
+    mc_analysis a, quiet;
+    band_noise(x, N, RATE, centres[b], 4.0);
+    analyse_buffer(RATE, x, N, &a);
+    printf("noise at %.0f Hz:", centres[b]);
+    int top = 0;
+    for (int i = 0; i < MC_ANALYSIS_BANDS; i++) {
+      printf(" %.1f", a.band_share[i]);
+      if (a.band_share[i] > a.band_share[top]) top = i;
+    }
+    printf(" dB, flatness");
+    for (int i = 0; i < MC_ANALYSIS_FLATNESS; i++) printf(" %.1f", a.band_flatness[i]);
+    printf("\n");
+    CHECK(top == b);
+    CHECK(a.band_share[b] > -3.0f); /* most of it, whatever's left to the skirts */
+    for (int i = 0; i < N; i++) x[i] *= 0.05f;
+    analyse_buffer(RATE, x, N, &quiet);
+    for (int i = 0; i < MC_ANALYSIS_BANDS; i++) CHECK_NEAR(a.band_share[i], quiet.band_share[i], 0.02);
+  }
+  /* A sine's whole energy is in its band, and it's nothing like noise there. */
+  mc_analysis tone, hiss;
+  for (int i = 0; i < N; i++) x[i] = (float)(0.3 * sin(2.0 * PI * 700.0 * i / RATE) + 0.3 * sin(2.0 * PI * 1100.0 * i / RATE));
+  analyse_buffer(RATE, x, N, &tone);
+  band_noise(x, N, RATE, 900.0, 1.0);
+  analyse_buffer(RATE, x, N, &hiss);
+  free(x);
+  printf("mid band flatness: tones %.1f dB, noise %.1f dB\n", tone.band_flatness[2], hiss.band_flatness[2]);
+  CHECK(tone.band_flatness[2] < -12.0f);
+  CHECK(hiss.band_flatness[2] > -4.0f);
+  CHECK(isnan(tone.band_flatness[0])); /* nothing's down there */
+  CHECK(tone.band_share[0] == -60.0f);
+}
+
+/* A chord, gated at rate times a second, or held if that's 0. */
+static void analyse_gated(double rate_hz, double level, mc_analysis *out) {
+  enum { RATE = 44100, N = RATE * 10 };
+  float *x = malloc(N * sizeof *x);
+  for (int i = 0; i < N; i++) {
+    double t = (double)i / RATE, gate = 1.0;
+    if (rate_hz > 0.0) {
+      double at = fmod(t * rate_hz, 1.0) / rate_hz, open = 0.5 / rate_hz, edge = 0.005;
+      gate = at < edge ? at / edge : at < open ? 1.0 : at < open + edge ? 1.0 - (at - open) / edge : 0.0;
+    }
+    x[i] = (float)(level * gate * (sin(2.0 * PI * 220.0 * t) + 0.5 * sin(2.0 * PI * 660.0 * t + 0.5)));
+  }
+  analyse_buffer(RATE, x, N, out);
+  free(x);
+}
+
+static double mean_delta(const mc_analysis *a) {
+  double sum = 0.0;
+  for (int c = 0; c < MC_ANALYSIS_MFCCS; c++) sum += a->mfcc_delta[c];
+  return sum / MC_ANALYSIS_MFCCS;
+}
+
+/* Eight tones of a second, faded at both ends, with half a second of silence between them if gaps
+ * is set, taking turns between two pitches. */
+static void analyse_parts(int gaps, double hz_a, double hz_b, mc_analysis *out) {
+  enum { RATE = 44100, PART = RATE, GAP = RATE / 2, PARTS = 8 };
+  size_t step = (size_t)PART + (gaps ? GAP : 0);
+  float *x = calloc(PARTS * step, sizeof *x);
+  for (int p = 0; p < PARTS; p++)
+    for (int i = 0; i < PART; i++) {
+      double edge = (i < PART - i ? i : PART - i) / 8000.0;
+      x[(size_t)p * step + (size_t)i] =
+        (float)((edge < 1.0 ? edge : 1.0) * 0.3 * sin(2.0 * PI * (p % 2 ? hz_b : hz_a) * i / RATE));
+    }
+  analyse_buffer(RATE, x, PARTS * step, out);
+  free(x);
+}
+
+static void test_movement(void) {
+  mc_analysis held, choppy, quiet;
+  analyse_gated(0.0, 0.3, &held);
+  analyse_gated(6.0, 0.3, &choppy);
+  analyse_gated(6.0, 0.03, &quiet);
+  printf("mean MFCC change: held %.3f, gated %.3f dB; a tenth of the level %.3f\n", mean_delta(&held), mean_delta(&choppy),
+         mean_delta(&quiet));
+  CHECK(mean_delta(&held) < 2.0);
+  CHECK(mean_delta(&choppy) > 10.0 * mean_delta(&held));
+  /* Not closer: a gate's edges fall under -70 dBFS, and out of the count, sooner at a low level. */
+  CHECK_NEAR(mean_delta(&quiet), mean_delta(&choppy), 0.1 * mean_delta(&choppy));
+
+  /* Two tones with silence between them have no change from one to the other: taking turns, they
+   * move as much as each does alone, and joined up they'd move far more. */
+  mc_analysis turns, low, high, joined;
+  analyse_parts(1, 180.0, 2000.0, &turns);
+  analyse_parts(1, 180.0, 180.0, &low);
+  analyse_parts(1, 2000.0, 2000.0, &high);
+  analyse_parts(0, 180.0, 2000.0, &joined);
+  double alone = sqrt((low.mfcc_delta[1] * low.mfcc_delta[1] + high.mfcc_delta[1] * high.mfcc_delta[1]) / 2.0);
+  printf("change in MFCC 1, tones in turn: %.2f dB, each alone %.2f, joined up %.2f\n", turns.mfcc_delta[1], alone,
+         joined.mfcc_delta[1]);
+  CHECK_NEAR(turns.mfcc_delta[1], alone, 0.1 * alone);
+  CHECK(joined.mfcc_delta[1] > 1.5 * alone);
 }
 
 /* --- Distance --- */
@@ -429,6 +701,12 @@ static void test_distance(void) {
     many[i].centroid_var = 500000.0f + 400000.0f * noise(&state);
     many[i].lufs = -14.0 + 8.0 * noise(&state);
     many[i].lra = 8.0 + 6.0 * noise(&state);
+    for (int c = 0; c < MC_ANALYSIS_MFCCS; c++) many[i].mfcc_delta[c] = 10.0f + 6.0f * noise(&state);
+    for (int k = 0; k < MC_ANALYSIS_LAGS; k++) many[i].rhythm[k] = 0.3f + 0.3f * noise(&state);
+    many[i].pulse = 0.6f + 0.3f * noise(&state);
+    many[i].onset_rate = 4.0f + 3.0f * noise(&state);
+    for (int k = 0; k < MC_ANALYSIS_BANDS; k++) many[i].band_share[k] = -8.0f + 4.0f * noise(&state);
+    for (int k = 0; k < MC_ANALYSIS_FLATNESS; k++) many[i].band_flatness[k] = -5.0f + 2.0f * noise(&state);
   }
   mc_analysis_stats stats;
   mc_analysis_stats_from(many, COUNT, &stats);
@@ -443,6 +721,7 @@ static void test_distance(void) {
   mc_analysis no_loudness = many[0];
   no_loudness.lufs = NAN;
   no_loudness.lra = NAN;
+  no_loudness.band_flatness[0] = NAN; /* nor does one with a band empty */
   double d = mc_analysis_distance(&many[0], &no_loudness, &stats);
   CHECK(d == 0.0);
   /* And results of another version don't compare at all, nor count. */
@@ -466,12 +745,20 @@ static void test_blob(void) {
   }
   a.mfcc_mean[0] = 1.0f;
   a.centroid_mean = 1234.5f;
-  a.centroid_var = 0.125f;
+  a.centroid_var = 2.0f;
+  for (int c = 0; c < MC_ANALYSIS_MFCCS; c++) a.mfcc_delta[c] = (float)c * 0.5f;
+  for (int i = 0; i < MC_ANALYSIS_LAGS; i++) a.rhythm[i] = (float)i / 64.0f;
+  a.pulse = 0.75f;
+  a.onset_rate = 3.5f;
+  a.bpm = 174.5f;
+  for (int i = 0; i < MC_ANALYSIS_BANDS; i++) a.band_share[i] = -3.0f * (float)i;
+  for (int i = 0; i < MC_ANALYSIS_FLATNESS; i++) a.band_flatness[i] = -2.0f - (float)i;
+  a.band_flatness[MC_ANALYSIS_FLATNESS - 1] = 0.125f;
   unsigned char blob[MC_ANALYSIS_BLOB_SIZE];
-  CHECK(sizeof blob == 116);
+  CHECK(sizeof blob == 344);
   mc_analysis_pack(&a, blob);
   /* As docs/schema.md has it, on any machine: */
-  static const unsigned char head[] = {1, 13, 0, 0, 0x00, 0x00, 0x80, 0x3f};
+  static const unsigned char head[] = {2, 13, 0, 0, 0x00, 0x00, 0x80, 0x3f};
   CHECK(!memcmp(blob, head, sizeof head));
   static const unsigned char tail[] = {0x00, 0x00, 0x00, 0x3e}; /* 0.125f, last */
   CHECK(!memcmp(blob + sizeof blob - 4, tail, 4));
@@ -479,9 +766,16 @@ static void test_blob(void) {
   CHECK(!memcmp(a.mfcc_mean, b.mfcc_mean, sizeof a.mfcc_mean));
   CHECK(!memcmp(a.mfcc_var, b.mfcc_var, sizeof a.mfcc_var));
   CHECK(a.centroid_mean == b.centroid_mean && a.centroid_var == b.centroid_var);
+  CHECK(!memcmp(a.mfcc_delta, b.mfcc_delta, sizeof a.mfcc_delta));
+  CHECK(!memcmp(a.rhythm, b.rhythm, sizeof a.rhythm));
+  CHECK(a.pulse == b.pulse && a.onset_rate == b.onset_rate && a.bpm == b.bpm);
+  CHECK(!memcmp(a.band_share, b.band_share, sizeof a.band_share));
+  CHECK(!memcmp(a.band_flatness, b.band_flatness, sizeof a.band_flatness));
   CHECK(!mc_analysis_unpack(blob, sizeof blob - 1, &b));
-  blob[0] = 2; /* a layout from the future */
+  blob[0] = 3; /* a layout from the future */
   CHECK(!mc_analysis_unpack(blob, sizeof blob, &b));
+  blob[0] = 1; /* the one before: 116 bytes, and no longer read */
+  CHECK(!mc_analysis_unpack(blob, 116, &b));
   CHECK(!mc_analysis_unpack(NULL, 0, &b));
 }
 
@@ -919,7 +1213,7 @@ static void test_merge(const char *scratch) {
 
 /* A device upgrading late has rows newer peers logged, unknown to it then. */
 static void test_newly_known(const char *scratch) {
-  char dir[1024], sql[900];
+  char dir[1024], sql[1200];
   mc_library *lib = open_library(scratch, "test_analysis_known.d", dir, sizeof dir);
   if (!lib) return;
   char track[MC_UID_STRLEN], row[MC_UID_STRLEN];
@@ -934,7 +1228,7 @@ static void test_newly_known(const char *scratch) {
   exec_ok(lib, "DROP TABLE track_analysis; DROP TABLE analysis_failed;");
   static const char *const fields[] = {"track_uid", "source", "analysis_version", "features", "lufs"};
   for (int i = 0; i < 5; i++) {
-    char value[300];
+    char value[2 * MC_ANALYSIS_BLOB_SIZE + 8];
     if (i == 0) snprintf(value, sizeof value, "'%s'", track);
     else if (i == 1) snprintf(value, sizeof value, "0");
     else if (i == 2) snprintf(value, sizeof value, "%d", MC_ANALYSIS_VERSION);
@@ -1493,6 +1787,13 @@ int main(int argc, char **argv) {
   test_rates();
   test_invariants();
   test_silent_and_short();
+  test_tempo();
+  test_tempo_distance();
+  test_rhythm_gaps();
+  test_rhythm_invariants();
+  test_no_rhythm();
+  test_bands();
+  test_movement();
   test_distance();
   test_blob();
   test_file(scratch);

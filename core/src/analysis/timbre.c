@@ -1,6 +1,8 @@
 /* Timbre: a mono signal is resampled to MC_ANALYSIS_RATE and cut into Hann-windowed frames,
  * and each frame gives a spectral centroid and, through 40 mel bands in dB and a DCT, 13
- * MFCCs. Means and variances over the frames are what's kept.
+ * MFCCs. Means and variances over the frames are what's kept, and how fast the MFCCs move.
+ * Straight from the power bins, as mel bands can't resolve the low end, come each frame's share
+ * of energy by band and how flat each band is. What rose since the last frame goes to rhythm.c.
  *
  * What would tie results to the file rather than the music is taken out here:
  *  - The resampler has the same cutoff from every rate above the internal one.
@@ -9,7 +11,9 @@
  *  - The floor under the mel bands is relative to the frame's own power, so a band with nothing
  *    in it reads the same at any level, and rounding noise in an empty band never shows. A gain
  *    then moves every band alike, which the orthonormal DCT puts in coefficient 0 alone: the
- *    other 12 don't change with level. */
+ *    other 12 don't change with level.
+ *  - Band shares and flatness are ratios of a frame's own power, and the onset strength and the
+ *    MFCCs' changes are differences of dB, so none of them moves with a gain either. */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +30,37 @@
 #define MEL_HIGH_HZ (MC_ANALYSIS_RATE / 2.0)
 #define SILENCE_DB (-70.0) /* a frame's level in dBFS, under which it doesn't count */
 #define FLOOR_DB (-100.0)  /* under the frame's power: as low as a mel band reads */
+#define ONSET_RANGE_DB 60.0f /* under the frame's top band: lower bands say nothing of an onset */
+#define ONSET_MOST_DB 15.0f  /* a sound out of silence: as strong as an onset reads */
+#define DELTA_FRAMES 2       /* apart, which is frames sharing no samples */
+
+/* Bands in bins of 21.5 Hz, for the low end's sake straight from the spectrum. A bin reaches half
+ * a bin either side. Sub stops where a kick's body starts and starts above bin 1, which holds what
+ * a DC offset leaks. Bass is kicks and bass lines. Low mid is the body of voices and guitars, mid
+ * up to 2 kHz their harmonics, and high is presence and air, stopping under the resampler's edge.
+ * The edges are about the octaves that production talks in. */
+static const struct {
+  int first, last;
+} k_bands[MC_ANALYSIS_BANDS] = {
+  {2, 3},    /* 32 to 75 Hz */
+  {4, 11},   /* 75 to 248 Hz */
+  {12, 23},  /* 248 to 506 Hz */
+  {24, 95},  /* 506 Hz to 2.1 kHz */
+  {96, 495}, /* 2.1 to 10.7 kHz */
+};
+
+/* Flatness goes block by block, as across a wide band it'd only measure the spectrum's tilt. Blocks
+ * are 260 to 340 Hz, a harmonic or so of a voice, except low down where a band is all there is. */
+static const struct {
+  int first, blocks, size;
+} k_flatness[MC_ANALYSIS_FLATNESS] = {
+  {2, 1, 10},
+  {12, 1, 12},
+  {24, 6, 12},
+  {96, 25, 16},
+};
+#define BAND_FLOOR 1e-6 /* -60 dB of the frame: a band under this is empty, whatever's in it */
+#define BIN_FLOOR 1e-6f /* of a block's mean: a deep notch says no more than this */
 
 /* The resampler's windowed sinc: 16 zero crossings each side and a Kaiser window down 60 dB,
  * cutting off at 97% of the lower of the two Nyquist frequencies. Phases are exact for the
@@ -65,10 +100,21 @@ struct mc_timbre {
   float dct[MFCCS][MELS];
   twiddles tw;
 
+  /* What came before, back to the last silent frame. */
+  float last_db[MELS];
+  int has_last;
+  float past[DELTA_FRAMES][MFCCS];
+  uint64_t past_count;
+  mc_rhythm *rhythm;
+
   /* Sums over the frames that count. */
   uint64_t frames;
   double sum[MFCCS], sum_sq[MFCCS];
   double centroid_sum, centroid_sq;
+  double delta_sq[MFCCS];
+  uint64_t deltas;
+  double share[MC_ANALYSIS_BANDS];
+  double flat_sum[MC_ANALYSIS_FLATNESS], flat_weight[MC_ANALYSIS_FLATNESS];
   int any; /* a frame was looked at, loud enough or not */
 };
 
@@ -177,11 +223,78 @@ static void mel_bands(mel_band *bands) {
   }
 }
 
+/* log2 of a positive normal float to about 1e-3, far under what a band's flatness can tell, at a
+ * fraction of log2f()'s cost: there are 500 of these to a frame. */
+static float quick_log2(float x) {
+  uint32_t bits;
+  memcpy(&bits, &x, sizeof bits);
+  float e = (float)((int)(bits >> 23) - 127);
+  bits = (bits & 0x007fffffu) | 0x3f800000u;
+  float m;
+  memcpy(&m, &bits, sizeof m);
+  return e + (-2.153620718f + m * (3.047884161f + m * (-1.051875031f + m * 0.1582487046f)));
+}
+
+/* The frame's share of energy in each band, and how flat they are. */
+static void bands_of(mc_timbre *t, const float *power) {
+  double band[MC_ANALYSIS_BANDS], total = 0.0;
+  for (int b = 0; b < MC_ANALYSIS_BANDS; b++) {
+    float e = 0.0f;
+    for (int k = k_bands[b].first; k <= k_bands[b].last; k++) e += power[k];
+    band[b] = e;
+    total += e;
+  }
+  if (total <= 0.0) return;
+  for (int b = 0; b < MC_ANALYSIS_BANDS; b++) t->share[b] += band[b] / total;
+  for (int f = 0; f < MC_ANALYSIS_FLATNESS; f++) {
+    const float *block = power + k_flatness[f].first;
+    int size = k_flatness[f].size;
+    double energy = 0.0, flat = 0.0;
+    for (int n = 0; n < k_flatness[f].blocks; n++, block += size) {
+      float sum = 0.0f;
+      for (int k = 0; k < size; k++) sum += block[k];
+      if (sum < 1e-30f) continue;
+      float mean = sum / (float)size, least = mean * BIN_FLOOR, logs = 0.0f;
+      for (int k = 0; k < size; k++) logs += quick_log2(block[k] > least ? block[k] : least);
+      energy += sum;
+      flat += (double)sum * (logs / (float)size - quick_log2(mean));
+    }
+    double weight = energy / total;
+    if (weight < BAND_FLOOR) continue;
+    t->flat_sum[f] += weight * (flat / energy) * 3.0102999566; /* in dB */
+    t->flat_weight[f] += weight;
+  }
+}
+
+/* How much rose since the last frame, as a mean over the bands. After a gap there's nothing to
+ * rise from but the floor. */
+static float onset_strength(mc_timbre *t, const float *db) {
+  float top = db[0];
+  for (int m = 1; m < MELS; m++)
+    if (db[m] > top) top = db[m];
+  float floor_db = top - ONSET_RANGE_DB, sum = 0.0f;
+  for (int m = 0; m < MELS; m++) {
+    float now = db[m] > floor_db ? db[m] : floor_db;
+    float was = t->has_last && t->last_db[m] > floor_db ? t->last_db[m] : floor_db;
+    if (now > was) sum += now - was;
+    t->last_db[m] = db[m];
+  }
+  t->has_last = 1;
+  sum /= MELS;
+  return sum < ONSET_MOST_DB ? sum : ONSET_MOST_DB;
+}
+
 static void frame_done(mc_timbre *t) {
   t->any = 1;
   double sq = 0.0;
   for (int i = 0; i < FRAME; i++) sq += (double)t->frame[i] * t->frame[i];
-  if (sq <= 0.0 || 10.0 * log10(sq / FRAME) < SILENCE_DB) return;
+  if (sq <= 0.0 || 10.0 * log10(sq / FRAME) < SILENCE_DB) {
+    /* What comes after a gap isn't a change from what came before it. */
+    t->has_last = 0;
+    t->past_count = 0;
+    mc_rhythm_silence(t->rhythm);
+    return;
+  }
 
   float x[FRAME], power[BINS];
   for (int i = 0; i < FRAME; i++) x[i] = t->frame[i] * t->window[i];
@@ -204,12 +317,20 @@ static void frame_done(mc_timbre *t) {
     for (int i = 0; i < b->count; i++) e += b->weight[i] * power[b->first + i];
     db[m] = 10.0f * log10f(e > floor_power ? e : floor_power);
   }
+  float *past = t->past[t->past_count % DELTA_FRAMES];
+  int moved = t->past_count >= DELTA_FRAMES;
   for (int c = 0; c < MFCCS; c++) {
     float v = 0.0f;
     for (int m = 0; m < MELS; m++) v += t->dct[c][m] * db[m];
     t->sum[c] += v;
     t->sum_sq[c] += (double)v * v;
+    if (moved) t->delta_sq[c] += (double)(v - past[c]) * (v - past[c]);
+    past[c] = v;
   }
+  t->past_count++;
+  t->deltas += (uint64_t)moved;
+  bands_of(t, power);
+  mc_rhythm_onset(t->rhythm, onset_strength(t, db));
   t->centroid_sum += centroid;
   t->centroid_sq += centroid * centroid;
   t->frames++;
@@ -301,7 +422,8 @@ mc_timbre *mc_timbre_new(unsigned rate) {
   mc_timbre *t = calloc(1, sizeof *t);
   if (!t) return NULL;
   t->mel = calloc(MELS, sizeof *t->mel);
-  if (!t->mel || !make_kernel(t, rate)) {
+  t->rhythm = mc_rhythm_new();
+  if (!t->mel || !t->rhythm || !make_kernel(t, rate)) {
     mc_timbre_free(t);
     return NULL;
   }
@@ -326,6 +448,7 @@ void mc_timbre_free(mc_timbre *t) {
   free(t->kernel);
   free(t->in);
   free(t->mel);
+  mc_rhythm_free(t->rhythm);
   free(t);
 }
 
@@ -359,4 +482,13 @@ void mc_timbre_finish(mc_timbre *t, mc_analysis *out) {
   double mean = t->centroid_sum / n, var = t->centroid_sq / n - mean * mean;
   out->centroid_mean = (float)mean;
   out->centroid_var = (float)(var > 0.0 ? var : 0.0);
+  double deltas = t->deltas ? (double)t->deltas : 1.0;
+  for (int c = 0; c < MFCCS; c++) out->mfcc_delta[c] = (float)sqrt(t->delta_sq[c] / deltas);
+  for (int b = 0; b < MC_ANALYSIS_BANDS; b++) {
+    double share = t->share[b] / n;
+    out->band_share[b] = (float)(10.0 * log10(share > BAND_FLOOR ? share : BAND_FLOOR));
+  }
+  for (int f = 0; f < MC_ANALYSIS_FLATNESS; f++)
+    out->band_flatness[f] = t->flat_weight[f] > 0.0 ? (float)(t->flat_sum[f] / t->flat_weight[f]) : NAN;
+  mc_rhythm_finish(t->rhythm, out);
 }
