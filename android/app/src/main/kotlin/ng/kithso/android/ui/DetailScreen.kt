@@ -613,6 +613,9 @@ private fun DetailHeader(
 
 @Composable
 private fun DetailTitle(kind: CollectionRef.Kind, list: TrackList, artSize: Dp, modifier: Modifier) {
+    // After a summary; one not known adds nothing, and with none known there's nothing to say.
+    val totalMs = remember(list) { list.tracks.sumOf { it.durationMs.coerceAtLeast(0) } }
+    val length = if (totalMs > 0) stringResource(R.string.separator_dot) + playingTime(totalMs) else ""
     Row(modifier.padding(end = 16.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         AlbumArt(
             list.art,
@@ -635,13 +638,13 @@ private fun DetailTitle(kind: CollectionRef.Kind, list: TrackList, artSize: Dp, 
                 when (kind) {
                     CollectionRef.Kind.Album -> {
                         val byline = if (list.year > 0) stringResource(R.string.album_byline_year, list.artist, list.year) else list.artist
-                        if (list.mix) byline + stringResource(R.string.separator_dot) + stringResource(R.string.edit_mix) else byline
+                        (if (list.mix) byline + stringResource(R.string.separator_dot) + stringResource(R.string.edit_mix) else byline) + length
                     }
                     CollectionRef.Kind.Artist ->
                         if (list.albumCount > 0) pluralStringResource(R.plurals.albums, list.albumCount, list.albumCount)
                         else pluralStringResource(R.plurals.tracks, list.tracks.size, list.tracks.size)
-                    CollectionRef.Kind.Playlist -> pluralStringResource(R.plurals.tracks, list.tracks.size, list.tracks.size)
-                    CollectionRef.Kind.AlbumGroup -> pluralStringResource(R.plurals.albums, list.albumCount, list.albumCount)
+                    CollectionRef.Kind.Playlist -> pluralStringResource(R.plurals.tracks, list.tracks.size, list.tracks.size) + length
+                    CollectionRef.Kind.AlbumGroup -> pluralStringResource(R.plurals.albums, list.albumCount, list.albumCount) + length
                     CollectionRef.Kind.Station -> "" // it has no track list
                 },
                 style = MaterialTheme.typography.bodyMedium,
