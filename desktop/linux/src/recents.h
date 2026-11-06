@@ -12,7 +12,8 @@
  * (playback_play_radio()). Playing an album or playlist records it (app_play_album()), as
  * opening an artist's or group's page does, and the core records a station. Smart lists
  * are left out until there's a page for them. A row's menu (right-click, a long press, the
- * Menu key or Shift+F10) has Remove from Recents and Clear Recents, which sync too. A track
+ * Menu key or Shift+F10) has Play next and Play last, but not on a station, then Remove from
+ * Recents and Clear Recents, which sync too. A track
  * dragged onto a manual playlist's row, or an album onto a manual group's, is added to it
  * (drag.h). */
 #ifndef KITHSONG_RECENTS_H
