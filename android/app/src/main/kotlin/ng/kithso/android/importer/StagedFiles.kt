@@ -57,6 +57,9 @@ internal class StagedFiles(private val context: Context, private val root: File)
      * into the cache whole: a folder of downloads would be copied all at once, then extracted
      * beside its copies. On its own, a zip is copied, extracted and imported before the next,
      * and the core extracts it as on the desktops, one level deep.
+     * So the core's limit on what a session unzips (32 GB) is per zip here, where each is a session:
+     * its copies go once it's settled, so what's unzipped at once is held down by the free space
+     * the core checks for each zip, not by adding them up across the import.
      */
     fun planFolder(tree: Uri): List<Batch> {
         val rootId = DocumentsContract.getTreeDocumentId(tree)
