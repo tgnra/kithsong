@@ -74,7 +74,7 @@ static void say(const char *fmt, ...) {
   va_start(ap, fmt);
   vsnprintf(line, sizeof line, fmt, ap);
   va_end(ap);
-  fprintf(stderr, "musiccore: orphans: %s\n", line);
+  fprintf(stderr, "kithcore: orphans: %s\n", line);
 #ifdef __ANDROID__
   __android_log_print(ANDROID_LOG_INFO, "kithsong-orphans", "%s", line);
 #endif

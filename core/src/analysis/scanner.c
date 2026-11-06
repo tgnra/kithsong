@@ -395,7 +395,7 @@ static void scan(mc_analysis_scanner *s, mc_library *lib) {
     mc_scan_step step = MC_SCAN_NONE;
     mc_status st = mc_analysis_scan_one(lib, cursor, pause_point, s, &step);
     if (st != MC_OK) { /* the library's busy or gone for now: there's always the next pass */
-      fprintf(stderr, "musiccore: analysis: %s\n", mc_status_str(st));
+      fprintf(stderr, "kithcore: analysis: %s\n", mc_status_str(st));
       step = MC_SCAN_NONE;
       if (s->once) {
         set_state(s, -1);

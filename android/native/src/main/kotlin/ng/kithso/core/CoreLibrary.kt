@@ -1,7 +1,7 @@
 package ng.kithso.core
 
 /** A musiccore failure; [status] is the negative mc_status code. */
-class KithCoreException(val status: Int) : RuntimeException("musiccore status $status")
+class KithCoreException(val status: Int) : RuntimeException("kithcore status $status")
 
 /**
  * mc_album_info. [folder] is null when none of the album's files are on this device;

@@ -91,7 +91,7 @@ static mc_status recv_msg(mc_session *s, uint8_t *type, const unsigned char **pa
   } else if (reason && !strcmp(reason, "busy")) {
     st = MC_ERR_LOCKED;
   }
-  fprintf(stderr, "musiccore: sync: peer ended the session: %s\n", reason ? reason : "?");
+  fprintf(stderr, "kithcore: sync: peer ended the session: %s\n", reason ? reason : "?");
   yyjson_doc_free(doc);
   return st;
 }
@@ -492,13 +492,13 @@ static mc_status send_rows(exchange *x, const mc_origin_hlc *peer_vv, int peer_n
     int added = mc_rows_writer_add(&w, &r);
     if (added == 0) {
       if (!w.count) {
-        fprintf(stderr, "musiccore: sync: a change too large to send was skipped\n");
+        fprintf(stderr, "kithcore: sync: a change too large to send was skipped\n");
         continue;
       }
       if ((st = flush_rows(x, &w)) != MC_OK) break;
       added = mc_rows_writer_add(&w, &r);
     }
-    if (added < 0) fprintf(stderr, "musiccore: sync: skipped a malformed change\n");
+    if (added < 0) fprintf(stderr, "kithcore: sync: skipped a malformed change\n");
   }
   if (st == MC_OK) st = flush_rows(x, &w);
   mc_rows_reader_close(rd);
@@ -622,7 +622,7 @@ static mc_status exchange_db(mc_session *s, int which, const unsigned char *firs
     if (st != MC_OK) break;
     converged = !strcmp(mine, theirs);
     if (!converged)
-      fprintf(stderr, "musiccore: sync: %s data differs from %s after round %d%s\n", x.name,
+      fprintf(stderr, "kithcore: sync: %s data differs from %s after round %d%s\n", x.name,
               s->peer_uid, round + 1, round ? "" : "; sending differing origins again");
   }
   if (st == MC_OK && !converged) s->converged = 0;
@@ -692,7 +692,7 @@ static mc_status check_node_uid(mc_session *s, const hello *peer) {
   }
   mc_status st = MC_OK;
   if (rotate) {
-    fprintf(stderr, "musiccore: sync: library node uid %s is another device's; rotating\n", node);
+    fprintf(stderr, "kithcore: sync: library node uid %s is another device's; rotating\n", node);
     if ((st = mc_library_rotate_node_uid(lib)) != MC_OK) return st;
     snprintf(node, sizeof node, "%s", mc_library_node_uid(lib));
   }

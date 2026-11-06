@@ -746,7 +746,7 @@ static char *deletable_path(mc_library *lib, const char *rel) {
   if (ok && abs) return abs;
   free(abs);
   if (rel)
-    fprintf(stderr, "musiccore: sync: not deleting %s: it isn't inside the library folder\n", rel);
+    fprintf(stderr, "kithcore: sync: not deleting %s: it isn't inside the library folder\n", rel);
   return NULL;
 }
 
@@ -1093,7 +1093,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
         held c = cached_copy(&h, out);
         st = send_file(s, track, &c, "opus", kbps);
       } else {
-        fprintf(stderr, "musiccore: sync: transcoding %s failed: %s\n", track, mc_status_str(enc));
+        fprintf(stderr, "kithcore: sync: transcoding %s failed: %s\n", track, mc_status_str(enc));
         st = send_file_err(s->ch, track, "io");
       }
       free(out);
@@ -1540,7 +1540,7 @@ static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int 
   int corrupt = st == MC_OK && mc_transfer_test_corrupt && mc_transfer_test_corrupt(t->track_uid);
 
   if (st == MC_OK && accept && write_ok && (corrupt || strcmp(got_sha, sha) != 0)) {
-    fprintf(stderr, "musiccore: sync: %s from %s failed its checksum\n", t->track_uid,
+    fprintf(stderr, "kithcore: sync: %s from %s failed its checksum\n", t->track_uid,
             s->peer_uid);
     *got = GOT_MISMATCH;
   } else if (st == MC_OK && !accept) {
@@ -1972,7 +1972,7 @@ static mc_status recv_cover(mc_session *s, const char *album, const char *dir, c
     const char *ext = image_ext(img, (size_t)size); /* from the bytes, not the peer */
     mc_buffer buf = {(char *)img, (size_t)size};
     if (strcmp(got, sha) != 0)
-      fprintf(stderr, "musiccore: sync: the cover of %s from %s failed its checksum\n", album,
+      fprintf(stderr, "kithcore: sync: the cover of %s from %s failed its checksum\n", album,
               s->peer_uid);
     else if (ext && (!sha256 || !strcmp(got, sha256)) && mc_coverart_replace(dir, &buf, ext) == MC_OK)
       s->covers_received++;
@@ -2343,7 +2343,7 @@ static void drop_deleted_tracks(mc_session *s) {
       if (trashed && record) {
         if (!store) store = mc_delete_records_open(s->sync->config_dir);
         if (!store || mc_delete_save_record(store, lib, abs, rel, size, mtime, sha, record) != MC_OK)
-          fprintf(stderr, "musiccore: sync: couldn't save how to restore %s\n", rel);
+          fprintf(stderr, "kithcore: sync: couldn't save how to restore %s\n", rel);
       }
     }
     free(abs);
@@ -2477,7 +2477,7 @@ static void drop_stale_on_archive(mc_session *s) {
       if (!rows[j].stale) continue;
       char *abs = rows[j].replaced ? deletable_path(lib, rows[j].path) : NULL;
       if (abs && mc_file_exists(abs) && mc_transfer_trash(abs) != MC_OK)
-        fprintf(stderr, "musiccore: sync: couldn't move %s to the trash\n", abs);
+        fprintf(stderr, "kithcore: sync: couldn't move %s to the trash\n", abs);
       free(abs);
       drop_row(s, &rows[i], end - i, &rows[j]);
     }
@@ -2508,7 +2508,7 @@ static void note_unknown(mc_sync_db *sdb, int count) {
 
 static void sweep_orphans(mc_session *s, int archive) {
   if (s->files_corrupt) {
-    fprintf(stderr, "musiccore: orphans: not sweeping: %d files failed their checksum\n",
+    fprintf(stderr, "kithcore: orphans: not sweeping: %d files failed their checksum\n",
             s->files_corrupt);
     return;
   }
@@ -2616,7 +2616,7 @@ static void take_check(mc_library *lib, const file_row *r, int deep, int state,
     return;
   }
   res->failed++;
-  fprintf(stderr, "musiccore: sync: %s failed its %s check\n", r->path, deep ? "deep" : "fast");
+  fprintf(stderr, "kithcore: sync: %s failed its %s check\n", r->path, deep ? "deep" : "fast");
   if (r->kind != MC_FILE_IMPORTED) {
     if (drop_file(lib, r->uid, r->path) == MC_OK) res->deleted++;
   } else if ((int)r->failed != state || r->failed_size != r->size || r->failed_mtime != r->mtime) {
@@ -2774,7 +2774,7 @@ void mc_transfer_begin(mc_session *s) {
   s->xfer = calloc(1, sizeof *s->xfer);
   forgive_returned(s->conn->lib);
   if (s->xfer && sqlite3_exec(mc_library_db(s->conn->lib), k_watch_sql, NULL, NULL, NULL) != SQLITE_OK)
-    fprintf(stderr, "musiccore: sync: can't watch for deleted files: %s\n",
+    fprintf(stderr, "kithcore: sync: can't watch for deleted files: %s\n",
             sqlite3_errmsg(mc_library_db(s->conn->lib)));
 }
 

@@ -241,7 +241,7 @@ static void enqueue(sqlite3 *lib, sqlite3 *db, const request *r) {
     for (int i = 0; i < 7; i++) sqlite3_bind_value(ins, i + 2, sqlite3_column_value(track, i));
     sqlite3_bind_text(ins, 9, r->track_uid, -1, SQLITE_STATIC);
     if (sqlite3_step(ins) != SQLITE_DONE)
-      fprintf(stderr, "musiccore: couldn't queue a scrobble: %s\n", sqlite3_errmsg(db));
+      fprintf(stderr, "kithcore: couldn't queue a scrobble: %s\n", sqlite3_errmsg(db));
   }
   sqlite3_finalize(ins);
   sqlite3_finalize(track);
@@ -333,7 +333,7 @@ static mc_status submit(sqlite3 *db, const mc_lastfm_service *svc, int *batch, i
     again = 1;
     st = MC_OK;
   } else if (st == MC_ERR_FORMAT) {
-    fprintf(stderr, "musiccore: the service won't take a scrobble (error %d); dropped\n", *api_error);
+    fprintf(stderr, "kithcore: the service won't take a scrobble (error %d); dropped\n", *api_error);
     done[0] = 1;
     st = MC_OK;
   } else if (st == MC_OK) {
@@ -417,7 +417,7 @@ static void run(void *arg) {
     }
     free(path);
   }
-  if (open_st != MC_OK) fprintf(stderr, "musiccore: the scrobbler couldn't open its databases\n");
+  if (open_st != MC_OK) fprintf(stderr, "kithcore: the scrobbler couldn't open its databases\n");
   sqlite3 *db = sdb ? mc_sync_db_handle(sdb) : NULL;
 
   uint64_t next_try = 0;

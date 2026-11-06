@@ -135,7 +135,7 @@ static mc_status mb_get_json(const char *path, yyjson_doc **out, mb_call *call) 
     st = MC_ERR_NET;
   }
   if (st == MC_OK && http != 200 && http != 404)
-    fprintf(stderr, "musiccore: MusicBrainz returned HTTP %ld for %s\n", http, url);
+    fprintf(stderr, "kithcore: MusicBrainz returned HTTP %ld for %s\n", http, url);
   free(url);
   if (st != MC_OK) return st;
 

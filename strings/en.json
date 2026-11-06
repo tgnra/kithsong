@@ -954,7 +954,7 @@
     "smart_mode_not_all": { "text": "Not all of the following", "note": "Smart list editor: picker entry above a group's conditions, of which at least one must be false." },
     "smart_move_name": { "text": "Move", "note": "Tooltip and name for accessibility of a smart list condition's or group's menu of Move up, Move down and Move to." },
     "smart_move_to": { "text": "Move to {0}", "note": "Smart list editor: moves a condition or group into another group. {0} is that group, or the list itself." },
-    "empty_with_version": { "text": "{0}\n\nmusiccore {1}", "note": "{0} is the empty-library message, {1} the core library's version number. musiccore is a name." },
+    "empty_with_version": { "text": "{0}\n\nmusiccore {1}", "note": "{0} is the empty-library message, {1} the core library's version number. kithcore is a name." },
     "playlists_list_failed": "Couldn't list the playlists",
     "album_tile_name": { "text": "{0}, {1}", "note": "An album tile's name for accessibility: its title, then its artist or track count." },
     "station_tile_name": { "text": "Radio station, {0}, {1}", "note": "A radio station's name for accessibility on the Home page: its name, then the line beneath it." },
@@ -1182,7 +1182,7 @@
     "album_group_empty_text_android": { "text": "Long-press an album and choose Add to album group.", "note": "An empty album group's page, under album_group_empty_title. Add to album group is the album menu's item." },
 
     "scrobble_sign_in_short": { "text": "Sign in", "note": "Button beside the scrobbling account (Last.fm, say) in Settings; opens the service in the browser." },
-    "core_name": { "text": "musiccore", "translatable": false },
+    "core_name": { "text": "kithcore", "translatable": false },
 
     "cover_of": "Cover of {0}",
     "albums": { "one": "{0:d} album", "other": "{0:d} albums" },

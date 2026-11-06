@@ -667,7 +667,7 @@ static void retag_file(mc_library *lib, const file_row *f, const mc_tags *tags) 
   if (ok && mc_library_commit(lib) == MC_OK) {
     renamed = 1;
   } else {
-    if (ok) fprintf(stderr, "musiccore: artist refresh: couldn't record %s's new tags\n", abs);
+    if (ok) fprintf(stderr, "kithcore: artist refresh: couldn't record %s's new tags\n", abs);
     mc_library_rollback(lib);
   }
 done:
@@ -828,7 +828,7 @@ static mc_status refresh(mc_refresh *r, mc_library *lib) {
   if (st == MC_OK && strcmp(loose, "done")) st = step_split(r, lib, 1, loose, NULL);
   if (st != MC_OK || stopping(r)) return st;
   if (strcmp(mb, "done") || strcmp(split, "done") || strcmp(loose, "done")) {
-    if (offline) fprintf(stderr, "musiccore: artist refresh: MusicBrainz unreachable; trying again next time\n");
+    if (offline) fprintf(stderr, "kithcore: artist refresh: MusicBrainz unreachable; trying again next time\n");
     return MC_OK;
   }
   if ((st = mc_library_meta_set(lib, KEY_STATE, "done")) == MC_OK) {
@@ -859,7 +859,7 @@ static void run(void *arg) {
                      ? refresh(r, lib)
                      : MC_ERR_DB;
     if (st != MC_OK && !stopping(r))
-      fprintf(stderr, "musiccore: artist refresh stopped (%s); it goes on next time\n",
+      fprintf(stderr, "kithcore: artist refresh stopped (%s); it goes on next time\n",
               sqlite3_errmsg(db));
   }
   mc_library_close(lib);

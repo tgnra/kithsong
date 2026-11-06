@@ -428,7 +428,7 @@ static mc_status edit_profile(mc_sync *sync, mc_profile_item_kind kind, const ch
   /* The device's own user asked for it, as pressing Sync would; a profile someone else
    * changed meanwhile stays paused for its user to look at. */
   if (confirmed && mc_profile_confirm(sdb, NULL) != MC_OK)
-    fprintf(stderr, "musiccore: sync: couldn't confirm the profile again after an edit here\n");
+    fprintf(stderr, "kithcore: sync: couldn't confirm the profile again after an edit here\n");
   return MC_OK;
 }
 
@@ -527,7 +527,7 @@ mc_status mc_sync_bin_send_begin(mc_sync *sync, mc_library *lib, int pressed) {
   int pending = 0;
   mc_status st = mc_delete_bin_seal(lib, pressed, &pending);
   if (st == MC_OK && pending)
-    fprintf(stderr, "musiccore: sync: sending %d delete%s from the recycle bin\n", pending,
+    fprintf(stderr, "kithcore: sync: sending %d delete%s from the recycle bin\n", pending,
             pending == 1 ? "" : "s");
   if (st != MC_OK && sync) {
     mc_mutex_lock(&sync->lock);
@@ -542,7 +542,7 @@ void mc_sync_bin_send_end(mc_sync *sync, mc_library *lib) {
   if (!lib) return;
   /* A delete made while the exchange read its rows may have gone with them. */
   if (mc_delete_bin_seal(lib, 1, NULL) != MC_OK)
-    fprintf(stderr, "musiccore: sync: couldn't empty the recycle bin after a sync\n");
+    fprintf(stderr, "kithcore: sync: couldn't empty the recycle bin after a sync\n");
   if (!sync) return;
   mc_mutex_lock(&sync->lock);
   sync->bin_sending--;
@@ -605,7 +605,7 @@ static mc_status exclude_taken(mc_sync *sync, const mc_bin_taken *taken) {
     return st;
   }
   if (confirmed && mc_profile_confirm(sdb, NULL) != MC_OK)
-    fprintf(stderr, "musiccore: sync: couldn't confirm the profile again after a restore\n");
+    fprintf(stderr, "kithcore: sync: couldn't confirm the profile again after a restore\n");
   return MC_OK;
 }
 
@@ -627,7 +627,7 @@ mc_status mc_sync_bin_restore(mc_sync *sync, int64_t id, int *entries) {
     if (entries) *entries = taken.entries;
     mc_status pst = exclude_taken(sync, &taken);
     if (pst != MC_OK)
-      fprintf(stderr, "musiccore: sync: a restore from the recycle bin couldn't edit the profile (%d);"
+      fprintf(stderr, "kithcore: sync: a restore from the recycle bin couldn't edit the profile (%d);"
                       " it syncs here again\n", pst);
     mc_bin_taken_free(&taken);
   }

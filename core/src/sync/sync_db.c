@@ -292,7 +292,7 @@ mc_status mc_sync_db_open(const char *config_dir, mc_sync_db **out) {
   return MC_OK;
 
 fail:
-  if (sdb->db) fprintf(stderr, "musiccore: sync.db open failed: %s\n", sqlite3_errmsg(sdb->db));
+  if (sdb->db) fprintf(stderr, "kithcore: sync.db open failed: %s\n", sqlite3_errmsg(sdb->db));
   free(dir);
   free(db_path);
   mc_sync_db_close(sdb);

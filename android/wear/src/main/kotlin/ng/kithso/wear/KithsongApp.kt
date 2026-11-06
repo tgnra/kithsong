@@ -61,7 +61,7 @@ class KithsongApp : Application() {
     override fun onCreate() {
         super.onCreate()
         val status = NativeCore.init()
-        if (status != 0) Log.e(TAG, "musiccore init failed: $status")
+        if (status != 0) Log.e(TAG, "kithcore init failed: $status")
         NativeCore.followLocale(resources.configuration)
         moveOldLibrary()
         val scope = MainScope()

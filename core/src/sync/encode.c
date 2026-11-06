@@ -125,7 +125,7 @@ static void worker(void *arg) {
     mc_transcode_opts opts = {MC_FORMAT_OPUS, j->kbps};
     mc_status st = mc_transcode_cached(p->cache_dir, j->file_uid, j->src, &opts, &out);
     if (st != MC_OK)
-      fprintf(stderr, "musiccore: sync: transcoding %s failed: %s\n", j->src, mc_status_str(st));
+      fprintf(stderr, "kithcore: sync: transcoding %s failed: %s\n", j->src, mc_status_str(st));
     free(out);
     free(path);
     mc_sync_trace("encode %s: done, %llu ms", j->file_uid,

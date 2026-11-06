@@ -114,7 +114,7 @@ mc_status mc_archive_restore(mc_sync_db *sdb, int *wrote) {
     return st;
   }
   if (mine) {
-    fprintf(stderr, "musiccore: sync: no archive left in the group; this device is one again\n");
+    fprintf(stderr, "kithcore: sync: no archive left in the group; this device is one again\n");
     if (wrote) *wrote = 1;
   }
   return MC_OK;

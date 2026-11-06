@@ -613,7 +613,7 @@ mc_status mc_import_db_write(mc_library *lib, const mc_db_album *album, const mc
   return MC_OK;
 
 fail:
-  fprintf(stderr, "musiccore: import write failed: %s\n", sqlite3_errmsg(db));
+  fprintf(stderr, "kithcore: import write failed: %s\n", sqlite3_errmsg(db));
   mc_library_rollback(lib);
   credit_clear(&album_credit);
   credit_clear(&track_credit);

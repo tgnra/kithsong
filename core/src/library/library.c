@@ -556,11 +556,11 @@ static mc_status library_open(const char *dir, int background, int restore, mc_l
   mc_hlc_init(&lib->hlc, mc_wall_ms, mc_changelog_max_hlc(lib->db));
   /* Not fatal: the library opens as it is, the rows wait for their next change. */
   if (apply_newly_known(lib, from) != MC_OK)
-    fprintf(stderr, "musiccore: library open: couldn't apply rows newer peers logged: %s\n",
+    fprintf(stderr, "kithcore: library open: couldn't apply rows newer peers logged: %s\n",
             sqlite3_errmsg(lib->db));
   /* Not fatal either: they stay singles, and can still be made mixes by hand. */
   if (mix_file_loose(lib, from) != MC_OK)
-    fprintf(stderr, "musiccore: library open: couldn't file long loose tracks: %s\n",
+    fprintf(stderr, "kithcore: library open: couldn't file long loose tracks: %s\n",
             sqlite3_errmsg(lib->db));
   /* Splits the credits from before v13 (docs/tagging-rules.md, "Refresh after upgrading"),
    * on a thread and connection of its own. */
@@ -573,7 +573,7 @@ static mc_status library_open(const char *dir, int background, int restore, mc_l
   return MC_OK;
 
 fail:
-  if (lib->db) fprintf(stderr, "musiccore: library open failed: %s\n", sqlite3_errmsg(lib->db));
+  if (lib->db) fprintf(stderr, "kithcore: library open failed: %s\n", sqlite3_errmsg(lib->db));
   free(db_path);
   mc_library_close(lib);
   return st;

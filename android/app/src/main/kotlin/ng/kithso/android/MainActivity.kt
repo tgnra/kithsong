@@ -76,7 +76,7 @@ class MainActivity : ComponentActivity() {
                 app.syncer.pair(debugPair[0], port)
             }
         }
-        Log.i(TAG, "musiccore ${NativeCore.version()}")
+        Log.i(TAG, "kithcore ${NativeCore.version()}")
         // A zip or audio files opened with or shared to the app: import them. Only on a fresh
         // start, so turning the phone doesn't import them again.
         if (savedInstanceState == null) {

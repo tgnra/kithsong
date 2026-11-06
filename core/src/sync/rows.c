@@ -688,7 +688,7 @@ static mc_status run_row_sql(sqlite3 *db, const char *sql, const char *row_uid,
   sqlite3_finalize(s);
   if (rc == SQLITE_DONE) return MC_OK;
   if ((rc & 0xff) == SQLITE_CONSTRAINT) {
-    fprintf(stderr, "musiccore: sync: skipped row %s: %s\n", row_uid, sqlite3_errmsg(db));
+    fprintf(stderr, "kithcore: sync: skipped row %s: %s\n", row_uid, sqlite3_errmsg(db));
     return MC_OK;
   }
   return MC_ERR_DB;
@@ -889,7 +889,7 @@ static mc_status settle(mc_rows_applier *a, mc_status st) {
   *a->tg.applying_remote = 0;
   if (st == MC_OK) st = a->tg.commit(a->tg.owner);
   if (st != MC_OK) {
-    fprintf(stderr, "musiccore: sync: applying rows failed: %s\n", sqlite3_errmsg(a->tg.db));
+    fprintf(stderr, "kithcore: sync: applying rows failed: %s\n", sqlite3_errmsg(a->tg.db));
     a->tg.rollback(a->tg.owner);
     return st;
   }
@@ -1018,7 +1018,7 @@ mc_status mc_rows_reader_next(mc_rows_reader *rd, mc_row *r, int *got) {
         !copy_text(r->entity, sizeof r->entity, sqlite3_column_text(s, 2), 0) ||
         !copy_text(r->row_uid, sizeof r->row_uid, sqlite3_column_text(s, 3), UID_LEN) ||
         !copy_text(r->field, sizeof r->field, sqlite3_column_text(s, 4), 0)) {
-      fprintf(stderr, "musiccore: sync: skipped a changelog row that can't be sent\n");
+      fprintf(stderr, "kithcore: sync: skipped a changelog row that can't be sent\n");
       continue;
     }
     switch (sqlite3_column_type(s, 5)) {

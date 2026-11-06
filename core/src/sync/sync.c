@@ -413,7 +413,7 @@ static int run_pending_merge(mc_sync *sync, mc_sync_conn *c, const mc_sync_resul
   r.scrobbles_sent = sent;
   r.scrobbles_dropped = dropped;
   fprintf(stderr,
-          "musiccore: merge: %d added, %d attached, %d better here, %d skipped, %d mapped,"
+          "kithcore: merge: %d added, %d attached, %d better here, %d skipped, %d mapped,"
           " %d left out, %d failed (status %d)\n",
           r.tracks_added, r.tracks_attached, r.tracks_better, r.tracks_skipped, r.tracks_mapped,
           r.tracks_left_out, r.tracks_failed, (int)r.status);
@@ -800,7 +800,7 @@ void mc_sync_group_changed(mc_sync *sync, mc_sync_conn *c) {
 }
 
 void mc_sync_forget_group(mc_sync *sync, mc_sync_conn *c) {
-  fprintf(stderr, "musiccore: sync: this device was removed from its group\n");
+  fprintf(stderr, "kithcore: sync: this device was removed from its group\n");
   mc_sync_db_clear_group(c->sdb);
   mc_mutex_lock(&sync->lock);
   for (int i = 0; i < sync->npeers; i++) sync->peers[i].member = 0;
@@ -1507,7 +1507,7 @@ static int send_leave_notice(mc_sync *sync) {
   mc_sync_conn_close(&c);
   if (done) {
     mc_remove_tree(dir);
-    fprintf(stderr, "musiccore: merge: the group this device left knows it's gone\n");
+    fprintf(stderr, "kithcore: merge: the group this device left knows it's gone\n");
   }
   free(dir);
   free(path);
@@ -2094,7 +2094,7 @@ mc_status mc_sync_start(mc_sync *sync) {
     st = mc_discovery_start(sync->device_uid, name, mc_sync_kind_str(sync->kind),
                             sync->group_hash, sync->port, 0, on_discovered, sync, &d);
     if (st != MC_OK)
-      fprintf(stderr, "musiccore: sync: no discovery (%s); using known addresses only\n",
+      fprintf(stderr, "kithcore: sync: no discovery (%s); using known addresses only\n",
               mc_status_str(st));
     mc_mutex_lock(&sync->lock);
     sync->disc = d;

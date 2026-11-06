@@ -175,7 +175,7 @@ static void list_free(str_list *l) {
 static sqlite3_stmt *prepare(sqlite3 *db, const char *sql) {
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-    fprintf(stderr, "musiccore: delete: %s\n", sqlite3_errmsg(db));
+    fprintf(stderr, "kithcore: delete: %s\n", sqlite3_errmsg(db));
     return NULL;
   }
   return stmt;
@@ -416,7 +416,7 @@ static mc_status store_open(const char *config_dir, int create, sqlite3 **out) {
   }
   if (rc == SQLITE_OK) rc = sqlite3_exec(db, k_store_schema, NULL, NULL, NULL);
   if (rc != SQLITE_OK) {
-    fprintf(stderr, "musiccore: %s open failed: %s\n", DELETED_DB_NAME, db ? sqlite3_errmsg(db) : "?");
+    fprintf(stderr, "kithcore: %s open failed: %s\n", DELETED_DB_NAME, db ? sqlite3_errmsg(db) : "?");
     sqlite3_close_v2(db);
     return MC_ERR_DB;
   }
@@ -655,7 +655,7 @@ static mc_status trash_track(mc_library *lib, sqlite3 *store, int permanent,
     }
     char *rows = store ? record_json(lib->db, track_rows, uid) : NULL;
     if ((permanent ? mc_delete_remove : mc_delete_trash)(abs) != MC_OK) {
-      fprintf(stderr, "musiccore: delete: couldn't %s %s%s; kept\n", permanent ? "remove" : "move",
+      fprintf(stderr, "kithcore: delete: couldn't %s %s%s; kept\n", permanent ? "remove" : "move",
               abs, permanent ? "" : " to the trash");
       *kept = 1;
     } else {
@@ -663,7 +663,7 @@ static mc_status trash_track(mc_library *lib, sqlite3 *store, int permanent,
       st = set_add(trashed, uid);
       if (st == MC_OK && !permanent &&
           (!rows || save_record(store, lib, abs, rel, size, mtime, sha, rows) != MC_OK))
-        fprintf(stderr, "musiccore: delete: couldn't save how to restore %s\n", rel);
+        fprintf(stderr, "kithcore: delete: couldn't save how to restore %s\n", rel);
       char *dir = parent_dir(abs);
       if (st == MC_OK && dir && !list_has(dirs, dir)) st = list_add(dirs, dir);
       else free(dir);
@@ -814,10 +814,10 @@ static mc_status delete_rows(mc_library *lib, const uid_set *gone, const uid_set
   /* The files are gone already, so the delete goes ahead even if the bin can't keep it: it
    * can't be taken back then, and syncs as any other. */
   if (st == MC_OK && bin && bin_save(db, bin, gone, before) != MC_OK)
-    fprintf(stderr, "musiccore: delete: couldn't keep it in the recycle bin: %s\n", sqlite3_errmsg(db));
+    fprintf(stderr, "kithcore: delete: couldn't keep it in the recycle bin: %s\n", sqlite3_errmsg(db));
   if (st == MC_OK) st = mc_library_commit(lib);
   if (st != MC_OK) {
-    fprintf(stderr, "musiccore: delete failed: %s\n", sqlite3_errmsg(db));
+    fprintf(stderr, "kithcore: delete failed: %s\n", sqlite3_errmsg(db));
     mc_library_rollback(lib);
   }
   return st;
@@ -853,7 +853,7 @@ static mc_status delete_run(mc_library *lib, const char *config_dir, const mc_de
   bin_record bin = {plan, NULL, 0, NULL, NULL};
   if (to_bin) bin_names(lib->db, &bin);
   if (!permanent && plan->tracks.count && store_open(config_dir, 1, &store) != MC_OK)
-    fprintf(stderr, "musiccore: delete: deleted tracks can't be restored from the trash\n");
+    fprintf(stderr, "kithcore: delete: deleted tracks can't be restored from the trash\n");
   if (store) sqlite3_exec(store, "BEGIN", NULL, NULL, NULL);
 
   uid_set gone = {0}, trashed = {0}, albums = {0}, artists = {0};
@@ -1087,7 +1087,7 @@ mc_status mc_delete_restore(mc_library *lib, const char *config_dir, int *restor
       if (tracks && !had_track) (*tracks)++;
       forget(store, lib, r->rel);
     } else {
-      fprintf(stderr, "musiccore: couldn't restore %s: %s\n", rel, sqlite3_errmsg(lib->db));
+      fprintf(stderr, "kithcore: couldn't restore %s: %s\n", rel, sqlite3_errmsg(lib->db));
       mc_library_rollback(lib);
       if (put != MC_ERR_NOT_FOUND) st = put;
     }
@@ -1354,7 +1354,7 @@ mc_status mc_delete_bin_take(mc_library *lib, int64_t id, mc_bin_taken *out) {
   if (st == MC_OK) st = mc_library_commit(lib);
   if (st != MC_OK) {
     if (st != MC_ERR_NOT_FOUND)
-      fprintf(stderr, "musiccore: recycle bin: couldn't take back %lld: %s\n", (long long)id,
+      fprintf(stderr, "kithcore: recycle bin: couldn't take back %lld: %s\n", (long long)id,
               sqlite3_errmsg(db));
     mc_library_rollback(lib);
     mc_bin_taken_free(out);

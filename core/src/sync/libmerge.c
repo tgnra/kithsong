@@ -75,7 +75,7 @@ mc_status mc_libmerge_set_aside(mc_library *lib, const char *kept_name, const ch
   if (st == MC_OK) {
     mc_db_bind_path(stmt, 1, abs);
     if (sqlite3_step(stmt) != SQLITE_DONE) {
-      fprintf(stderr, "musiccore: merge: couldn't copy the library aside: %s\n",
+      fprintf(stderr, "kithcore: merge: couldn't copy the library aside: %s\n",
               sqlite3_errmsg(mc_library_db(lib)));
       st = MC_ERR_IO;
     }
@@ -186,7 +186,7 @@ void mc_libmerge_clean_copies(mc_library *lib) {
     char *abs = mc_library_abspath(lib, c.v[i]);
     if (abs && strcmp(c.v[i], pending) && sscanf(date, "%4d-%2d-%2d", &y, &m, &d) == 3 &&
         today - civil_days(y, m, d) >= MC_LIBMERGE_KEEP_DAYS && !copy_holds_files(lib, abs)) {
-      fprintf(stderr, "musiccore: merge: removing %s after %d days\n", c.v[i],
+      fprintf(stderr, "kithcore: merge: removing %s after %d days\n", c.v[i],
               MC_LIBMERGE_KEEP_DAYS);
       if (mc_remove(abs) == MC_OK) {
         static const char *const side[] = {"-wal", "-shm"};
@@ -721,7 +721,7 @@ static void merge_album_tracks(merge_ctx *x, const old_album *a, old_track *t, i
       if (act == MC_DUPE_SKIP) {
         if (d->track_uid[0]) map_put(&x->tracks, src[i]->uid, d->track_uid);
         if (mc_dupes_trash(src[i]->abs) != MC_OK)
-          fprintf(stderr, "musiccore: merge: couldn't move %s to the trash; left in place\n",
+          fprintf(stderr, "kithcore: merge: couldn't move %s to the trash; left in place\n",
                   src[i]->abs);
         else
           mc_transfer_prune_dirs(x->lib, src[i]->path); /* the last of its folder, perhaps */
@@ -1234,7 +1234,7 @@ static mc_status merge_rest(merge_ctx *x, mc_libmerge_progress_fn fn, void *user
   if (st == MC_OK) st = restore_chosen(x);
   if (st == MC_OK) st = mc_library_commit(x->lib);
   if (st != MC_OK) {
-    fprintf(stderr, "musiccore: merge: lists failed: %s\n", sqlite3_errmsg(x->db));
+    fprintf(stderr, "kithcore: merge: lists failed: %s\n", sqlite3_errmsg(x->db));
     mc_library_rollback(x->lib);
   }
   emit(fn, user, MC_MERGE_PHASE_LISTS, 1, 1);
@@ -1261,7 +1261,7 @@ static mc_status merge_run(mc_library *lib, const mc_kept_file *kept, int nkept,
   x.progress_user = user;
   mc_status st = MC_OK;
   if (!backup || mc_db_open(backup, &x.old, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX) != SQLITE_OK) {
-    fprintf(stderr, "musiccore: merge: can't open %s\n", backup ? backup : "the set-aside copy");
+    fprintf(stderr, "kithcore: merge: can't open %s\n", backup ? backup : "the set-aside copy");
     st = MC_ERR_IO;
   }
   /* A copy set aside before v13 has no credits: its artists are whole credits, as then. */

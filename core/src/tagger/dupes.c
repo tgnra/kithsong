@@ -544,7 +544,7 @@ void mc_dupes_finish_swap(mc_library *lib, const char *old_rel, const char *fina
                           char **dest_rel, char **dest_abs) {
   char *old_abs = old_rel ? mc_library_abspath(lib, old_rel) : NULL;
   if (old_abs && mc_file_exists(old_abs) && mc_dupes_trash(old_abs) != MC_OK)
-    fprintf(stderr, "musiccore: import: couldn't move %s to the trash; left in place\n", old_abs);
+    fprintf(stderr, "kithcore: import: couldn't move %s to the trash; left in place\n", old_abs);
   free(old_abs);
   if (!final_rel || !*dest_rel || !*dest_abs || strcmp(*dest_rel, final_rel) == 0) return;
   char *final_abs = mc_library_abspath(lib, final_rel);

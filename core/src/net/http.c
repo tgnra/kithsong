@@ -142,7 +142,7 @@ static mc_status perform(const char *url, const char *form, mc_buffer *body, lon
     /* The error buffer has the details ("Failed to connect to ... after 10002 ms: Timed
      * out"); the code's own text is the fallback. */
     const char *reason = *err ? err : curl_easy_strerror(rc);
-    fprintf(stderr, "musiccore: %s %s failed: %s\n", form ? "POST" : "GET", url, reason);
+    fprintf(stderr, "kithcore: %s %s failed: %s\n", form ? "POST" : "GET", url, reason);
     if (why_len) snprintf(why, why_len, "%s", reason);
     mc_buffer_free(body);
     return rc == CURLE_WRITE_ERROR ? MC_ERR_NOMEM : MC_ERR_NET;

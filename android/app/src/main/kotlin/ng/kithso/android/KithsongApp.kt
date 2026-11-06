@@ -96,7 +96,7 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         val startedUs = CoreTesting.nowUs()
         val status = NativeCore.init()
-        if (status != 0) Log.e(TAG, "musiccore init failed: $status")
+        if (status != 0) Log.e(TAG, "kithcore init failed: $status")
         NativeCore.followLocale(resources.configuration)
         // settings.json, as the desktops have, with the app's own preferences in it as well.
         settings = AppSettings(CoreSettings(filesDir.path), getSharedPreferences("app", MODE_PRIVATE))

@@ -549,7 +549,7 @@ static void worker(void *arg) {
       mc_cond_broadcast(&s->done);
     } else {
       mc_search_index_free(ix);
-      if (!s->closing) fprintf(stderr, "musiccore: search index build failed (%d)\n", st);
+      if (!s->closing) fprintf(stderr, "kithcore: search index build failed (%d)\n", st);
     }
     if (!s->again) break;
   }

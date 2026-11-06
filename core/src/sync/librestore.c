@@ -66,7 +66,7 @@ static mc_status attach(sqlite3 *db, const char *path) {
   mc_db_bind_path(stmt, 1, path);
   mc_status st = sqlite3_step(stmt) == SQLITE_DONE ? MC_OK : MC_ERR_DB;
   sqlite3_finalize(stmt);
-  if (st != MC_OK) fprintf(stderr, "musiccore: merge: restore: %s\n", sqlite3_errmsg(db));
+  if (st != MC_OK) fprintf(stderr, "kithcore: merge: restore: %s\n", sqlite3_errmsg(db));
   return st;
 }
 
@@ -138,7 +138,7 @@ static mc_status replace_tables(sqlite3 *db) {
                                   names[i], cols, cols, names[i]);
       st = sql ? exec_sql(db, sql) : MC_ERR_NOMEM;
       if (st != MC_OK)
-        fprintf(stderr, "musiccore: merge: restore: %s: %s\n", names[i], sqlite3_errmsg(db));
+        fprintf(stderr, "kithcore: merge: restore: %s: %s\n", names[i], sqlite3_errmsg(db));
       sqlite3_free(sql);
     }
     sqlite3_free(cols);
@@ -173,7 +173,7 @@ static mc_status copy_sync_db(mc_sync_db *sdb, const char *dir) {
   if (st == MC_OK) {
     mc_db_bind_path(stmt, 1, path);
     if (sqlite3_step(stmt) != SQLITE_DONE) {
-      fprintf(stderr, "musiccore: merge: couldn't copy sync.db aside: %s\n",
+      fprintf(stderr, "kithcore: merge: couldn't copy sync.db aside: %s\n",
               sqlite3_errmsg(mc_sync_db_handle(sdb)));
       st = MC_ERR_IO;
     }
@@ -468,7 +468,7 @@ static mc_status restore_library(mc_library *lib) {
   if (!backup) return MC_ERR_NOMEM;
   if (!mc_file_exists(backup)) {
     /* Nothing to put back: the merge stays pending, as it was. */
-    fprintf(stderr, "musiccore: merge: the library from before pairing is gone; not restored\n");
+    fprintf(stderr, "kithcore: merge: the library from before pairing is gone; not restored\n");
     free(backup);
     return MC_ERR_NOT_FOUND;
   }
@@ -490,9 +490,9 @@ static mc_status restore_library(mc_library *lib) {
   if (st == MC_OK) st = put_back_library(lib, tmp_db, with, own);
   if (tmp) mc_remove_tree(tmp);
   if (st == MC_OK)
-    fprintf(stderr, "musiccore: merge: the pairing wasn't finished: the library is back as it was\n");
+    fprintf(stderr, "kithcore: merge: the pairing wasn't finished: the library is back as it was\n");
   else if (st != MC_ERR_NOT_FOUND)
-    fprintf(stderr, "musiccore: merge: couldn't restore the library from before pairing (%d)\n",
+    fprintf(stderr, "kithcore: merge: couldn't restore the library from before pairing (%d)\n",
             (int)st);
   free(tmp_db);
   free(tmp);
@@ -547,7 +547,7 @@ static mc_status restore_sync(mc_library *lib, mc_sync_db *sdb, const char *conf
      * notice sent once sync runs. Not fatal: if it can't be made, the group keeps this device
      * as one that never answers, as when leaving reaches no member. */
     if (group && strcmp(group, old_group) && make_leave_notice(sdb, config_dir, old_key) != MC_OK)
-      fprintf(stderr, "musiccore: merge: restore: couldn't keep a note to leave the group\n");
+      fprintf(stderr, "kithcore: merge: restore: couldn't keep a note to leave the group\n");
     if (have)
       st = put_back_sync(sdb, bpath);
     else if (group)
@@ -574,7 +574,7 @@ static mc_status restore_sync(mc_library *lib, mc_sync_db *sdb, const char *conf
   if (st == MC_OK) remove_with_part(bdir);
   if (st == MC_OK && leave) *leave = mc_file_exists(lpath);
   if (st != MC_OK && st != MC_ERR_NOT_FOUND)
-    fprintf(stderr, "musiccore: merge: couldn't restore sync.db from before pairing (%d)\n",
+    fprintf(stderr, "kithcore: merge: couldn't restore sync.db from before pairing (%d)\n",
             (int)st);
   free(old_key);
   free(lpath);

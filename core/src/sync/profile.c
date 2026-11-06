@@ -1113,7 +1113,7 @@ mc_status mc_profile_auto_budget(mc_sync_conn *c, int *wrote) {
   }
   if (changes > 0) {
     fprintf(stderr,
-            "musiccore: sync: this device's profile wants %lld bytes of originals but has room"
+            "kithcore: sync: this device's profile wants %lld bytes of originals but has room"
             " for %lld: storage budget turned on\n",
             (long long)total, (long long)room);
     if (wrote) *wrote = 1;

@@ -699,7 +699,7 @@ static int undo_jobs(mc_library *lib, const plan *p) {
     if (!rel_exists(lib, j->bak)) continue;
     char *bak = mc_library_abspath(lib, j->bak), *rel = mc_library_abspath(lib, j->rel);
     if (!bak || !rel || mc_rename(bak, rel, 0) != MC_OK) {
-      fprintf(stderr, "musiccore: edit: couldn't put back %s\n", j->rel);
+      fprintf(stderr, "kithcore: edit: couldn't put back %s\n", j->rel);
       all = 0;
     }
     free(bak);
@@ -932,7 +932,7 @@ static int finish_jobs(mc_library *lib, const plan *p, int covers) {
     if (bak && mc_file_exists(bak)) {
       mc_clear_read_only(bak);
       if ((j->cover ? cover_away(lib, j, bak) : mc_remove(bak)) != MC_OK) {
-        fprintf(stderr, "musiccore: edit: couldn't delete %s\n", j->bak);
+        fprintf(stderr, "kithcore: edit: couldn't delete %s\n", j->bak);
         all = 0;
       }
     }
@@ -993,7 +993,7 @@ static mc_status attempt_edit(mc_library *lib, const edit_ops *ops, void *user, 
     }
     st = prepare_job(lib, &first.jobs[i], &unusable);
     if (st == MC_OK && unusable) {
-      fprintf(stderr, "musiccore: edit: %s isn't what its hash says: left as it is\n", first.jobs[i].rel);
+      fprintf(stderr, "kithcore: edit: %s isn't what its hash says: left as it is\n", first.jobs[i].rel);
       if (!uids_add(skip, first.jobs[i].file)) st = MC_ERR_NOMEM;
       *again = 1;
     }

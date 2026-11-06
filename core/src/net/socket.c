@@ -292,7 +292,7 @@ mc_status mc_listener_open(uint16_t port, mc_listener **out) {
   return MC_OK;
 
 fail:
-  fprintf(stderr, "musiccore: listen on port %u failed (error %d)\n", (unsigned)port,
+  fprintf(stderr, "kithcore: listen on port %u failed (error %d)\n", (unsigned)port,
           sock_error());
   mc_listener_close(l);
   return MC_ERR_NET;

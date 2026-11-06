@@ -691,7 +691,7 @@ static mc_status prepare_merge(mc_sync *sync, mc_sync_conn *c, const side *me, c
     if (peer->scrobbling) {
       st = mc_sync_db_forget_scrobble(c->sdb, &m->dropped);
       snprintf(m->signed_out, sizeof m->signed_out, "%s", user ? user : "");
-      fprintf(stderr, "musiccore: merge: signed out %s (%d plays sent, %d dropped)\n",
+      fprintf(stderr, "kithcore: merge: signed out %s (%d plays sent, %d dropped)\n",
               m->signed_out, m->sent, m->dropped);
     } else {
       /* Only this device has one: it becomes the group's, whatever the kept group's
@@ -702,7 +702,7 @@ static mc_status prepare_merge(mc_sync *sync, mc_sync_conn *c, const side *me, c
   free(user);
   if (st == MC_OK) st = mc_libmerge_set_aside(c->lib, peer->name, me->name, NULL);
   if (st != MC_OK) {
-    fprintf(stderr, "musiccore: merge: preparing failed (%d)\n", (int)st);
+    fprintf(stderr, "kithcore: merge: preparing failed (%d)\n", (int)st);
     /* The library is as it was (it's emptied last, in one transaction): so is sync.db. */
     mc_libmerge_unprepare_sync(c->sdb, sync->config_dir);
     m->signed_out[0] = '\0';
@@ -777,7 +777,7 @@ static mc_status merge_request(mc_sync *sync, mc_channel *ch, const merge_state 
   mc_libmerge_sort_kept(kept, n);
   /* Not fatal: a merge that runs in this run of the app doesn't need it. */
   if (mc_libmerge_save_kept(sync->config_dir, kept, n) != MC_OK)
-    fprintf(stderr, "musiccore: merge: couldn't keep the other device's list of files\n");
+    fprintf(stderr, "kithcore: merge: couldn't keep the other device's list of files\n");
   mc_mutex_lock(&sync->lock);
   free(sync->merge_kept);
   sync->merge_kept = kept;
