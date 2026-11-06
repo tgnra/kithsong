@@ -2,7 +2,7 @@
  * (musiccore/delete.h) on an open CoreLibrary's handle. Kept apart from jni_bridge.c; as thin
  * as it is: marshal arguments, call musiccore, convert results. Android has no trash, so a
  * delete is mc_delete_run_permanently(), or in a group mc_delete_run_to_bin(), which keeps it
- * in the recycle bin until the next sync. Failures throw ng.kithso.core.MusicCoreException. */
+ * in the recycle bin until the next sync. Failures throw ng.kithso.core.KithCoreException. */
 #include <jni.h>
 #include <stdint.h>
 

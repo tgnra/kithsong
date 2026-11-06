@@ -7,7 +7,7 @@
 
 #include "kithcore/kithcore.h"
 
-/* Throws MusicCoreException(status) and returns status. */
+/* Throws KithCoreException(status) and returns status. */
 mc_status throw_status(JNIEnv *env, mc_status st);
 
 /* The mc_library of a CoreLibrary's handle. */

@@ -4,7 +4,7 @@ import android.util.Log
 import ng.kithso.core.CoreLibrary
 import ng.kithso.core.CorePlayer
 import ng.kithso.core.CoreScrobbler
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 import java.io.File
 
 /**
@@ -26,7 +26,7 @@ class Scrobbling(private val library: CoreLibrary, private val configDir: File) 
         return try {
             configDir.mkdirs()
             CoreScrobbler(library, configDir.path).also { scrobbler = it }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't start the scrobbler", e)
             failed = true
             null
@@ -37,7 +37,7 @@ class Scrobbling(private val library: CoreLibrary, private val configDir: File) 
         val sc = open() ?: return
         try {
             what(sc)
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.w(TAG, "The scrobbler turned a play down", e)
         }
     }
@@ -49,7 +49,7 @@ class Scrobbling(private val library: CoreLibrary, private val configDir: File) 
     fun played(trackUid: String, startedMs: Long) {
         try {
             library.recordPlay(trackUid)
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.w(TAG, "Couldn't count a play", e)
         }
         post { it.scrobble(trackUid, startedMs) }
@@ -59,7 +59,7 @@ class Scrobbling(private val library: CoreLibrary, private val configDir: File) 
     fun ended(event: CorePlayer.PlayEvent) {
         try {
             library.logPlay(event)
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.w(TAG, "Couldn't log a play", e)
         }
     }

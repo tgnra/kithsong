@@ -13,7 +13,7 @@ import ng.kithso.core.CoreSync
 import ng.kithso.core.HerePreview
 import ng.kithso.core.HereResult
 import ng.kithso.core.HereState
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 import ng.kithso.core.NearbyDevice
 import ng.kithso.core.ProfileItem
 import ng.kithso.core.ProfileItemKind
@@ -350,7 +350,7 @@ class Syncer(
             declined = true
             try {
                 sync.pairMergeConfirm(false)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 sync.pairCancel()
             }
         } else {
@@ -424,7 +424,7 @@ class Syncer(
             val sync = sync ?: return@launch
             try {
                 sync.deviceName = name
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.w(TAG, "Couldn't rename this phone", e)
                 return@launch
             }
@@ -443,7 +443,7 @@ class Syncer(
     }
 
     // Profiles. These work whenever sync has been opened, running or not (the app holds it
-    // while on screen), and throw MusicCoreException: ERR_NOT_FOUND if it hasn't been or this
+    // while on screen), and throw KithCoreException: ERR_NOT_FOUND if it hasn't been or this
     // phone isn't in a group, or [uid] isn't a member; see CoreSync for the others.
 
     /** [uid]'s profile, this phone's ([SyncStatus.self]) or any other member's. */
@@ -496,7 +496,7 @@ class Syncer(
         scope.launch {
             try {
                 editProfile(uid, edit)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.w(TAG, "Couldn't store $uid's profile", e)
             }
         }
@@ -539,27 +539,27 @@ class Syncer(
 
     override suspend fun hereState(kind: ProfileItemKind, uid: String): HereState = try {
         onCore { it.coreHereState(kind, uid) }
-    } catch (e: MusicCoreException) {
+    } catch (e: KithCoreException) {
         HereState.Unavailable
     }
 
     override suspend fun herePreview(kind: ProfileItemKind, uid: String): HerePreview? = try {
         onCore { it.coreHerePreview(kind, uid) }
-    } catch (e: MusicCoreException) {
+    } catch (e: KithCoreException) {
         Log.w(TAG, "Couldn't work out removing $uid", e)
         null
     }
 
     override suspend fun takesAny(kind: ProfileItemKind, uid: String, trackUids: List<String>): Boolean = try {
         onCore { it.coreHereTakesAny(kind, uid, trackUids) }
-    } catch (e: MusicCoreException) {
+    } catch (e: KithCoreException) {
         Log.w(TAG, "Couldn't work out removing $uid", e)
         false
     }
 
     override suspend fun removeHere(kind: ProfileItemKind, uid: String): HereResult? = try {
         onCore { it.coreRemoveHere(kind, uid) }.also { source.refresh() }
-    } catch (e: MusicCoreException) {
+    } catch (e: KithCoreException) {
         Log.w(TAG, "Couldn't remove $uid from this phone", e)
         null
     }
@@ -570,7 +570,7 @@ class Syncer(
         // wait in the recycle bin, which a sync would make for good.
         if (state.value.binCount == 0) syncNow()
         true
-    } catch (e: MusicCoreException) {
+    } catch (e: KithCoreException) {
         Log.w(TAG, "Couldn't sync $uid to this phone again", e)
         false
     }
@@ -581,7 +581,7 @@ class Syncer(
     /** Whether deletes go to the recycle bin now; false if sync hasn't been opened. */
     suspend fun binOffered(): Boolean = try {
         onCore { it.coreBinOffered }
-    } catch (e: MusicCoreException) {
+    } catch (e: KithCoreException) {
         false
     }
 
@@ -592,14 +592,14 @@ class Syncer(
             Log.i(TAG, "Restored ${entry.title} from the recycle bin ($it entries)")
             source.refresh()
         }
-    } catch (e: MusicCoreException) {
+    } catch (e: KithCoreException) {
         Log.w(TAG, "Couldn't restore ${entry.title} from the recycle bin", e)
         // A sync may have emptied it meanwhile.
         withContext(thread) { sync?.let { refreshLists(it) } }
         null
     }
 
-    /** What a profile can select, from the whole library. Throws MusicCoreException. */
+    /** What a profile can select, from the whole library. Throws KithCoreException. */
     suspend fun profileChoices(): ProfileChoices = source.profileChoices()
 
     /**
@@ -615,7 +615,7 @@ class Syncer(
     /**
      * Goes on with the weekly deep check for up to [budgetMs], and returns true once it's over
      * for this week. Off [thread], as the core holds nothing up while it reads, so call it only
-     * between [hold] and [release]. Throws MusicCoreException.
+     * between [hold] and [release]. Throws KithCoreException.
      */
     suspend fun verifyWeekly(budgetMs: Long): Boolean {
         val sync = onCore { it }
@@ -630,7 +630,7 @@ class Syncer(
     suspend fun removeLost(uids: List<String>): LostRemoval {
         val removed = try {
             onCore { sync -> sync.removeLost(uids) }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.w(TAG, "Couldn't remove the lost tracks", e)
             return if (e.status == CoreSync.ERR_LOCKED) LostRemoval.Busy else LostRemoval.Failed
         }
@@ -686,7 +686,7 @@ class Syncer(
         try {
             request(sync)
             update { copy(pairing = Pairing.EnterCode(peer)) }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             // Not found: it left the network. Locked: a pairing is already under way.
             if (e.status != CoreSync.ERR_LOCKED) {
                 update { copy(pairing = Pairing.Ended(peer, CoreSync.PairReason.Failed, initiator = true)) }
@@ -709,7 +709,7 @@ class Syncer(
             val sync = sync?.takeIf { state.value.running } ?: return@launch
             try {
                 block(sync)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.w(TAG, "Sync call failed", e)
             }
         }
@@ -717,7 +717,7 @@ class Syncer(
 
     // Runs [block] on [thread] with sync as last opened, running or not, and returns its result.
     private suspend fun <T> onCore(block: (CoreSync) -> T): T = withContext(thread) {
-        block(sync ?: throw MusicCoreException(CoreSync.ERR_NOT_FOUND))
+        block(sync ?: throw KithCoreException(CoreSync.ERR_NOT_FOUND))
     }
 
     private inline fun update(change: SyncStatus.() -> SyncStatus) {
@@ -729,7 +729,7 @@ class Syncer(
         val sync = sync ?: try {
             configDir.mkdirs()
             source.openSync(configDir.path, state.value.deviceName) { events.trySend(it) }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't open sync", e)
             null
         }.also { sync = it }
@@ -742,7 +742,7 @@ class Syncer(
         sync.setAutomatic(HOLDER_APP in holders)
         try {
             sync.start()
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't start sync", e)
             multicastLock?.release()
             update { copy(error = context.getString(R.string.sync_error_listen)) }
@@ -983,7 +983,7 @@ class Syncer(
                     port = if (running) sync.port else 0,
                 )
             }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't read the sync group", e)
         }
     }

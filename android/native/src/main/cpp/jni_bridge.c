@@ -1,6 +1,6 @@
 /* JNI bindings for ng.kithso.core.NativeCore, CoreLibrary, CoreImport, CorePlayer and CoreSync
  * (CoreScrobbler's are in jni_scrobbler.c). Keep this thin: marshal arguments, call musiccore,
- * convert results. Failures throw ng.kithso.core.MusicCoreException. */
+ * convert results. Failures throw ng.kithso.core.KithCoreException. */
 #include <jni.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -20,7 +20,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
 }
 
 mc_status throw_status(JNIEnv *env, mc_status st) {
-  jclass cls = (*env)->FindClass(env, "ng/kithso/core/MusicCoreException");
+  jclass cls = (*env)->FindClass(env, "ng/kithso/core/KithCoreException");
   if (!cls) return st; /* NoClassDefFoundError is already pending */
   jmethodID ctor = (*env)->GetMethodID(env, cls, "<init>", "(I)V");
   jobject ex = ctor ? (*env)->NewObject(env, cls, ctor, (jint)st) : NULL;

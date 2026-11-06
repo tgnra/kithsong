@@ -3,7 +3,7 @@ package ng.kithso.core
 /**
  * The core's per-device settings (mc_settings): settings.json in folder [dir], as the desktops
  * keep theirs. Changes are kept in memory until [save]. It may be used from any thread; each
- * call takes a lock, as mc_settings isn't thread-safe. Throws MusicCoreException if the
+ * call takes a lock, as mc_settings isn't thread-safe. Throws KithCoreException if the
  * settings can't be loaded (a missing or unreadable file gives empty ones).
  */
 class CoreSettings(dir: String) : AutoCloseable {

@@ -1,5 +1,5 @@
 /* JNI bindings for ng.kithso.core.CoreScrobbler (mc_scrobbler; see scrobbler.h). Thin, like
- * jni_bridge.c: failures throw ng.kithso.core.MusicCoreException. The scrobbler may be used
+ * jni_bridge.c: failures throw ng.kithso.core.KithCoreException. The scrobbler may be used
  * from any thread, so these may be called from any thread too. */
 #include <jni.h>
 #include <stdint.h>

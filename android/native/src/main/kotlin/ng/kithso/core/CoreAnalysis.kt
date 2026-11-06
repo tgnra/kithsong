@@ -6,7 +6,7 @@ package ng.kithso.core
  * Analyses the tracks of the library in [dir] that have a file here and no result yet, on a
  * core thread and connection of its own, from now until it has been through them or is
  * [stop]ped. It stands aside during sync sessions and imports by itself. What it has done stays
- * whenever it stops, and the next run goes on from there. Throws MusicCoreException if it can't
+ * whenever it stops, and the next run goes on from there. Throws KithCoreException if it can't
  * start.
  */
 class CoreAnalysis(dir: String) {

@@ -8,7 +8,7 @@ import ng.kithso.core.ArtistTags
 import ng.kithso.core.CoreEdit
 import ng.kithso.core.CoreLibrary
 import ng.kithso.core.EditWatch
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 import ng.kithso.core.ReleaseInfo
 import ng.kithso.core.TrackTags
 import ng.kithso.core.albumArt
@@ -174,7 +174,7 @@ class CoreTagEditor(
         return try {
             val art = lib.albumArt(uid)?.let { ArtRef(uid, tags.title, it, File(it).lastModified()) }
             TagValues.Album(tags, flags, art)
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             // The album's there, so it's that it has no file here: no folder for a cover.
             if (e.status != CoreEdit.ERR_NOT_FOUND) throw e
             TagValues.Album(tags, flags, canSetArt = false)
@@ -224,7 +224,7 @@ class CoreTagEditor(
                     }
                 }
             }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't save $target", e)
             status = e.status
         } catch (e: IOException) {
@@ -245,7 +245,7 @@ class CoreTagEditor(
             file.writeBytes(image)
             coverDir.listFiles()?.filter { it != file }?.forEach(File::delete)
             ArtRef(albumUid, "", file.path, file.lastModified())
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.i(TAG, "That can't be a cover: ${e.status}")
             null
         } catch (e: IOException) {
@@ -265,7 +265,7 @@ class CoreTagEditor(
         val lib = saveLib ?: CoreLibrary(dir.path).also { saveLib = it }
         try {
             lib.artistSameName(uid, name)
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't look for another artist called that", e)
             null
         }
@@ -286,7 +286,7 @@ class CoreTagEditor(
 
     private inline fun <T> attempt(what: String, action: () -> T): TagResult<T> = try {
         TagResult.Ok(action())
-    } catch (e: MusicCoreException) {
+    } catch (e: KithCoreException) {
         Log.e(TAG, "Couldn't $what", e)
         TagResult.Failed(e.status)
     }

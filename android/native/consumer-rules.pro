@@ -2,7 +2,7 @@
 #
 # The JNI bridge (src/main/cpp/jni_*.c) reaches into this package by name: FindClass and
 # GetMethodID for the value classes it builds (AlbumInfo, TrackInfo, SyncDevice, ...) and the
-# exception it throws (MusicCoreException), and GetObjectClass + GetMethodID for the private
+# exception it throws (KithCoreException), and GetObjectClass + GetMethodID for the private
 # callbacks it calls on the wrappers (CoreImport.onEvent, CorePlayer.onEvent, CoreSync.onPeer,
 # onPairCode, onPairResult, onProgress, onSyncDone). The native methods themselves are bound by
 # their Java_ng_kithso_core_* names, so their classes and names have to stay too.

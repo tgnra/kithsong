@@ -12,8 +12,8 @@ import ng.kithso.core.CoreSync
 import ng.kithso.core.DeleteKind
 import ng.kithso.core.DeviceKind
 import ng.kithso.core.ItemKind
+import ng.kithso.core.KithCoreException
 import ng.kithso.core.LibraryStats
-import ng.kithso.core.MusicCoreException
 import ng.kithso.core.NativeCore
 import ng.kithso.core.RecentInfo
 import ng.kithso.core.SearchHit
@@ -180,7 +180,7 @@ class CoreLibrarySource(
         contents = open()?.let { lib ->
             try {
                 read(lib)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.e(TAG, "Couldn't read the library", e)
                 null
             }
@@ -190,7 +190,7 @@ class CoreLibrarySource(
         Log.i(TAG, "Read ${contents.albums.size} albums in ${SystemClock.elapsedRealtime() - start} ms")
         try {
             lib?.searchPrepare()
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't prepare search", e)
         }
         lookUpArt(contents.playlists.keys + contents.albumGroups.keys, ++artLookups)
@@ -206,7 +206,7 @@ class CoreLibrarySource(
             val found = try {
                 val lib = radioLib ?: CoreLibrary(dir.path).also { radioLib = it }
                 lib.radioStations()
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.e(TAG, "Couldn't list the radio stations", e)
                 return@launch
             }
@@ -267,7 +267,7 @@ class CoreLibrarySource(
     private fun pictureOf(uid: String, group: Boolean, smart: Boolean): File {
         val lib = artLib ?: try {
             CoreLibrary(dir.path).also { artLib = it }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't open the library in $dir for pictures", e)
             return File("")
         }
@@ -278,7 +278,7 @@ class CoreLibrarySource(
                 else -> lib.playlistArt(uid, artDir.path)
             }
             File(path.orEmpty())
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't make $uid's picture", e)
             File("")
         }
@@ -288,7 +288,7 @@ class CoreLibrarySource(
     private fun pruneArt() {
         try {
             CoreLibrary(dir.path).use { it.playlistArtPrune(artDir.path) }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't prune pictures in $artDir", e)
         }
     }
@@ -316,10 +316,10 @@ class CoreLibrarySource(
 
     /**
      * What a sync profile can select (see [ProfileChoices]); smart playlists and album groups
-     * are left out, as profiles only take manual ones. Throws MusicCoreException.
+     * are left out, as profiles only take manual ones. Throws KithCoreException.
      */
     suspend fun profileChoices(): ProfileChoices = withContext(core) {
-        val lib = open() ?: throw MusicCoreException(CoreSync.ERR_NOT_FOUND)
+        val lib = open() ?: throw KithCoreException(CoreSync.ERR_NOT_FOUND)
         val artists = lib.artists()
         ProfileChoices(
             albums = lib.albums().byTitle().map { ProfileChoice(it.uid, it.title, it.artist ?: unknownArtist(), it.year) },
@@ -367,7 +367,7 @@ class CoreLibrarySource(
                 }
                 CollectionRef.Kind.Station -> null
             }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't list $ref", e)
             null
         }
@@ -378,7 +378,7 @@ class CoreLibrarySource(
         try {
             val lib = open() ?: return@withContext null
             listOfNotNull(stationStarts[seedUid], seedUid).firstNotNullOfOrNull { stationTrack(lib, it) }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't check station $seedUid", e)
             null
         }
@@ -396,7 +396,7 @@ class CoreLibrarySource(
         uids.map { uid ->
             try {
                 lib?.track(uid)?.let { covers.track(it) }
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.e(TAG, "Couldn't read track $uid", e)
                 null
             }
@@ -408,7 +408,7 @@ class CoreLibrarySource(
             val lib = open() ?: return@launch
             try {
                 lib.recordOpened(ref.kind.itemKind, ref.uid)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.e(TAG, "Couldn't add $ref to the recents", e)
                 return@launch
             }
@@ -429,7 +429,7 @@ class CoreLibrarySource(
             val lib = open() ?: return@launch
             try {
                 change(lib)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.e(TAG, "Couldn't $what", e)
                 return@launch
             }
@@ -443,7 +443,7 @@ class CoreLibrarySource(
             val lib = open() ?: return@launch
             try {
                 lib.recordPlay(trackUid)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.e(TAG, "Couldn't record a play of $trackUid", e)
                 return@launch
             }
@@ -459,7 +459,7 @@ class CoreLibrarySource(
                     state.value = state.value?.copy(recents = recents())
                     onChanged()
                 }
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.w(TAG, "Couldn't log a play of ${event.trackUid}", e)
             }
         }
@@ -475,7 +475,7 @@ class CoreLibrarySource(
     override suspend fun playlistChoices(): List<PlaylistChoice>? = withContext(core) {
         try {
             open()?.playlists()?.map { PlaylistChoice(it.uid, it.name) }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't list the playlists", e)
             null
         }
@@ -520,7 +520,7 @@ class CoreLibrarySource(
     override suspend fun albumGroupChoices(): List<PlaylistChoice>? = withContext(core) {
         try {
             open()?.albumGroups()?.map { PlaylistChoice(it.uid, it.name) }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't list the album groups", e)
             null
         }
@@ -568,7 +568,7 @@ class CoreLibrarySource(
     private fun changed(lib: CoreLibrary, kind: ItemKind, uid: String) {
         try {
             lib.recordOpened(kind, uid)
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't put $uid first in the recents", e)
         }
     }
@@ -590,7 +590,7 @@ class CoreLibrarySource(
             }
             try {
                 change(lib)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.e(TAG, "Couldn't $what", e)
                 failed.tryEmit(failure)
             }
@@ -608,7 +608,7 @@ class CoreLibrarySource(
         try {
             // Every one, as one with nothing to play here can still be edited from its sentence.
             open()?.smartLists()?.firstOrNull { it.uid == uid }?.let { SmartListInfo(it.uid, it.name, it.isAlbums, it.rule) }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't read smart list $uid", e)
             null
         }
@@ -618,7 +618,7 @@ class CoreLibrarySource(
         try {
             val lib = open() ?: return@withContext null
             lib.playlists().map { PlaylistChoice(it.uid, it.name) } to lib.albumGroups().map { PlaylistChoice(it.uid, it.name) }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't list the playlists and album groups", e)
             null
         }
@@ -627,7 +627,7 @@ class CoreLibrarySource(
     override suspend fun describeRule(isAlbums: Boolean, rule: String): String? = withContext(core) {
         try {
             open()?.describeSmart(isAlbums, rule)
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             null // a rule being edited, which may not be valid yet
         }
     }
@@ -635,7 +635,7 @@ class CoreLibrarySource(
     override suspend fun countRule(isAlbums: Boolean, rule: String): Int? = withContext(counting) {
         try {
             countingLib()?.countSmart(isAlbums, rule)
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             null
         }
     }
@@ -650,7 +650,7 @@ class CoreLibrarySource(
                 val tracks = lib.previewSmartTracks(rule)
                 SmartPreview(tracks.take(max).map { SmartPreviewItem(it.title, it.artist ?: unknownArtist()) }, tracks.size)
             }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             null
         }
     }
@@ -658,7 +658,7 @@ class CoreLibrarySource(
     // On [counting]: its own library connection, opened once.
     private fun countingLib(): CoreLibrary? = countLib ?: try {
         CoreLibrary(dir.path).also { countLib = it }
-    } catch (e: MusicCoreException) {
+    } catch (e: KithCoreException) {
         Log.e(TAG, "Couldn't open the library in $dir for the smart list editor", e)
         null
     }
@@ -670,7 +670,7 @@ class CoreLibrarySource(
                 lib.createSmart(name, isAlbums, rule).also {
                     changed(lib, if (isAlbums) ItemKind.AlbumGroup else ItemKind.Playlist, it)
                 }
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.e(TAG, "Couldn't make smart list $name", e)
                 null
             }
@@ -696,7 +696,7 @@ class CoreLibrarySource(
                     lib.setSmartRule(uid, rule)
                 }
                 failure = null
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.e(TAG, "Couldn't save smart list $uid", e)
             }
         }
@@ -718,7 +718,7 @@ class CoreLibrarySource(
         try {
             val toBin = binOffered()
             open()?.deletePreview(what.kind.core, what.uid)?.let { DeleteSize(it.tracks, it.files, toBin) }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't find out what deleting $what takes", e)
             null
         }
@@ -727,7 +727,7 @@ class CoreLibrarySource(
     override suspend fun takesAny(what: Deletion, trackUids: List<String>): Boolean = withContext(core) {
         try {
             open()?.deleteTakesAny(what.kind.core, what.uid, trackUids) == true
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't find out what deleting $what takes", e)
             false
         }
@@ -746,7 +746,7 @@ class CoreLibrarySource(
                     "${result.filesRemoved} files, ${result.tracksKept} kept",
             )
             if (result.tracksKept > 0) DeleteOutcome.Kept(result.tracksKept) else DeleteOutcome.Deleted
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't delete $what", e)
             DeleteOutcome.Failed
         }
@@ -774,7 +774,7 @@ class CoreLibrarySource(
             val singles = queue.filter { it.albumUid == null }.mapNotNull { lib.track(it.uid) }
             val fresh = (albums + singles).here().associate { it.uid to covers.track(it) }
             queue.map { fresh[it.uid] ?: it }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't read the queue's tracks again", e)
             queue
         }
@@ -785,7 +785,7 @@ class CoreLibrarySource(
     suspend fun analysisWaiting(): Int? = withContext(core) {
         try {
             open()?.analysisPending()
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.w(TAG, "Analysis: couldn't count what's waiting", e)
             null
         }
@@ -794,7 +794,7 @@ class CoreLibrarySource(
     suspend fun binEntries(): List<BinEntry> = withContext(core) {
         try {
             open()?.coreBinEntries().orEmpty()
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't read the recycle bin", e)
             emptyList()
         }
@@ -804,7 +804,7 @@ class CoreLibrarySource(
         val lib = open()
         val hits = try {
             lib?.search(query, SEARCH_LIMIT).orEmpty()
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't search for \"$query\"", e)
             emptyList()
         }
@@ -826,7 +826,7 @@ class CoreLibrarySource(
                 singlesBy.getOrPut(artist.uid) {
                     try {
                         lib?.artistSingles(artist.uid)?.here().orEmpty()
-                    } catch (e: MusicCoreException) {
+                    } catch (e: KithCoreException) {
                         Log.e(TAG, "Couldn't list the singles of ${artist.name}", e)
                         emptyList()
                     }
@@ -865,7 +865,7 @@ class CoreLibrarySource(
         val lib = open() ?: return@withContext emptyList()
         val credit = try {
             lib.credit(trackUid)
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't read the credit of $trackUid", e)
             return@withContext emptyList()
         }
@@ -879,7 +879,7 @@ class CoreLibrarySource(
             val lib = open() ?: return@withContext
             try {
                 lib.reshuffle(ref.uid)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.e(TAG, "Couldn't reshuffle $ref", e)
                 return@withContext
             }
@@ -892,7 +892,7 @@ class CoreLibrarySource(
     override suspend fun stats(): LibraryStats = withContext(core) {
         try {
             open()?.stats() ?: LibraryStats()
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't read the library's stats", e)
             LibraryStats()
         }
@@ -903,7 +903,7 @@ class CoreLibrarySource(
         lib?.let { return it }
         return try {
             CoreLibrary(dir.path).also { lib = it }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't open the library in $dir", e)
             null
         }
@@ -966,7 +966,7 @@ class CoreLibrarySource(
             val uid = if (rest.substringBefore(':').toLongOrNull() != null) rest.substringAfter(':') else rest
             try {
                 lib.recordOpened(kind.itemKind, uid)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.i(TAG, "Left $kind $uid out of the recents", e)
             }
         }
@@ -984,7 +984,7 @@ class CoreLibrarySource(
             .mapNotNull { if (it.kind == ItemKind.Station) station(lib, it, covers) else recent(CollectionRef(it.kind.refKind, it.uid)) }
             .take(MAX_RECENTS)
             .toList()
-    } catch (e: MusicCoreException) {
+    } catch (e: KithCoreException) {
         Log.e(TAG, "Couldn't list the recents", e)
         emptyList()
     }

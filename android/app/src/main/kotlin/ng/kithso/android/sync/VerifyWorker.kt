@@ -12,7 +12,7 @@ import androidx.work.WorkerParameters
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import ng.kithso.android.KithsongApp
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -44,7 +44,7 @@ class VerifyWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             }
             Log.i(TAG, "Weekly check: out of time, the rest next time")
             return Result.retry()
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.w(TAG, "Weekly check failed", e)
             return Result.retry()
         } finally {

@@ -1,7 +1,7 @@
 /* JNI bindings for ng.kithso.core.PlaylistNatives and AlbumGroupNatives: editing playlists and
  * album groups (musiccore/playlist.h) on an open CoreLibrary's handle. Kept apart from
  * jni_bridge.c; as thin as it is: marshal arguments, call musiccore, convert results.
- * Failures throw ng.kithso.core.MusicCoreException. */
+ * Failures throw ng.kithso.core.KithCoreException. */
 #include <jni.h>
 #include <stdint.h>
 

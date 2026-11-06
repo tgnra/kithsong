@@ -1,6 +1,6 @@
 /* JNI bindings for ng.kithso.core.CoreTesting: the profiler (musiccore/perf.h) and stress test
  * libraries (musiccore/stress.h). Kept apart from jni_bridge.c; as thin as it is: marshal
- * arguments, call musiccore, convert results. Failures throw MusicCoreException. */
+ * arguments, call musiccore, convert results. Failures throw KithCoreException. */
 #include <jni.h>
 #include <stdint.h>
 

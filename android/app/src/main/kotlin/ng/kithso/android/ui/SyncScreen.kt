@@ -58,7 +58,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import ng.kithso.core.CoreSync
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
 import ng.kithso.core.SyncProblems
@@ -387,7 +387,7 @@ fun DeviceScreen(
                 scope.launch {
                     try {
                         syncer.editProfile(device.uid) { it.copy(name = name) }
-                    } catch (e: MusicCoreException) {
+                    } catch (e: KithCoreException) {
                         renameError = statusText(context, e.status)
                     }
                 }

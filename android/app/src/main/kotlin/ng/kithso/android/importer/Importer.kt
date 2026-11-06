@@ -9,7 +9,7 @@ import androidx.compose.runtime.Immutable
 import ng.kithso.android.R
 import ng.kithso.android.data.CoreLibrarySource
 import ng.kithso.core.CoreImport
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -311,7 +311,7 @@ class Importer(
             for (batch in batches) {
                 try {
                     batch.session?.skipTagging()
-                } catch (e: MusicCoreException) {
+                } catch (e: KithCoreException) {
                     Log.w(TAG, "Couldn't skip tagging", e)
                 }
             }
@@ -325,7 +325,7 @@ class Importer(
             for (batch in batches) {
                 try {
                     batch.session?.retryUnreachable()
-                } catch (e: MusicCoreException) {
+                } catch (e: KithCoreException) {
                     Log.w(TAG, "Couldn't retry MusicBrainz", e)
                 }
             }
@@ -349,7 +349,7 @@ class Importer(
                 session.files(key.item),
                 related,
             )
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             null
         }
     }
@@ -538,7 +538,7 @@ class Importer(
             )
             val session = try {
                 source.startImport(listOf(path.path), options) { event, arg -> events.trySend(Event(batch, event, arg)) }
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.e(TAG, "Couldn't start the import", e)
                 null
             }
@@ -620,7 +620,7 @@ class Importer(
                 session.assign(next.item, next.match, next.pick.track, next.pick.fromItem, file)
                 next.sent = true
                 return
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.w(TAG, "Couldn't use a file as a track", e)
                 batch.assigns.removeFirst()
             }
@@ -659,7 +659,7 @@ class Importer(
             val session = batches.getOrNull(key.batch)?.session ?: return@launch
             try {
                 how(session, key.item)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.w(TAG, "Couldn't resolve item $key", e)
             }
         }
@@ -672,7 +672,7 @@ class Importer(
                 batch.states.indices.filter { batch.states[it] == CoreImport.State.Review }.forEach {
                     try {
                         how(session, it)
-                    } catch (e: MusicCoreException) {
+                    } catch (e: KithCoreException) {
                         Log.w(TAG, "Couldn't resolve item ${batch.id}/$it", e)
                     }
                 }

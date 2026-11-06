@@ -22,7 +22,7 @@ import kotlinx.coroutines.withContext
 import ng.kithso.core.ConfirmState
 import ng.kithso.core.CoreSync
 import ng.kithso.core.DeviceKind
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 import ng.kithso.core.SyncDevice
 import ng.kithso.core.SyncWaiting
 import java.io.File
@@ -267,7 +267,7 @@ class WatchSyncer(
         return withContext(Dispatchers.IO) {
             try {
                 sync.verifyWeekly(budgetMs)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.w(TAG, "Weekly check failed", e)
                 true
             }
@@ -305,7 +305,7 @@ class WatchSyncer(
             val sync = sync?.takeIf { state.value.running } ?: return@launch
             try {
                 block(sync)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.w(TAG, "Sync call failed", e)
             }
         }
@@ -322,7 +322,7 @@ class WatchSyncer(
             library.onCore { lib ->
                 CoreSync(lib, configDir.path, state.value.deviceName, DeviceKind.Watch, { events.trySend(it) }, offerMerge = false)
             }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't open sync", e)
             null
         }.also { sync = it }
@@ -335,7 +335,7 @@ class WatchSyncer(
         sync.setAutomatic(automatic())
         try {
             sync.start()
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't start sync", e)
             multicastLock?.release()
             wifi.release()
@@ -378,7 +378,7 @@ class WatchSyncer(
                 Log.w(TAG, "Pairing with ${event.name} proposed merging libraries: declined")
                 try {
                     if (event.needsConfirm) sync.pairMergeConfirm(false) else sync.pairCancel()
-                } catch (e: MusicCoreException) {
+                } catch (e: KithCoreException) {
                     Log.w(TAG, "Couldn't decline the merge", e)
                 }
                 return
@@ -487,7 +487,7 @@ class WatchSyncer(
                     problems = problems,
                 )
             }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't read the sync group", e)
         }
     }

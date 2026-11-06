@@ -3,7 +3,7 @@ package ng.kithso.android
 import android.content.SharedPreferences
 import android.util.Log
 import ng.kithso.core.CoreSettings
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 
 /**
  * The app's preferences, and what it remembers having asked for, in the core's settings.json
@@ -102,7 +102,7 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
     private fun save(): Boolean = try {
         core.save()
         true
-    } catch (e: MusicCoreException) {
+    } catch (e: KithCoreException) {
         Log.e(TAG, "Couldn't save the settings", e)
         false
     }

@@ -21,7 +21,7 @@ import kotlinx.coroutines.withContext
 import ng.kithso.android.KithsongApp
 import ng.kithso.android.data.CoreLibrarySource
 import ng.kithso.core.CoreAnalysis
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 
 /**
  * Analyses what an import brought, the next time the phone is charging. A phone doesn't scan by
@@ -42,7 +42,7 @@ class AnalysisWorker(context: Context, params: WorkerParameters) : CoroutineWork
         val app = applicationContext as KithsongApp
         val analysis = try {
             CoreAnalysis(app.libraryDir.path)
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.w(TAG, "Analysis: couldn't start", e)
             return Result.retry()
         }

@@ -5,7 +5,7 @@ package ng.kithso.core
 // (mc_delete_run_permanently); like any change it's logged, so sync deletes the tracks on every
 // device. In a group ([binOffered]) it goes to the recycle bin as well (mc_delete_run_to_bin),
 // from which it can be taken back until the next sync ([binRestore]). Each throws
-// MusicCoreException.
+// KithCoreException.
 
 /** What a delete takes: a track, or an album's tracks (mc_delete_kind). */
 enum class DeleteKind(internal val code: Int) {

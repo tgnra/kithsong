@@ -2,7 +2,7 @@
  * single's mix, and searching for another release (musiccore/edit.h), on an open CoreLibrary's
  * handle. Kept apart from
  * jni_bridge.c; as thin as it is: marshal arguments, call musiccore, convert results. Failures
- * throw ng.kithso.core.MusicCoreException, with the status to tell them apart by.
+ * throw ng.kithso.core.KithCoreException, with the status to tell them apart by.
  *
  * What goes into a tag comes as a byte[] of UTF-8, not a jstring: what a jstring gives is
  * modified UTF-8, which needn't be what belongs in a file's tags where a title has an emoji. */

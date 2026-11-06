@@ -80,7 +80,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import ng.kithso.core.CoreSync
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 import ng.kithso.core.ProfileItem
 import ng.kithso.core.ProfileItemKind
 import ng.kithso.android.R
@@ -154,7 +154,7 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
         try {
             stored = syncer.profile(uid)
             readError = null
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             readError = e.status
         }
     }
@@ -167,7 +167,7 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
         message = try {
             stored = syncer.editProfile(uid, pending::applyTo)
             null
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             if (e.status == CoreSync.ERR_LOCKED) {
                 resources.getString(R.string.profile_locked)
             } else {
@@ -198,7 +198,7 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
         try {
             estimate = syncer.estimate(uid, candidate)
             estimateError = null
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             estimateError = e.status
         }
         estimating = false
@@ -218,7 +218,7 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
             message = try {
                 stored = syncer.setArchive(uid, archive)
                 null
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 if (e.status == CoreSync.ERR_LOCKED && !archive && isSelf) {
                     resources.getString(R.string.profile_archive_locked)
                 } else {
@@ -318,7 +318,7 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
                         message = try {
                             stored = syncer.excludeItem(uid, item, !on)
                             null
-                        } catch (e: MusicCoreException) {
+                        } catch (e: KithCoreException) {
                             resources.getString(R.string.profile_save_failed, statusText(context, e.status))
                         }
                     }
@@ -333,7 +333,7 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
                     message = try {
                         stored = syncer.selectItems(uid, pending::applyTo, shown.first().kind, shown.map { it.uid }, on)
                         null
-                    } catch (e: MusicCoreException) {
+                    } catch (e: KithCoreException) {
                         resources.getString(R.string.profile_save_failed, statusText(context, e.status))
                     }
                 }
@@ -464,7 +464,7 @@ private fun MakeArchiveDialog(
     LaunchedEffect(uid) {
         bytes = try {
             syncer.estimate(uid, profile.copy(archive = true)).totalBytes
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             null
         }
     }
@@ -506,7 +506,7 @@ private fun ProfileItemsDialog(
     LaunchedEffect(Unit) {
         try {
             choices = syncer.profileChoices()
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             error = e.status
         }
     }

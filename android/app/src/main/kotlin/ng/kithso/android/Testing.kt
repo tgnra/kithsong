@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ng.kithso.core.CoreTesting
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 
 /**
  * Settings' Testing section: the profiler's switch, and stress test libraries in folders of their
@@ -70,7 +70,7 @@ class Testing(
                         CoreTesting.jobFree(job)
                         job = 0
                     }
-                } catch (e: MusicCoreException) {
+                } catch (e: KithCoreException) {
                     e.status
                 }
             }
@@ -103,7 +103,7 @@ class Testing(
             withContext(Dispatchers.IO) {
                 try {
                     deleted = CoreTesting.deleteAll(configDir.path, open)
-                } catch (e: MusicCoreException) {
+                } catch (e: KithCoreException) {
                     failure = e.status
                 }
             }

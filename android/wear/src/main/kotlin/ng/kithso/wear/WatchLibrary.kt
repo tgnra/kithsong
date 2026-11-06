@@ -11,7 +11,7 @@ import kotlinx.coroutines.withContext
 import ng.kithso.core.AlbumInfo
 import ng.kithso.core.CoreLibrary
 import ng.kithso.core.CoreSync
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 import ng.kithso.core.NamedInfo
 import ng.kithso.core.PlaylistInfo
 import ng.kithso.core.TrackInfo
@@ -81,7 +81,7 @@ class WatchLibrary(private val dir: File, private val scope: CoroutineScope) {
             }
             state.value = Contents(albums, playlists, groups, tracks)
             Log.i(TAG, "Read ${albums.size} albums, $tracks tracks, ${playlists.size} playlists, ${groups.size} album groups here")
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't read the library", e)
         }
     }
@@ -122,17 +122,17 @@ class WatchLibrary(private val dir: File, private val scope: CoroutineScope) {
 
     /**
      * Runs [block] on the core's thread with the open library, for sync, which is opened on
-     * it. Throws MusicCoreException (ERR_NOT_FOUND) if the library can't be opened.
+     * it. Throws KithCoreException (ERR_NOT_FOUND) if the library can't be opened.
      */
     suspend fun <T> onCore(block: (CoreLibrary) -> T): T = withContext(core) {
-        block(open() ?: throw MusicCoreException(CoreSync.ERR_NOT_FOUND))
+        block(open() ?: throw KithCoreException(CoreSync.ERR_NOT_FOUND))
     }
 
     private suspend fun <T> read(fallback: T, block: (CoreLibrary) -> T): T = withContext(core) {
         val lib = open() ?: return@withContext fallback
         try {
             block(lib)
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Library read failed", e)
             fallback
         }
@@ -144,7 +144,7 @@ class WatchLibrary(private val dir: File, private val scope: CoroutineScope) {
             try {
                 block(lib)
                 true
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.w(TAG, "Couldn't $what", e)
                 false
             }
@@ -163,7 +163,7 @@ class WatchLibrary(private val dir: File, private val scope: CoroutineScope) {
         return try {
             dir.mkdirs()
             CoreLibrary(dir.path).also { lib = it }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't open the library in $dir", e)
             null
         }

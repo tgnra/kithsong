@@ -14,7 +14,7 @@ import kotlinx.coroutines.withContext
 import ng.kithso.android.AppSettings
 import ng.kithso.core.CoreLibrary
 import ng.kithso.core.CoreScrobbler
-import ng.kithso.core.MusicCoreException
+import ng.kithso.core.KithCoreException
 
 /**
  * Scrobbling for the app: the core's scrobbler ([CoreScrobbler]) for the library in
@@ -66,7 +66,7 @@ class Scrobbling(
         scrobbler ?: try {
             val lib = library ?: CoreLibrary(libraryDir.path).also { library = it }
             CoreScrobbler(lib, configDir.path).also { scrobbler = it }
-        } catch (e: MusicCoreException) {
+        } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't start the scrobbler", e)
             null
         }
@@ -78,7 +78,7 @@ class Scrobbling(
             val sc = open() ?: return@launch
             try {
                 what(sc)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 Log.w(TAG, "The scrobbler turned a play down", e)
             }
         }
@@ -101,7 +101,7 @@ class Scrobbling(
         val status = withContext(Dispatchers.IO) {
             try {
                 open()?.status
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 null
             }
         } ?: return
@@ -129,7 +129,7 @@ class Scrobbling(
             var result = CoreScrobbler.STATUS_OK
             var polled = false
             try {
-                val sc = withContext(Dispatchers.IO) { open() } ?: throw MusicCoreException(STATUS_DB)
+                val sc = withContext(Dispatchers.IO) { open() } ?: throw KithCoreException(STATUS_DB)
                 val url = withContext(Dispatchers.IO) { sc.authBegin() }
                 openPage(url)
                 polled = true
@@ -138,7 +138,7 @@ class Scrobbling(
                     delay(AUTH_POLL_MS)
                     result = withContext(Dispatchers.IO) { sc.authFinish() }
                 } while (isActive && result == CoreScrobbler.STATUS_AUTH && System.currentTimeMillis() < end)
-            } catch (e: MusicCoreException) {
+            } catch (e: KithCoreException) {
                 result = e.status
             }
             mutableState.value = mutableState.value.copy(
@@ -165,7 +165,7 @@ class Scrobbling(
                 try {
                     open()?.signOut()
                     null
-                } catch (e: MusicCoreException) {
+                } catch (e: KithCoreException) {
                     e.status
                 }
             }
@@ -193,7 +193,7 @@ class Scrobbling(
                 try {
                     open()?.setService(service, apiUrl, authUrl, apiKey, apiSecret)
                     null
-                } catch (e: MusicCoreException) {
+                } catch (e: KithCoreException) {
                     e.status
                 }
             }

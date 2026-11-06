@@ -4,7 +4,7 @@ package ng.kithso.core
 // jni_smart.c. A rule is JSON in the format docs/schema.md gives (Smart lists); [isAlbums]
 // says which subject it's for, an album group's rather than a playlist's. Listing them is
 // CoreLibrary.smartLists, and what a rule would hold previewSmartTracks / previewSmartAlbums.
-// Each throws MusicCoreException: MC_ERR_FORMAT (-7) for a rule that isn't valid,
+// Each throws KithCoreException: MC_ERR_FORMAT (-7) for a rule that isn't valid,
 // MC_ERR_NOT_FOUND (-8) for a smart list that doesn't exist.
 
 /**

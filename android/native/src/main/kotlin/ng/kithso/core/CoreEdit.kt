@@ -5,7 +5,7 @@ package ng.kithso.core
 // bound in jni_edit.c.
 // The rows are what's edited and the files follow, so a set can rewrite and move files, and a
 // search or a new release waits for MusicBrainz: keep them all off the main thread. Each throws
-// MusicCoreException; the ERR_ statuses below are the ones worth telling apart. "" is no text
+// KithCoreException; the ERR_ statuses below are the ones worth telling apart. "" is no text
 // and 0 an unknown number, on the way in and out.
 
 /** mc_album_tags. [mbAlbumId] is the release; "" unlinks the album. */
