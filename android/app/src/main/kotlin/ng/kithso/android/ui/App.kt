@@ -97,7 +97,7 @@ fun App(
     libraryDir: File,
     onPlay: () -> Unit = {},
     onImportStarted: () -> Unit = {},
-    onLeave: () -> Unit = {},
+    onLeave: (() -> Unit)? = null,
 ) {
     val library by source.library.collectAsState()
     val importProgress by importer.progress.collectAsState()
@@ -290,8 +290,9 @@ fun App(
             }
         }
     }
-    // Nothing open over the main list: back leaves the app, as the activity sees fit.
-    BackHandler(enabled = top == null && !smartOpen, onBack = onLeave)
+    // Nothing open over the main list: back leaves the app, as the activity sees fit, if it
+    // doesn't leave that to the system, which then shows where back goes as it's swiped.
+    BackHandler(enabled = onLeave != null && top == null && !smartOpen) { onLeave?.invoke() }
 
     // A Surface rather than a background, so text gets the surface's content colour.
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {

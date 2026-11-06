@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
+import android.window.OnBackInvokedDispatcher
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -33,6 +34,12 @@ class MainActivity : ComponentActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_SYSTEM_NAVIGATION_OBSERVER,
+                ::afterSystemBack,
+            )
+        }
 
         val app = application as KithsongApp
         CoreTesting.mark("activity_created")
@@ -88,16 +95,20 @@ class MainActivity : ComponentActivity() {
                     app.libraryDir,
                     onPlay = ::askForNotificationsOnce,
                     onImportStarted = ::askForNotificationsOnce,
-                    onLeave = ::leave,
+                    onLeave = if (systemBack) null else ::leave,
                 )
             }
         }
     }
 
+    // From Android 16 an app can hear of a back it leaves to the system, so back on the main list
+    // needs no handler of the app's, and the system's preview of going home can play.
+    private val systemBack = Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA
+
     // Back from the main list. While music plays the app only goes out of sight, and playback
     // carries on; with nothing playing it quits, leaving no player behind: the notification of
-    // a paused track goes too, though its place is kept for as long as the process lives. Opened
-    // from another app (a share, say) the activity isn't its task's root, and goes back there.
+    // a paused track goes too, and PlaybackService keeps its place for next time. Opened from
+    // another app (a share, say) the activity isn't its task's root, and goes back there.
     private fun leave() {
         val playback = (application as KithsongApp).playback
         val playing = playback.isPlaying
@@ -107,6 +118,14 @@ class MainActivity : ComponentActivity() {
             playing -> moveTaskToBack(false)
             else -> finishAndRemoveTask()
         }
+    }
+
+    // [leave] when the system has done the going: out of sight, or back to the other app.
+    private fun afterSystemBack() {
+        val playback = (application as KithsongApp).playback
+        if (playback.isPlaying) return
+        playback.stop()
+        if (isTaskRoot) finishAndRemoveTask()
     }
 
     override fun onNewIntent(intent: Intent) {
