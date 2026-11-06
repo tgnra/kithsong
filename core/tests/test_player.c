@@ -12,6 +12,8 @@
 
 #define SKIP 77
 
+extern int mc_player_test_start_failures; /* player.c */
+
 static mc_mutex lock;
 static int errors, events, played;
 
@@ -259,6 +261,47 @@ int main(int argc, char **argv) {
   CHECK(mc_player_set_muted(player, 0) == MC_OK);
   mc_player_status_get(player, &st);
   CHECK(st.volume == 0 && !st.muted);
+
+  /* A device that won't start for a moment, as while Bluetooth headphones connect: it stays
+   * playing, without moving or saying anything's wrong, until a try works. The second try
+   * opens the device again. */
+  mc_mutex_lock(&lock);
+  errors = 0;
+  mc_mutex_unlock(&lock);
+  mc_sleep_ms(200); /* so the device has stopped, and has to start again */
+  mc_player_test_start_failures = 2;
+  CHECK(mc_player_set_queue(player, one, 1, 0, NULL) == MC_OK);
+  mc_sleep_ms(500);
+  mc_player_status_get(player, &st);
+  CHECK(st.state == MC_PLAYER_PLAYING && st.position_ms == 0);
+  mc_sleep_ms(2000);
+  mc_player_status_get(player, &st);
+  CHECK(st.state == MC_PLAYER_PLAYING && st.position_ms > 0);
+  mc_mutex_lock(&lock);
+  CHECK(errors == 0);
+  mc_mutex_unlock(&lock);
+  CHECK(mc_player_stop(player) == MC_OK);
+
+  /* One that never does: it gives up and says so, and the next play starts afresh. */
+  mc_sleep_ms(200);
+  mc_player_test_start_failures = 100;
+  CHECK(mc_player_set_queue(player, one, 1, 0, NULL) == MC_OK);
+  uint64_t give_up = mc_mono_ms() + 8000;
+  do {
+    mc_sleep_ms(20);
+    mc_player_status_get(player, &st);
+  } while (st.state != MC_PLAYER_STOPPED && mc_mono_ms() < give_up);
+  CHECK(st.state == MC_PLAYER_STOPPED);
+  mc_sleep_ms(100); /* the state changes just before the event comes */
+  mc_mutex_lock(&lock);
+  CHECK(errors > 0);
+  mc_mutex_unlock(&lock);
+  mc_player_test_start_failures = 0;
+  CHECK(mc_player_set_queue(player, one, 1, 0, NULL) == MC_OK);
+  mc_sleep_ms(400);
+  mc_player_status_get(player, &st);
+  CHECK(st.state == MC_PLAYER_PLAYING && st.position_ms > 0);
+  CHECK(mc_player_stop(player) == MC_OK);
 
   mc_player_free(player);
   mc_remove(a);
