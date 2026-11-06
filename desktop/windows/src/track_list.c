@@ -50,11 +50,13 @@ enum {
   DROP_LINE = 2, /* where a dragged track would go */
 };
 
-/* Context menu items. Play Next and Play Last are stubs until there's a play queue. */
+/* Context menu items. */
 enum {
   CMD_RENAME = 1,
   CMD_DELETE,
   CMD_EDIT_SMART,
+  CMD_PLAY_NEXT,
+  CMD_PLAY_LAST,
 };
 
 enum { TIMER_DRAG_SCROLL = 103 }; /* the scroller has 101 and 102 */
@@ -686,14 +688,14 @@ static void request_playlist(int code) {
 
 /* --- Menus --- */
 
-/* Rename... and Delete Playlist..., under the [...] button; a smart playlist's has Edit
+/* Play Next, Play Last, Rename... and Delete Playlist..., under the [...] button; a smart playlist's has Edit
  * Rules... first. */
 static void show_playlist_menu(void) {
   if (!s.playlist) return;
   RECT r = more_rect();
   MapWindowPoints(s.wnd, NULL, (POINT *)&r, 2);
   HMENU menu = CreatePopupMenu();
-  item_menu_append_playlist(menu, s.smart, TRUE, CMD_EDIT_SMART, CMD_RENAME, CMD_DELETE);
+  item_menu_append_playlist(menu, s.smart, TRUE, CMD_PLAY_NEXT, CMD_PLAY_LAST, CMD_EDIT_SMART, CMD_RENAME, CMD_DELETE);
   s.more_open = TRUE;
   invalidate_more();
   /* Hangs from the button's right edge, as the button sits at the window's. */
@@ -706,6 +708,8 @@ static void show_playlist_menu(void) {
   if (cmd == CMD_RENAME) request_playlist(TLN_RENAME_PLAYLIST);
   else if (cmd == CMD_DELETE) request_playlist(TLN_DELETE_PLAYLIST);
   else if (cmd == CMD_EDIT_SMART) request_playlist(TLN_EDIT_SMART);
+  else if (cmd == CMD_PLAY_NEXT || cmd == CMD_PLAY_LAST)
+    playback_add(s.smart ? PLAYBACK_SMART_PLAYLIST : PLAYBACK_PLAYLIST, s.album_uid, s.album_title, cmd == CMD_PLAY_NEXT);
 }
 
 /* Whether row i's album has a page to go to that isn't the album shown. */

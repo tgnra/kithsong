@@ -1,15 +1,16 @@
 /* The menus of what the library holds, the same wherever it shows: the album grid's tiles, the
  * artist page, the Home page's tiles and search results.
  *
- *   an album    Start radio, Add to Album Group >, inside a manual group Move Up, Move Down and
- *               Remove from Album Group, then Edit..., Remove from This PC... or Sync to This PC
- *               where they apply, and Delete from Library...
- *   an artist   Start radio, Edit..., Remove from This PC... or Sync to This PC where they apply.
+ *   an album    Play Next, Play Last, Start radio, Add to Album Group >, inside a manual group Move
+ *               Up, Move Down and Remove from Album Group, then Edit..., Remove from This PC... or
+ *               Sync to This PC where they apply, and Delete from Library...
+ *   an artist   Play Next, Play Last, Start radio, Edit..., Remove from This PC... or Sync to This PC
+ *               where they apply.
  *               An artist can't be deleted from the library, only their albums and tracks
- *   a playlist  Rename... and Delete Playlist...
- *   a group     Rename... and Delete Album Group...
- *   smart ones  Edit Rules... first, and their own Delete...
- *   a station   Play, greyed out if it can't, as Start radio is
+ *   a playlist  Play Next, Play Last, Rename... and Delete Playlist...
+ *   a group     Play Next, Play Last, Rename... and Delete Album Group...
+ *   smart ones  Edit Rules... after those, and their own Delete...
+ *   a station   Play, greyed out if it can't, as Start radio is. Nothing of radio can be queued
  *
  * On a recent, any of them goes on with Remove from Recents and Clear Recents.
  *
@@ -54,6 +55,7 @@ item_menu_result item_menu_group(const item_menu_options *o, BOOL smart);
 item_menu_result item_menu_station(const item_menu_options *o);
 
 /* A playlist's items, for a menu with commands of its own: the track list's [...] button. */
-void item_menu_append_playlist(HMENU menu, BOOL smart, BOOL rename_key, UINT edit_rules, UINT rename, UINT del);
+void item_menu_append_playlist(HMENU menu, BOOL smart, BOOL rename_key, UINT play_next, UINT play_last, UINT edit_rules,
+                               UINT rename, UINT del);
 
 #endif

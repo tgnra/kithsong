@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include "add_to_playlist.h"
+#include "playback.h"
 #include "radio_menu.h"
 #include "wstr.h"
 
@@ -27,9 +28,12 @@ track_menu_pick track_menu_show(HWND owner, POINT pt, const track_menu_options *
   HMENU add = add_to_playlist_menu(o->lib, CMD_PLAYLIST_FIRST, CMD_NEW_PLAYLIST, &lists);
   if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, mc_wstr_mnemonic(MC_STR_ADD_TO_PLAYLIST));
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  /* Greyed out until there's a play queue to add to (see TODO.md, Playback). */
-  AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+  /* A track with no file on this device can't be played from here. */
+  mc_track_list *track = NULL;
+  UINT queue = o->lib && mc_library_get_track(o->lib, o->track_uid, &track) == MC_OK && track->items[0].path ? 0 : MF_GRAYED;
+  mc_track_list_free(track);
+  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
+  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
   char seed[MC_UID_STRLEN];
   radio_menu_append_track(menu, CMD_START_RADIO, o->lib, o->track_uid, seed);
   if (o->go_to_album || o->go_to_artist) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
@@ -61,6 +65,10 @@ track_menu_pick track_menu_show(HWND owner, POINT pt, const track_menu_options *
   }
   mc_playlist_list_free(lists);
   switch (cmd) {
+    case CMD_PLAY_NEXT:
+    case CMD_PLAY_LAST:
+      playback_add(PLAYBACK_TRACK, o->track_uid, NULL, cmd == CMD_PLAY_NEXT);
+      return TRACK_MENU_NOTHING;
     case CMD_NEW_PLAYLIST: return TRACK_MENU_NEW_PLAYLIST;
     case CMD_START_RADIO: return TRACK_MENU_START_RADIO;
     case CMD_MOVE_UP: return TRACK_MENU_MOVE_UP;
@@ -71,7 +79,7 @@ track_menu_pick track_menu_show(HWND owner, POINT pt, const track_menu_options *
     case CMD_EDIT: return TRACK_MENU_EDIT;
     case CMD_DELETE: return TRACK_MENU_DELETE;
   }
-  return pick; /* Play Next and Play Last are greyed out: they need a play queue */
+  return pick;
 }
 
 BOOL track_menu_album_has_page(mc_library *lib, const char *album_uid) {

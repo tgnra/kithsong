@@ -914,6 +914,17 @@ static BOOL drop_hover(drag_kind kind, const POINT *pt, char uid[MC_UID_STRLEN])
   return i >= 0;
 }
 
+/* Play Next or Play Last on recent row i. */
+static void add_recent_to_queue(int i, BOOL next) {
+  const sb_row *r = &s.rows[i];
+  mc_recent_kind kind = (mc_recent_kind)r->flags;
+  playback_what what = kind == MC_RECENT_ALBUM      ? PLAYBACK_ALBUM
+                       : kind == MC_RECENT_ARTIST   ? PLAYBACK_ARTIST
+                       : kind == MC_RECENT_PLAYLIST ? (r->smart ? PLAYBACK_SMART_PLAYLIST : PLAYBACK_PLAYLIST)
+                                                    : (r->smart ? PLAYBACK_SMART_GROUP : PLAYBACK_GROUP);
+  playback_add(what, r->uid, r->text, next);
+}
+
 static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (!s.wnd) s.wnd = s.scroll.wnd = wnd; /* messages arrive before CreateWindowExW returns */
   LRESULT result;
@@ -1032,6 +1043,11 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (i >= 0 && i < s.nrows && s.rows[i].kind == ROW_RECENT && clickable(i)) {
         HMENU menu = CreatePopupMenu();
         mc_recent_kind kind = (mc_recent_kind)s.rows[i].flags;
+        if (kind != MC_RECENT_STATION) {
+          AppendMenuW(menu, MF_STRING, 5, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
+          AppendMenuW(menu, MF_STRING, 6, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+          if (kind != MC_RECENT_ALBUM && kind != MC_RECENT_ARTIST) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        }
         char seed[MC_UID_STRLEN] = "";
         if (kind == MC_RECENT_ALBUM || kind == MC_RECENT_ARTIST) {
           mc_library *lib = s.library ? s.library() : NULL;
@@ -1048,8 +1064,11 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
           memcpy(s.clicked_recent, s.rows[i].uid, sizeof s.clicked_recent);
           s.clicked_kind = (mc_recent_kind)s.rows[i].flags;
         }
-        if (cmd == 4) playback_play_radio(seed);
-        else if (cmd)
+        if (cmd == 4) {
+          playback_play_radio(seed);
+        } else if (cmd == 5 || cmd == 6) {
+          add_recent_to_queue(i, cmd == 5);
+        } else if (cmd)
           SendMessageW(GetParent(wnd), WM_COMMAND,
                        MAKEWPARAM(GetDlgCtrlID(wnd), cmd == 1 ? SBN_REMOVE_RECENT : cmd == 3 ? SBN_EDIT_RECENT : SBN_CLEAR_RECENTS),
                        (LPARAM)wnd);

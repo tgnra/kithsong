@@ -1013,9 +1013,14 @@
 
   "windows": {
     "queue": { "text": "Queue", "note": "The button in the now-playing bar that opens the list of what plays next: its tooltip and name for accessibility; also the heading of that list." },
-    "queue_clear": { "text": "Clear", "note": "Button at the top of the queue: removes everything from it." },
-    "queue_remove": { "text": "Remove from queue", "note": "Tooltip of the x on a track in the queue." },
+    "queue_clear": { "text": "Clear", "note": "Button at the top of the queue: empties it. What's playing goes on." },
+    "queue_remove": { "text": "Remove from queue", "note": "Tooltip of the x on a row of the queue, and that x's name for accessibility." },
     "queue_empty": { "text": "Nothing queued", "note": "In the queue when it is empty." },
+    "queue_added": { "text": "Added to queue", "note": "Shown for a moment in the now-playing bar after Play next or Play last." },
+    "queue_nothing_here": { "text": "Nothing to add: no tracks on this PC", "note": "Shown in the now-playing bar after Play next or Play last on something with no track that has a file on this PC." },
+    "queue_row_help": { "text": "Alt+Up and Alt+Down move it, Delete removes it", "note": "For accessibility: what a screen reader adds about a row of the queue. The key names are as on the keyboard." },
+    "queue_tracks": { "text": "Add to queue as individual tracks", "note": "A switch in Settings, off to begin with; also its name for accessibility. While it's on, an album added to the queue goes in as a row per track rather than one row." },
+    "queue_tracks_text": { "text": "An album or playlist added to the queue shows as a row for each track, rather than one row that plays and moves as a whole.", "note": "Under the Add to queue as individual tracks switch." },
     "yes": { "text": "_Yes", "note": "Button answering a question." },
     "no": { "text": "_No", "note": "Button answering a question." },
     "home_station_name": { "text": "Radio station", "note": "Said by screen readers before a radio station's name on the Home page." },

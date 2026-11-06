@@ -499,10 +499,10 @@ static void show_page(sidebar_page page) {
   perf_view_shown();
 }
 
-/* Previous and Next need a track to go from; Play needs one, or a shown album with something
- * to play. Disabled buttons are greyed out. */
+/* Previous needs a track to go from, and Next one or the queue; Play needs one, the queue, or a
+ * shown album with something to play. Disabled buttons are greyed out. */
 static void update_buttons(void) {
-  BOOL playable = playback_has_current();
+  BOOL playable = playback_has_current() || playback_up_next_count() > 0;
   for (int i = 0, n = track_list_count(); !playable && i < n; i++) playable = track_list_item_at(i).path != NULL;
   EnableWindow(g_app.buttons[ID_PREV - ID_PREV], playback_has_current());
   EnableWindow(g_app.buttons[ID_PLAY - ID_PREV], playable);
@@ -1973,6 +1973,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       playback_init(wnd, playback_changed);
       playback_on_recents_changed(refresh_recents);
       playback_on_shuffle_requested(set_shuffle_flash);
+      playback_on_up_next_changed(queue_popup_update);
       theme_apply_window(wnd, TRUE);
       create_controls();
       playback_set_shuffle(mc_settings_shuffle(g_app.settings)); /* as it was left */

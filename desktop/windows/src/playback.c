@@ -9,6 +9,7 @@
 #include "media_controls.h"
 #include "musiccore/musiccore.h"
 #include "musiccore/radio.h"
+#include "musiccore/smartlist.h"
 #include "now_playing.h"
 #include "taskbar.h"
 #include "track_list.h"
@@ -46,6 +47,10 @@ static struct {
   int count;
   BOOL shuffle;
   BOOL radio; /* a station is adding to the queue */
+  BOOL has_next;
+  BOOL queue_tracks; /* mc_settings_queue_tracks() */
+  void (*up_next_changed)(void);
+  unsigned up_next_changes; /* as the player had them last */
   int volume;
   BOOL muted;
 
@@ -141,15 +146,18 @@ static void refresh(void) {
   if (!duration_ms) duration_ms = (int)st.duration_ms;
   /* By the order, not st.shuffle: what a station left behind plays in order. */
   int next = -1;
-  BOOL has_next = it && (st.radio || (mc_player_order(s.player, 1, 1, &next) == MC_OK && next >= 0));
+  BOOL has_next = st.up_next || (it && (st.radio || (mc_player_order(s.player, 1, 1, &next) == MC_OK && next >= 0)));
+  BOOL up_next_changed = st.up_next_changes != s.up_next_changes;
 
   BOOL new_track = st.index != s.index, new_state = st.state != s.state;
   /* These change whether there's a next track. */
-  BOOL new_shuffle = !st.shuffle != !s.shown_shuffle || !st.radio != !s.radio;
+  BOOL new_shuffle = !st.shuffle != !s.shown_shuffle || !st.radio != !s.radio || !has_next != !s.has_next || up_next_changed;
   s.index = st.index;
   s.state = st.state;
   s.shown_shuffle = st.shuffle;
   s.radio = st.radio;
+  s.has_next = has_next;
+  s.up_next_changes = st.up_next_changes;
   if (st.state != MC_PLAYER_PLAYING) {
     s.announced = -1;
   } else if (it && st.index != s.announced) {
@@ -167,13 +175,15 @@ static void refresh(void) {
 
   if (new_track || new_state || new_shuffle) {
     set_window_title(st.state != MC_PLAYER_STOPPED ? it : NULL);
-    taskbar_set_state(it != NULL, st.state == MC_PLAYER_PLAYING, it != NULL, has_next);
-    media_controls_set_state(st.state, it != NULL, has_next, st.shuffle);
+    BOOL playable = it || st.up_next; /* up next starts on Play with nothing current */
+    taskbar_set_state(playable, st.state == MC_PLAYER_PLAYING, it != NULL, has_next);
+    media_controls_set_state(st.state, playable, has_next, st.shuffle);
     media_controls_set_timeline(st.position_ms, duration_ms);
     if (st.state == MC_PLAYER_PLAYING) SetTimer(s.msgs, TICK_TIMER, TICK_MS, NULL);
     else KillTimer(s.msgs, TICK_TIMER);
     if (s.changed) s.changed();
   }
+  if (up_next_changed && s.up_next_changed) s.up_next_changed();
   if (s.station_logged) {
     s.station_logged = FALSE;
     if (s.recents_changed) s.recents_changed();
@@ -246,7 +256,10 @@ void playback_free(void) {
 }
 
 void playback_set_library(mc_library *lib, const char *config_dir) {
-  if (s.player && lib != s.lib) mc_player_stop_radio(s.player); /* its tracks are that library's */
+  if (s.player && lib != s.lib) { /* their tracks are that library's */
+    mc_player_stop_radio(s.player);
+    mc_player_up_next_clear(s.player);
+  }
   if (!lib && s.player) mc_player_end_play(s.player); /* the library, or the app, is closing */
   count_plays();
   if (s.scrobbler && s.scrobbler_closing) s.scrobbler_closing();
@@ -296,6 +309,23 @@ void playback_end_session(void) {
   count_plays();
 }
 
+/* Rows of up next keep up with what an edit changed: a track's, and an album's title. A playlist
+ * or group goes by what it was called when it was added. */
+static void rename_up_next(void) {
+  mc_up_next_list *list = playback_up_next();
+  for (int i = 0; list && i < list->count; i++) {
+    const mc_up_next_entry *e = &list->items[i];
+    if (e->first_item < 0 || e->first_item >= s.count) continue;
+    const item *it = &s.items[e->first_item];
+    const wchar_t *title = e->block ? (e->context == MC_PLAY_CONTEXT_ALBUM ? it->album : NULL) : it->title;
+    char *name = title ? wstr_to_utf8(title) : NULL, *artist = !e->block && it->artist ? wstr_to_utf8(it->artist) : NULL;
+    if (name) mc_player_up_next_rename(s.player, e->id, name, e->block ? e->artist : artist);
+    free(name);
+    free(artist);
+  }
+  mc_up_next_list_free(list);
+}
+
 void playback_tracks_changed(void) {
   if (!s.player || !s.lib) return;
   for (int i = 0; i < s.count; i++) {
@@ -314,6 +344,8 @@ void playback_tracks_changed(void) {
     if (t->path) mc_player_queue_set_path(s.player, i, t->path);
     mc_track_list_free(list);
   }
+  rename_up_next();
+  refresh();
   mc_player_status st;
   mc_player_status_get(s.player, &st);
   const item *it = st.index >= 0 && st.index < s.count ? &s.items[st.index] : NULL;
@@ -332,6 +364,8 @@ void playback_clear(void) {
   free_items();
   s.index = s.announced = -1;
   s.state = MC_PLAYER_STOPPED;
+  s.has_next = FALSE;
+  s.up_next_changes = 0;
   KillTimer(s.msgs, TICK_TIMER);
   now_playing_show(NULL, NULL, 0, NULL);
   now_playing_set_position(0);
@@ -341,20 +375,26 @@ void playback_clear(void) {
   set_window_title(NULL);
   taskbar_set_state(FALSE, FALSE, FALSE, FALSE);
   if (s.changed) s.changed();
+  if (s.up_next_changed) s.up_next_changed();
 }
 
-/* playback_play(), or with radio, the one track as a station's seed. */
-static void play_queue(const playback_track *tracks, int count, int start, mc_play_context context,
-                       const char *context_uid, BOOL radio) {
-  if (count <= 0 || start < -1 || start >= count) return;
+/* The player, set up for use. FALSE if it can't be made. */
+static BOOL ensure_player(void) {
   if (!s.player && mc_player_new(on_player, NULL, &s.player) != MC_OK) {
     s.player = NULL;
-    return;
+    return FALSE;
   }
   mc_player_set_shuffle(s.player, s.shuffle); /* a new player starts off, at full volume */
   mc_player_set_volume(s.player, s.volume);
   mc_player_set_muted(s.player, s.muted);
   if (!s.media_controls) s.media_controls = media_controls_init(s.wnd, s.msgs, WM_MEDIA_BUTTON);
+  return TRUE;
+}
+
+/* playback_play(), or with radio, the one track as a station's seed. */
+static void play_queue(const playback_track *tracks, int count, int start, mc_play_context context,
+                       const char *context_uid, BOOL radio) {
+  if (count <= 0 || start < -1 || start >= count || !ensure_player()) return;
 
   const char **paths = calloc((size_t)count, sizeof *paths);
   const char **uids = calloc((size_t)count, sizeof *uids);
@@ -444,7 +484,7 @@ BOOL playback_shuffle(void) {
 }
 
 BOOL playback_toggle(void) {
-  if (!s.player || !s.count) return FALSE;
+  if (!playback_has_current() && !playback_up_next_count()) return FALSE;
   mc_player_toggle(s.player);
   refresh();
   return TRUE;
@@ -521,7 +561,7 @@ const char *playback_current_uid(void) {
 }
 
 BOOL playback_has_next(void) {
-  return playback_has_current() && (s.shuffle || s.radio || s.index + 1 < s.count);
+  return s.player && s.has_next;
 }
 
 mc_scrobbler *playback_scrobbler(void) {
@@ -538,4 +578,128 @@ void playback_on_shuffle_requested(void (*requested)(BOOL on)) {
 
 void playback_set_scrobble(BOOL on) {
   s.scrobble_off = !on;
+}
+
+/* --- Up next --- */
+
+void playback_set_queue_tracks(BOOL on) {
+  s.queue_tracks = on;
+}
+
+void playback_on_up_next_changed(void (*changed)(void)) {
+  s.up_next_changed = changed;
+}
+
+int playback_up_next_count(void) {
+  mc_player_status st = {0};
+  if (s.player) mc_player_status_get(s.player, &st);
+  return st.up_next;
+}
+
+mc_up_next_list *playback_up_next(void) {
+  mc_up_next_list *list = NULL;
+  if (s.player && mc_player_up_next(s.player, &list) != MC_OK) list = NULL;
+  return list;
+}
+
+void playback_up_next_move(uint32_t id, int to) {
+  if (!s.player) return;
+  mc_player_up_next_move(s.player, id, to);
+  refresh();
+}
+
+void playback_up_next_remove(uint32_t id) {
+  if (!s.player) return;
+  mc_player_up_next_remove(s.player, id);
+  refresh();
+}
+
+void playback_up_next_clear(void) {
+  if (!s.player) return;
+  mc_player_up_next_clear(s.player);
+  refresh();
+}
+
+/* An album's artist credit as shown, for its row. Malloc'd, or NULL. */
+static char *album_credit(const char *album_uid) {
+  mc_credit_list *credit = NULL;
+  if (mc_library_list_credit(s.lib, album_uid, &credit) != MC_OK) return NULL;
+  size_t n = 1;
+  for (int i = 0; i < credit->count; i++) n += strlen(credit->items[i].name) + strlen(credit->items[i].join);
+  char *text = credit->count ? calloc(n, 1) : NULL;
+  for (int i = 0; text && i < credit->count; i++) {
+    strcat(text, credit->items[i].name);
+    strcat(text, credit->items[i].join);
+  }
+  mc_credit_list_free(credit);
+  return text;
+}
+
+/* Every album of the group, in its order: their tracks with a file here (see
+ * mc_library_list_albums_tracks()). NULL if it can't be listed. */
+static mc_track_list *group_tracks(const char *uid, BOOL smart) {
+  mc_album_list *albums = NULL;
+  mc_status st = smart ? mc_library_list_smart_albums(s.lib, uid, &albums)
+                       : mc_library_list_album_group_albums(s.lib, uid, &albums);
+  if (st != MC_OK) return NULL;
+  const char **uids = albums->count ? calloc((size_t)albums->count, sizeof *uids) : NULL;
+  for (int i = 0; uids && i < albums->count; i++) uids[i] = albums->items[i].uid;
+  mc_track_list *list = NULL;
+  if (uids && mc_library_list_albums_tracks(s.lib, uids, albums->count, &list) != MC_OK) list = NULL;
+  free(uids);
+  mc_album_list_free(albums);
+  return list;
+}
+
+static mc_track_list *tracks_of(playback_what what, const char *uid) {
+  mc_track_list *list = NULL;
+  mc_status st = MC_ERR_NOT_FOUND;
+  switch (what) {
+    case PLAYBACK_TRACK: st = mc_library_get_track(s.lib, uid, &list); break;
+    case PLAYBACK_ALBUM: st = mc_library_list_album_tracks(s.lib, uid, &list); break;
+    case PLAYBACK_ARTIST: st = mc_library_list_artist_tracks(s.lib, uid, &list); break;
+    case PLAYBACK_PLAYLIST: st = mc_library_list_playlist_tracks(s.lib, uid, &list); break;
+    case PLAYBACK_SMART_PLAYLIST: st = mc_library_list_smart_tracks(s.lib, uid, &list); break;
+    case PLAYBACK_GROUP: return group_tracks(uid, FALSE);
+    case PLAYBACK_SMART_GROUP: return group_tracks(uid, TRUE);
+  }
+  return st == MC_OK ? list : NULL;
+}
+
+void playback_add(playback_what what, const char *uid, const wchar_t *name, BOOL next) {
+  if (!s.lib || !uid || !ensure_player()) return;
+  mc_track_list *list = tracks_of(what, uid);
+  mc_up_next_track *tracks = list && list->count ? calloc((size_t)list->count, sizeof *tracks) : NULL;
+  int count = 0;
+  for (int i = 0; tracks && i < list->count; i++) {
+    const mc_track_info *t = &list->items[i];
+    if (t->path) tracks[count++] = (mc_up_next_track){t->path, t->uid, t->title, t->artist, t->duration_ms};
+  }
+  if (count) {
+    /* The second line of a block's row: what it is, or with none given, its tracks left. */
+    static const struct {
+      mc_play_context context;
+      int kind; /* a string for the second line, or 0 */
+    } k_whats[] = {[PLAYBACK_TRACK] = {MC_PLAY_CONTEXT_MANUAL, 0},
+                   [PLAYBACK_ALBUM] = {MC_PLAY_CONTEXT_ALBUM, 0},
+                   [PLAYBACK_ARTIST] = {MC_PLAY_CONTEXT_ARTIST, 0},
+                   [PLAYBACK_PLAYLIST] = {MC_PLAY_CONTEXT_PLAYLIST, MC_STR_PLAYLIST},
+                   [PLAYBACK_SMART_PLAYLIST] = {MC_PLAY_CONTEXT_PLAYLIST, MC_STR_SMART_PLAYLIST},
+                   [PLAYBACK_GROUP] = {MC_PLAY_CONTEXT_ALBUM_GROUP, MC_STR_ALBUM_GROUP},
+                   [PLAYBACK_SMART_GROUP] = {MC_PLAY_CONTEXT_ALBUM_GROUP, MC_STR_ALBUM_GROUP}};
+    char *title = what != PLAYBACK_TRACK && !s.queue_tracks && name ? wstr_to_utf8(name) : NULL;
+    char *credit = title && what == PLAYBACK_ALBUM ? album_credit(uid) : NULL;
+    const char *artist = credit ? credit : title && k_whats[what].kind ? mc_str((enum mc_str_id)k_whats[what].kind) : NULL;
+    mc_up_next_add add = {tracks, count, title, artist, k_whats[what].context,
+                          what == PLAYBACK_TRACK ? NULL : uid};
+    if ((next ? mc_player_play_next(s.player, &add) : mc_player_play_last(s.player, &add)) == MC_OK)
+      now_playing_flash(mc_wstr(MC_STR_WINDOWS_QUEUE_ADDED));
+    free(title);
+    free(credit);
+    refresh();
+  } else {
+    now_playing_notice(mc_wstr(MC_STR_WINDOWS_QUEUE_NOTHING_HERE));
+  }
+  free(tracks);
+  mc_track_list_free(list);
 }

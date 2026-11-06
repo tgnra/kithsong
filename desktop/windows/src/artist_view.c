@@ -1119,7 +1119,7 @@ static void request_add(const char *track_uid, BOOL here, const char *playlist_u
   notify(ARN_ADD_TO_PLAYLIST, FALSE);
 }
 
-/* Single i's menu, at pt (screen coordinates): Add to Playlist, Start radio, Edit... and Delete from
+/* Single i's menu, at pt (screen coordinates): Add to Playlist, Play Next, Play Last, Start radio, Edit... and Delete from
  * Library, as a track's in the track list, and Go to Artist when it's credited to someone else. A single has
  * no album page to go to. */
 static void single_menu(int i, POINT pt) {
@@ -1133,9 +1133,9 @@ static void single_menu(int i, POINT pt) {
   HMENU add = add_to_playlist_menu(v.lib, CMD_PLAYLIST_FIRST, CMD_NEW_PLAYLIST, &lists);
   if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, mc_wstr_mnemonic(MC_STR_ADD_TO_PLAYLIST));
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-  /* Greyed out until there's a play queue to add to (see TODO.md, Playback). */
-  AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING | MF_GRAYED, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
+  UINT queue = here ? 0 : MF_GRAYED;
+  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_NEXT));
+  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_WINDOWS_PLAY_LAST));
   char seed[MC_UID_STRLEN];
   radio_menu_append_track(menu, CMD_START_RADIO, v.lib, uid, seed);
   if (artist[0] && strcmp(artist, v.open_uid)) {
@@ -1153,6 +1153,8 @@ static void single_menu(int i, POINT pt) {
   mc_playlist_list_free(lists);
   if (cmd == CMD_NEW_PLAYLIST) {
     request_add(uid, here, NULL);
+  } else if (cmd == CMD_PLAY_NEXT || cmd == CMD_PLAY_LAST) {
+    playback_add(PLAYBACK_TRACK, uid, NULL, cmd == CMD_PLAY_NEXT);
   } else if (cmd == CMD_START_RADIO) {
     playback_play_radio(seed);
   } else if (cmd == CMD_DELETE_TRACK) {
@@ -1176,7 +1178,7 @@ static void album_menu(int i, POINT pt) {
   if (item_menu_album(&o) == ITEM_MENU_CHANGED) notify(ARN_LIBRARY_CHANGED, TRUE);
 }
 
-/* WM_CONTEXTMENU: Start radio, Edit..., then Remove from This PC... or Sync to This PC where they
+/* WM_CONTEXTMENU: Play Next, Play Last, Start radio, Edit..., then Remove from This PC... or Sync to This PC where they
  * apply (an artist can't be deleted from the library), for the row under the pointer (from the
  * keyboard, lp -1, the focused row), or anywhere on an artist's page for that artist; but on an
  * album, the album's menu, and on a single, the single's. */
