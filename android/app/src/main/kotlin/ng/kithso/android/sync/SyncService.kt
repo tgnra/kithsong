@@ -42,6 +42,8 @@ class SyncService : Service() {
     private val scope = MainScope()
     private var wakeLock: PowerManager.WakeLock? = null
     private var foreground = false
+    // What the notification last said, for leaving it alone until that changes.
+    private var shown: List<Any?>? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -70,7 +72,12 @@ class SyncService : Service() {
                     } else {
                         // Renewed as sync goes on, so a long file transfer keeps it.
                         lock.acquire(WAKE_LOCK_TIMEOUT_MS)
-                        NotificationManagerCompat.from(this@SyncService).notifyIfAllowed(notification(status))
+                        val notification = notification(status)
+                        val says = notification.says()
+                        if (says != shown) {
+                            shown = says
+                            NotificationManagerCompat.from(this@SyncService).notifyIfAllowed(notification)
+                        }
                     }
                 }
             }
@@ -149,6 +156,16 @@ class SyncService : Service() {
         }
         return builder.build()
     }
+
+    // Its text and buttons, and whether its bar is a moving one. The bar's place alone doesn't
+    // count: during a file that changes twice a second.
+    private fun Notification.says(): List<Any?> = listOf(
+        extras.getCharSequence(Notification.EXTRA_TITLE)?.toString(),
+        extras.getCharSequence(Notification.EXTRA_TEXT)?.toString(),
+        extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE),
+        extras.getInt(Notification.EXTRA_PROGRESS_MAX) > 0,
+        actions?.size ?: 0,
+    )
 
     private fun openApp() = PendingIntent.getActivity(
         this,
