@@ -62,6 +62,13 @@ fun CoreSync.excludeItem(deviceUid: String, kind: ProfileItemKind, uid: String, 
     SyncHereNatives.nativeExclude(handle, deviceUid, kind.code(), uid, on)
 
 /**
+ * Select all ([on]) or Select none under What to sync: [uids] of [kind], in one write. Select all
+ * leaves out what's removed from the device (mc_sync_select_items). Store pending edits first.
+ */
+fun CoreSync.selectItems(deviceUid: String, kind: ProfileItemKind, uids: List<String>, on: Boolean) =
+    SyncHereNatives.nativeSelect(handle, deviceUid, kind.code(), uids.toTypedArray(), on)
+
+/**
  * Whether deletes here go to the recycle bin ([CoreLibrary.deleteToBin]): in a group, and not
  * an archive, as for [removeHere].
  */
@@ -92,6 +99,7 @@ internal object SyncHereNatives {
     @JvmStatic external fun nativeRemove(handle: Long, kind: Int, uid: String): IntArray
     @JvmStatic external fun nativeRestore(handle: Long, kind: Int, uid: String)
     @JvmStatic external fun nativeExclude(handle: Long, deviceUid: String, kind: Int, uid: String, on: Boolean)
+    @JvmStatic external fun nativeSelect(handle: Long, deviceUid: String, kind: Int, uids: Array<String>, on: Boolean)
     @JvmStatic external fun nativeBinOffered(handle: Long): Boolean
     @JvmStatic external fun nativeBinCount(handle: Long): Int
     @JvmStatic external fun nativeBinRestore(handle: Long, id: Long): Int

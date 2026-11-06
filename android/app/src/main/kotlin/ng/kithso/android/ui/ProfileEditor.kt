@@ -326,7 +326,18 @@ fun ProfileSection(device: SyncDevice, isSelf: Boolean, syncer: Syncer) {
                     edit { copy(items = items + (item to on)) }
                 }
             },
-            onSelect = { shown, on -> edit { copy(items = items + shown.associateWith { on }) } },
+            onSelect = { shown, on ->
+                val pending = edits
+                edits = ProfileEdits.None
+                scope.launch {
+                    message = try {
+                        stored = syncer.selectItems(uid, pending::applyTo, shown.first().kind, shown.map { it.uid }, on)
+                        null
+                    } catch (e: MusicCoreException) {
+                        resources.getString(R.string.profile_save_failed, statusText(context, e.status))
+                    }
+                }
+            },
             onDismiss = { picking = false },
             syncer = syncer,
         )
@@ -474,9 +485,9 @@ private fun MakeArchiveDialog(
 /**
  * Choosing what a profile selects, full screen: the library's albums, artists, playlists and
  * album groups under tabs, ticked if [selected]. Each tick calls [onToggle] at once. Select
- * all and Select none call [onSelect] once with the rows of the tab shown; Select all leaves
- * out what's [removed] from the device, which only a tick brings back, and neither touches
- * Sync everything. With [syncAll] it's albums and artists, ticked but what's [removed], with
+ * all and Select none call [onSelect] once with the rows of the tab shown, and the core
+ * (mc_sync_select_items) leaves out of Select all what's [removed] from the device, which only
+ * a tick brings back; neither touches Sync everything. With [syncAll] it's albums and artists, ticked but what's [removed], with
  * neither button: playlists and groups would select nothing more.
  */
 @Composable
@@ -538,15 +549,13 @@ private fun ProfileItemsDialog(
                 val list = choices?.let { kind.choicesIn(it) }
                 if (!list.isNullOrEmpty()) {
                     val shown = remember(list, kind) { list.map { ProfileItem(kind, it.uid) } }
-                    val addable = remember(shown, selected, removed) {
-                        shown.filter { it !in selected && it !in removed }
-                    }
+                    val addable = remember(shown, selected, removed) { shown.any { it !in selected && it !in removed } }
                     if (!syncAll) {
                         Row(
                             horizontalArrangement = Arrangement.End,
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                         ) {
-                            TextButton(onClick = { onSelect(addable, true) }, enabled = addable.isNotEmpty()) {
+                            TextButton(onClick = { onSelect(shown, true) }, enabled = addable) {
                                 Text(stringResource(R.string.select_all))
                             }
                             TextButton(onClick = { onSelect(shown, false) }, enabled = shown.any { it in selected }) {

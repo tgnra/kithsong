@@ -4,6 +4,7 @@
 #include <jni.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "jni_bridge.h"
 #include "musiccore/musiccore.h"
@@ -131,6 +132,38 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_SyncHereNatives_nativeExclude(JNIEnv 
     if (st != MC_OK) throw_status(env, st);
   }
   if (cdevice) (*env)->ReleaseStringUTFChars(env, device_uid, cdevice);
+}
+
+/* Select all or Select none under What to sync, on the rows shown. */
+JNIEXPORT void JNICALL Java_ng_kithso_core_SyncHereNatives_nativeSelect(JNIEnv *env, jclass cls, jlong handle,
+                                                                      jstring device_uid, jint kind, jobjectArray uids,
+                                                                      jboolean on) {
+  (void)cls;
+  jsize count = (*env)->GetArrayLength(env, uids);
+  char (*cuids)[MC_UID_STRLEN] = calloc(count ? (size_t)count : 1, sizeof *cuids);
+  if (!cuids) {
+    throw_status(env, MC_ERR_NOMEM);
+    return;
+  }
+  for (jsize i = 0; i < count; i++) {
+    jstring uid = (*env)->GetObjectArrayElement(env, uids, i);
+    const char *cuid = uid ? (*env)->GetStringUTFChars(env, uid, NULL) : NULL;
+    if (!cuid) {
+      free(cuids);
+      return;
+    }
+    snprintf(cuids[i], MC_UID_STRLEN, "%s", cuid);
+    (*env)->ReleaseStringUTFChars(env, uid, cuid);
+    (*env)->DeleteLocalRef(env, uid);
+  }
+  const char *cdevice = (*env)->GetStringUTFChars(env, device_uid, NULL);
+  if (cdevice) {
+    mc_status st = mc_sync_select_items(jni_sync_of(handle), cdevice, (mc_profile_item_kind)kind,
+                                        (const char(*)[MC_UID_STRLEN])cuids, count, on ? 1 : 0);
+    (*env)->ReleaseStringUTFChars(env, device_uid, cdevice);
+    if (st != MC_OK) throw_status(env, st);
+  }
+  free(cuids);
 }
 
 /* The recycle bin (musiccore/delete.h): whether deletes here go to it. */

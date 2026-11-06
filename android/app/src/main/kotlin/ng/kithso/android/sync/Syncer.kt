@@ -25,6 +25,7 @@ import ng.kithso.core.SyncProfile
 import ng.kithso.core.SyncWaiting
 import ng.kithso.core.VerifyResult
 import ng.kithso.core.excludeItem as coreExcludeItem
+import ng.kithso.core.selectItems as coreSelectItems
 import ng.kithso.core.hereState as coreHereState
 import ng.kithso.core.herePreview as coreHerePreview
 import ng.kithso.core.hereTakesAny as coreHereTakesAny
@@ -463,6 +464,26 @@ class Syncer(
         // The core passes it on by itself too; this just makes sure it's soon.
         sync.notifyChanged()
         // A member's name is its profile's.
+        refreshLists(sync)
+        sync.profile(uid)
+    }
+
+    /**
+     * Select all ([on]) or Select none: [uids], the items of [kind] the editor shows, after
+     * [edit], what's waiting to be stored. Returns the profile as it now reads.
+     */
+    suspend fun selectItems(
+        uid: String,
+        edit: (SyncProfile) -> SyncProfile,
+        kind: ProfileItemKind,
+        uids: List<String>,
+        on: Boolean,
+    ): SyncProfile = onCore { sync ->
+        val stored = sync.profile(uid)
+        val edited = edit(stored)
+        if (edited != stored) sync.setProfile(uid, edited)
+        sync.coreSelectItems(uid, kind, uids, on)
+        sync.notifyChanged()
         refreshLists(sync)
         sync.profile(uid)
     }
