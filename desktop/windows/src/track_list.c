@@ -96,7 +96,7 @@ static struct {
   wchar_t *artist;     /* NULL if unknown */
   int year;            /* 0 if unknown */
   BOOL mix;            /* a continuous mix: the summary says so */
-  int total_ms;        /* the tracks' length */
+  int64_t total_ms;    /* the tracks' length; one not known adds nothing */
   wchar_t summary[128]; /* "1997 · 12 tracks · 47 min" */
   wchar_t *cover_dir;  /* NULL if the album has no cover; a playlist's picture file */
   HBITMAP art;         /* the cover, premultiplied, with rounded corners; NULL shows the placeholder */
@@ -439,7 +439,7 @@ static void end_drag(void);
 
 /* "1997 · 12 tracks · 47 min", and for a continuous mix "1997 · Continuous mix · 12 tracks..." */
 static void make_summary(void) {
-  int n = s.count, min = (s.total_ms + 30000) / 60000, count = 0;
+  int n = s.count, count = 0;
   char parts[4][64];
   if (s.year > 0) snprintf(parts[count++], 64, "%d", s.year);
   if (s.mix) snprintf(parts[count++], 64, "%s", mc_str(MC_STR_EDIT_MIX));
@@ -447,8 +447,8 @@ static void make_summary(void) {
     snprintf(parts[count++], 64, "%s", mc_str(MC_STR_NO_TRACKS));
   } else {
     mc_format(parts[count++], 64, mc_str_plural(MC_STR_TRACKS, n), MC_D(n));
-    if (min >= 60) mc_format(parts[count++], 64, mc_str(MC_STR_DURATION_HOURS_MINUTES), MC_D(min / 60), MC_D(min % 60));
-    else mc_format(parts[count++], 64, mc_str(MC_STR_DURATION_MINUTES), MC_D(min));
+    mc_format_playing_time(parts[count], 64, s.total_ms);
+    if (parts[count][0]) count++; /* else no track's length is known */
   }
   char text[256];
   size_t len = 0;
@@ -536,7 +536,8 @@ static void show(mc_library *lib, const char *uid, const wchar_t *title, BOOL pl
     else if (artist) mc_library_list_artist_tracks(lib, uid, &list);
     else mc_library_list_album_tracks(lib, uid, &list);
   }
-  int n = list ? list->count : 0, total_ms = 0;
+  int n = list ? list->count : 0;
+  int64_t total_ms = 0;
   BOOL discs = FALSE;
   for (int i = 0; i < n; i++) discs |= list->items[i].disc_no > 1;
   s.rows = n ? calloc((size_t)n, sizeof *s.rows) : NULL;

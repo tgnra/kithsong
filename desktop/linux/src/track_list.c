@@ -780,21 +780,18 @@ GtkWidget *track_list_new(const track_list_callbacks *cb) {
 }
 
 /* "1997 · 12 tracks · 47 min", and for a continuous mix "1997 · Continuous mix · 12 tracks..." */
-static void set_summary(int year, gboolean mix, int count, int total_ms) {
+static void set_summary(int year, gboolean mix, int count, gint64 total_ms) {
   GString *str = g_string_new(NULL);
   char part[64];
   if (year > 0) g_string_append_printf(str, "%d%s", year, mc_str(MC_STR_SEPARATOR_DOT));
   if (mix) g_string_append_printf(str, "%s%s", mc_str(MC_STR_EDIT_MIX), mc_str(MC_STR_SEPARATOR_DOT));
-  int min = (total_ms + 30000) / 60000;
   if (!count) {
     g_string_append(str, mc_str(MC_STR_NO_TRACKS));
   } else {
     mc_format(part, sizeof part, mc_str_plural(MC_STR_TRACKS, count), MC_D(count));
     g_string_append(str, part);
-    g_string_append(str, mc_str(MC_STR_SEPARATOR_DOT));
-    if (min >= 60) mc_format(part, sizeof part, mc_str(MC_STR_DURATION_HOURS_MINUTES), MC_D(min / 60), MC_D(min % 60));
-    else mc_format(part, sizeof part, mc_str(MC_STR_DURATION_MINUTES), MC_D(min));
-    g_string_append(str, part);
+    mc_format_playing_time(part, sizeof part, total_ms);
+    if (*part) g_string_append_printf(str, "%s%s", mc_str(MC_STR_SEPARATOR_DOT), part); /* else no track's length is known */
   }
   gtk_label_set_text(GTK_LABEL(s.summary), str->str);
   g_string_free(str, TRUE);
@@ -822,7 +819,8 @@ void track_list_show(mc_library *lib, AlbumItem *album) {
          : album->is_playlist ? mc_library_list_playlist_tracks(lib, album->uid, &list)
                               : mc_library_list_album_tracks(lib, album->uid, &list);
   if (st != MC_OK) list = NULL;
-  int n = list ? list->count : 0, total_ms = 0;
+  int n = list ? list->count : 0;
+  gint64 total_ms = 0;
   gboolean discs = FALSE, playable = FALSE;
   for (int i = 0; i < n; i++) discs |= list->items[i].disc_no > 1;
   TrackItem **items = g_new0(TrackItem *, (gsize)n + 1);
