@@ -244,6 +244,26 @@ static void test_bad_seed(mc_player *player, const char *dir) {
   CHECK(mc_player_stop_radio(NULL) == MC_ERR_INVALID_ARG);
 }
 
+/* A station that starts from another track than its seed: that track is first in the queue and
+ * doesn't come again straight after. */
+static void test_from_start(mc_player *player, const char *dir) {
+  char path[1200], uid[MC_UID_STRLEN];
+  seed_path(path, sizeof path, dir, "t05");
+  CHECK(mc_player_play_station(player, dir, path, "t05", NULL) == MC_ERR_INVALID_ARG);
+  CHECK(mc_player_play_station(player, dir, path, "t05", "t00") == MC_OK);
+  CHECK(mc_player_pause(player) == MC_OK);
+  CHECK(wait_for_count(player, AHEAD + 1, 10000));
+  CHECK(mc_player_queue_uid(player, 0, uid) == MC_OK);
+  CHECK_STR(uid, "t05");
+  for (int i = 1; i <= AHEAD; i++) {
+    CHECK(mc_player_queue_uid(player, i, uid) == MC_OK);
+    CHECK(strcmp(uid, "t05"));
+  }
+  CHECK(mc_player_stop_radio(player) == MC_OK);
+  CHECK(wait_for_no_radio(player, 10000));
+  take_all_ended(player);
+}
+
 /* Freed while it's still reading the library, it neither hangs nor crashes. */
 static void test_free_while_loading(const char *dir) {
   char path[1200];
@@ -398,6 +418,7 @@ int main(int argc, char **argv) {
   if (!player) return TEST_RESULT();
   test_tops_up(player, dir);
   test_bad_seed(player, dir);
+  test_from_start(player, dir);
 
   /* Anything more needs sound to come out. */
   char path[1200];

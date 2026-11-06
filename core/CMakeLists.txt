@@ -87,6 +87,7 @@ add_library(musiccore STATIC
   src/analysis/loudness.c
   src/analysis/scanner.c
   src/analysis/timbre.c
+  src/radio/groups.c
   src/radio/radio.c
   src/radio/stations.c
   src/radio/seeds.c

@@ -342,7 +342,7 @@ static void play_queue(const playback_track *tracks, int count, int start, mc_pl
   s.count = count;
   s.index = s.announced = -1; /* show the track afresh even if it's the same item number */
 
-  if (radio) mc_player_play_radio(s.player, mc_library_dir(s.lib), paths[0], uids[0]);
+  if (radio) mc_player_play_station(s.player, mc_library_dir(s.lib), paths[0], uids[0], context_uid);
   else mc_player_set_queue(s.player, paths, count, start, &(mc_play_origin){uids, context, context_uid});
   g_free(paths);
   g_free(uids);
@@ -364,25 +364,34 @@ static void radio_failed(void) {
   if (s.radio_failed) s.radio_failed(s.user);
 }
 
-void playback_play_radio(const char *seed_track_uid) {
-  if (!s.lib || !seed_track_uid) return;
+/* Plays station seed from the track start. FALSE if it can't, with nothing changed. */
+static gboolean start_station(const char *seed, const char *start) {
   mc_track_list *list = NULL;
-  if (!playback_can_radio(seed_track_uid) || mc_library_get_track(s.lib, seed_track_uid, &list) != MC_OK) {
-    radio_failed();
-    return;
-  }
+  if (!playback_can_radio(start) || mc_library_get_track(s.lib, start, &list) != MC_OK) return FALSE;
   const mc_track_info *t = &list->items[0];
   playback_track track = {t->uid, t->path, t->title, t->artist, t->album, t->cover_dir, t->duration_ms};
   /* The seed check only asks the database: a file that's gone would be skipped without a word. */
-  if (t->path && g_file_test(t->path, G_FILE_TEST_EXISTS)) {
-    play_queue(&track, 1, 0, MC_PLAY_CONTEXT_RADIO, t->uid, TRUE);
+  gboolean playable = t->path && g_file_test(t->path, G_FILE_TEST_EXISTS);
+  if (playable) {
+    play_queue(&track, 1, 0, MC_PLAY_CONTEXT_RADIO, seed, TRUE);
     /* Now, as opening an album is: the play log's row only comes once the seed has ended. */
-    if (mc_library_record_opened(s.lib, MC_RECENT_STATION, t->uid) == MC_OK && s.recents_changed)
+    if (mc_library_record_opened(s.lib, MC_RECENT_STATION, seed) == MC_OK && s.recents_changed)
       s.recents_changed(s.user);
-  } else {
-    radio_failed();
   }
   mc_track_list_free(list);
+  return playable;
+}
+
+void playback_play_station(const char *seed_track_uid, const char *start_uid) {
+  if (!s.lib || !seed_track_uid) return;
+  char seed[MC_UID_STRLEN]; /* it can be the queue's own, which playing frees */
+  g_strlcpy(seed, seed_track_uid, sizeof seed);
+  if (start_uid && start_uid[0] && start_station(seed, start_uid)) return;
+  if (!start_station(seed, seed)) radio_failed();
+}
+
+void playback_play_radio(const char *seed_track_uid) {
+  playback_play_station(seed_track_uid, NULL);
 }
 
 void playback_set_shuffle(gboolean on) {

@@ -516,14 +516,16 @@ nearest neighbours, for a person to judge.
 
 Radio ([`radio.h`](../core/include/musiccore/radio.h)) picks from these results: a fixed mix with
 `mc_radio_make()`, or a station that goes on for as long as it's asked (`mc_radio_station_open()`).
-Candidates have a result of this version and a file on this device, and aren't in a continuous mix.
+Candidates have a result of this version and a file on this device, aren't in a continuous mix, and
+are of the seed's group (see [Radio stations](#radio-stations)).
 They run from a minute up to `max_track_ms`, 8 minutes unless it says, negative for no limit; a
 duration of 0 or none is unknown and counts against a track neither way. A seed has to be a
 candidate too. A station reads them once and then never touches the library, so it doesn't see
 what changes later, but for the skips it's told of (see below). It plays every candidate once
 before anything comes back, and then holds back its latest picks (half the pool, 64 at most).
 
-`mc_player_play_radio()` plays a station: the seed starts at once, and a thread of the player's
+`mc_player_play_radio()` plays a station from its seed, and `mc_player_play_station()` from another
+track: that track starts at once, and a thread of the player's
 loads the station on its own connection and keeps 5 tracks queued ahead of the current one. Rows
 in the play log have the context `radio` and the seed as `context_uid`. The station ends when
 something replaces the queue, when the library closes (`mc_player_stop_radio()`) or after 8 items
@@ -546,6 +548,11 @@ seed, for a while. Picks elsewhere don't change, nor does anything outside radio
 
 It's worked out from `play_events` each time a mix or station starts, so nothing new is stored:
 it syncs with the rows, a skip on one device teaches the others, and there's nothing to migrate.
+
+A station that starts from another track than its seed (see [Radio stations](#radio-stations)) learns
+as any other does: its rows have the seed as `context_uid`, and it's the seed that's compared with
+other seeds. So it knows what it was told wherever it starts, and that first track can be skipped
+like any other.
 
 **What counts.** A row whose `context` is `radio`, with `context_uid` as the seed, `ended` as
 `skipped`, and `listened_ms` from 3 up to 30 seconds.
@@ -616,67 +623,90 @@ log and the rest all 32 passes. The seed is already playing by then.
 ### Radio stations
 
 `mc_radio_stations_list()` ([`radio_stations.h`](../core/include/musiccore/radio_stations.h), the
-code in `core/src/radio/stations.c`) picks the seed tracks of the Home page's Radio row. Nothing
-is stored, so there's no schema to it: it's worked out again each time the page loads, from
-`track_analysis`, `track_plays` and `play_events`.
+code in `core/src/radio/stations.c` and `groups.c`) makes the Home page's Radio row: one station
+for each kind of music the analysis finds in the library, so a library of two kinds has two
+stations. Nothing is stored, so there's no schema to it: it's worked out again each time the page
+loads, from `track_analysis`, `track_plays` and `play_events`.
 
-A track can be a seed if it can be in a mix: it has a result of this version and a file here, it
-isn't part of a continuous mix, and it's from 60 seconds to 8 minutes long.
+A track counts if it can be in a mix: it has a result of this version and a file here, it isn't
+part of a continuous mix, and it's from 60 seconds to 8 minutes long. So a phone holding part of a
+library divides what it holds, and tracks not analysed yet aren't in any group. Under 25 such tracks
+there are no stations, and the row is left out.
 
-How many stations there are:
+**Finding the kinds.** Up to 1,024 tracks are drawn by a hash of the uid alone and compared with each
+other on the library's scales.
 
-| Eligible tracks | At most |
-|-----------------|---------|
-| under 25 | none, and the row is left out |
-| 25 | 1 |
-| 50 | 2 |
-| 100 | 3 |
-| 200 | 4 |
-| 400 | 5 |
-| 800 | 6 |
-| 1,600 | 7 |
-| 3,200 and up | 8 |
+1. **Who has company.** A track further from its neighbours (the eighth nearest in the library, in
+   proportion in a sample) than 1.5 times the median track is, and than 0.7, is left out of the
+   next step. In a real library those were an intro and a noise track, which would each pull a
+   group to themselves. The 0.7 keeps a loose genre beside a tight one from being left out whole.
+2. **Dividing.** k-medoids for each count from 2 up to 8, or as many as the library has room for,
+   from a start spread out by farthest-point selection. It's k-medoids because distances are all
+   there is to go on, and because a centre is then a real track.
+3. **Choosing.** The count with the highest mean silhouette, which says how much nearer each track
+   is to its own group than to the next, from 0 to 1. It has to reach 0.22, or the library is one
+   kind, unless a count of 12 to 32 reaches it: 8 centres can't fit a library of 30 kinds however
+   plain they are, so that keeps its best count up to 8. Two centres under 0.6 apart on the fixed
+   scales rule a count out, as the library's own
+   scales put any library's tracks about 1 apart however alike they sound. So does a group under 12
+   tracks, about an album, or under 2% of the library, an odd album in a big one being no kind of
+   music of its own.
+4. **Belonging.** Every track, left out or not, goes to its nearest centre. A group that comes to too
+   few tracks across the library is let go, its tracks going to the next nearest.
 
-That's an upper limit. The other is how spread out the library is: two seeds must be at least 0.6
-apart on the fixed scales (`mc_analysis_distance()` with no stats), and when nothing left is that
-far from all the seeds so far, there are no more stations. It has to be the fixed scales, as the
-library's own put any library's tracks about 1 apart, however alike they all sound. The 0.6 comes
-from a real library of 700 tracks, where two tracks of one album were 0.51 apart at the median and
-any two tracks 0.62. Like the distance's weights it hasn't been tuned by ear.
+The 0.22 comes from one real library of 1,026 such tracks, which divided into 863 and 163 at 0.36, and
+each of whose two groups, as a library by itself, scored 0.14 and 0.19. Cut into 12 or more it never
+passed 0.09, where 30 made-up sounds reached 0.48. The 0.6 comes from that
+library at 700 tracks, where two tracks of one album were 0.51 apart at the median and any two 0.62.
+Like the distance's weights, neither has been tuned by ear. There are never more than 8 stations,
+which a library of more kinds than that shares out among the 8.
 
-Choosing takes three steps:
+**No overlap.** Each track belongs to exactly one group, so a track is on one station. One between two
+groups belongs to the nearer of them, the first of two as near. It can play there like any other,
+since it's music the library holds, but it's never where a station starts, nor what one is named
+after: for that a track has to be typical of its group, within 80% of the distance to the next
+centre, and no further from its own than 1.5 times the group's median (0.45 at the least). In that
+real library 89% and 58% of the two groups' tracks were.
 
-1. **Who has company.** Up to 1,024 tracks are drawn by a hash of the uid and the day, and compared
-   with each other on the library's scales. A track further from its neighbours (the eighth
-   nearest in the library, in proportion in a sample) than 1.5 times the median track is, and than
-   0.7, can't be a seed. Farthest-point selection goes straight for such tracks otherwise: in that
-   real library it chose an intro and a noise track, and a mix from one is nothing like it from the
-   second track on. The 0.7 keeps a loose genre beside a tight one from being left out whole.
-2. **Spreading out.** Farthest-point selection over the rest of the sample, starting from the most
-   played track there, the hash deciding among equals.
-3. **Settling.** Each seed may then move to any track of the library within 0.45 of it, on the
-   library's scales, that stays 0.6 from the other seeds. It moves to an artist no other station
-   has, then to a track with a cover, then to what's been played most, counted in doublings. So
-   being distinct comes first, and plays only choose among tracks that sound about the same.
+A station only draws from its seed's group, on the library's scales as ever. That's true of every
+station and mix, so one started from a track's menu keeps to that track's kind too. In a library of
+one kind, or one with too little analysed to have groups, that's the whole library, as is a seed
+that has no group. A station reads the groups when it opens, off the UI thread, after the seed has
+started.
 
-The stations are shown most played first. A station is named after its seed's first artist with
-`home_station`, or after the seed's title if it has no artist. Its sub line is `home_station_sub`;
-stations of one name say instead what they're like, by the seed's title, and its album if the
-titles match too. A station that would still read the same as another is dropped. The cover is
-that of the seed's album, or else the artist's usual picture.
+**The seed.** Each station has a seed, which is what it is: it names the station, and it's what its
+Recents row and its plays go by. It starts as its group's centre, and may move to any track of the
+group that's typical of it and within 0.45 of the centre, on the library's scales. It moves to an
+artist no other station has, then to a track with a cover, then to what's been played most, counted
+in doublings. The stations are shown most played first.
 
-**Staying put.** The sample, the tie-breaks and the plays all go by the start of the local day.
-Plays are `track_plays` less the `play_events` of 30 seconds or more since then, as `track_plays`
-has no history of its own. So reloading Home, and playing music, changes nothing until the next
-day, when the seeds may move, which keeps a library that's rarely played from showing the same
-stations for ever. Results arriving, or tracks being imported or deleted, can change the stations
-during the day, as the scanner does for hours on a new library.
+A station is named after its seed's first artist with `home_station`, or after the seed's title if
+it has no artist. Its sub line is `home_station_sub`; stations of one name say instead what they're
+like, by the seed's title, and its album if the titles match too. A station that would still read
+the same as another is dropped. The cover is that of the seed's album, or else the artist's usual
+picture.
 
-`core/tests/manual_stations <library folder>` prints a library's stations and how long they took,
-`--days <n>` the next days' too. `--make <tracks>` fills an empty folder with a made-up library to
-time. In a release build a made-up library of 50,000 tracks took about 0.7 seconds on Home's own
-background thread, and several times that with the machine busy. Of that about 300 ms is the query,
-140 ms the sample, whatever the library's size, and 40 ms settling.
+**The start.** Each listing also draws `start_track` for each station, at random from the tracks
+typical of its group, so a station starts somewhere else each time. The frontend passes it with the
+seed to `mc_player_play_station()`, or `mc_radio_options.start_track` does: it's the first pick, and
+what the mix is measured from, while the seed goes on deciding the group and what skips apply. Home
+is reloaded after a station starts, which draws the next one, and Android lists again. A start that
+can't be played falls back to the seed. A station in Recents starts from its seed on the desktops,
+as its tile says what it's like by that track.
+
+**Staying put.** What a library divides into depends only on the results, and not on the day, the
+plays or the order they're read in. So working it out again gives the same groups, and there's no
+need to keep them: a station plays the same music every day, until results arrive or tracks are
+imported or deleted, as the scanner does for hours on a new library. Then a group can move, which
+goes unseen unless the count changes. The seed goes by plays as of the start of the local day and
+ties go by a hash of the uid and the day. Plays are `track_plays` less the `play_events` of 30 seconds
+or more since then, as `track_plays` has no history of its own. So reloading Home, and playing
+music, changes no seed until the next day, when a seed may move, which keeps a library that's rarely
+played from showing the same names for ever.
+
+`core/tests/manual_stations <library folder>` prints what a library divides into, how clearly each
+count did, its stations and how long they took, `--days <n>` the next days' too. `--make <tracks>`
+fills an empty folder with a made-up library to time.
 
 The menus of a track, album or artist start a station from one track. For an album or artist that's
 `mc_radio_seed_for_album()` or `mc_radio_seed_for_artist()`
@@ -862,13 +892,16 @@ A station has no moment of being opened that the core sees, as a page has: `mc_l
 writes its row, in the same transaction as the [play log](#play-log) row of the station's seed
 (context `radio`, `track_uid` equal to `context_uid`, and not `failed`), unless this device's row
 before it is the same station's and ended `finished` or `skipped`: a station comes back round to
-its seed, and that isn't a new start. So a station goes in when its first track ends, and the
+its seed, and that isn't a new start. So a station from its seed goes in when its first track ends, and the
 rest of its tracks write nothing here: it plays on without filling the changelog, and Remove from
 Recents holds while it does. That row is stamped like an open,
 except one ended by `replaced`. It arrives after whatever replaced it was recorded, so it keeps
 its `started_ms` and only moves the row forward, or the station would go above what ended it,
 and then `opened_ms` isn't the wall-clock part of its hlc. A
 station's name isn't stored: it's made from its seed when listed, as the Home page's stations are.
+A station that starts from another track has no such row until its seed comes round, which then
+changes nothing: it goes by the frontend's `mc_library_record_opened()` on starting it, which every
+frontend calls for any station.
 
 Stations are only listed with `MC_LIST_STATIONS`, and with `MC_LIST_PLAYABLE` only if the seed
 has a `files` row here, as there's nothing to start one from otherwise. Android passes both.

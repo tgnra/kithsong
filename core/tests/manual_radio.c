@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
   }
 
   mc_radio_pick *picks = malloc((size_t)count * sizeof *picks);
-  mc_radio_options opts = {NULL, count, random, 0, max_track_ms};
+  mc_radio_options opts = {NULL, count, random, 0, max_track_ms, NULL};
   int n = 0;
   if (!picks)
     st = MC_ERR_NOMEM;

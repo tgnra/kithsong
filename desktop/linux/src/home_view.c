@@ -40,6 +40,7 @@ typedef struct tile {
   gboolean smart; /* a smart playlist or group */
   char uid[MC_UID_STRLEN];
   char seed[MC_UID_STRLEN]; /* a station's seed track, which is what tells them apart */
+  char start[MC_UID_STRLEN]; /* where a station of the Radio row starts this time */
   char *artist;  /* the line under its title */
   char *cover;   /* the file showing, or on its way; NULL for none */
   gint64 cover_mtime;
@@ -85,6 +86,7 @@ static struct {
   GSimpleAction *play;                 /* a station's, enabled if it can */
   GActionGroup *actions;               /* the menus' "home." actions */
   char menu_uid[MC_UID_STRLEN];        /* the tile's, or a station's seed, as the recents know it */
+  char menu_start[MC_UID_STRLEN];      /* where a station of the Radio row starts this time */
   char *menu_title;
   gboolean menu_smart;
 } v;
@@ -142,9 +144,10 @@ static void on_tile_clicked(GtkButton *button, gpointer user) {
   (void)button;
   tile *t = user;
   if (t->station) {
-    char seed[MC_UID_STRLEN]; /* playing can reload the rows too */
+    char seed[MC_UID_STRLEN], start[MC_UID_STRLEN]; /* playing can reload the rows too */
     g_strlcpy(seed, t->seed, sizeof seed);
-    playback_play_radio(seed);
+    g_strlcpy(start, t->start, sizeof start);
+    playback_play_station(seed, start);
     return;
   }
   char uid[MC_UID_STRLEN];
@@ -170,7 +173,7 @@ static void on_play(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
   (void)user;
-  playback_play_radio(v.menu_uid);
+  playback_play_station(v.menu_uid, v.menu_start);
 }
 
 static void on_remove_recent(GSimpleAction *action, GVariant *param, gpointer user) {
@@ -260,6 +263,7 @@ static void popup_tile_menu(tile *t, GtkWidget *widget, double x, double y) {
   set_roving(t, FALSE);
   /* A station's own uid is its artist's: as a recent it goes by its seed. */
   g_strlcpy(v.menu_uid, t->station ? t->seed : t->uid, sizeof v.menu_uid);
+  g_strlcpy(v.menu_start, t->station ? t->start : "", sizeof v.menu_start);
   g_free(v.menu_title);
   v.menu_title = g_strdup(gtk_label_get_text(GTK_LABEL(t->title)));
   v.menu_smart = t->smart;
@@ -384,6 +388,7 @@ static void tile_set(tile *t, const mc_home_pick *p) {
   t->smart = p->smart;
   g_strlcpy(t->uid, p->uid, sizeof t->uid);
   g_strlcpy(t->seed, p->seed_uid, sizeof t->seed);
+  g_strlcpy(t->start, p->start_uid, sizeof t->start);
   g_free(t->artist);
   t->artist = g_strdup(sub);
   gtk_label_set_text(GTK_LABEL(t->title), title);

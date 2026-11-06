@@ -1,14 +1,15 @@
-/* The radio stations a library offers: a few tracks that sound unlike each other, each one the
- * seed of a mix (musiccore/radio.h), for the Home page's Radio row. Worked out from the audio
- * analysis alone, on the device. How the seeds are chosen: "Radio stations" in docs/schema.md.
+/* The radio stations a library offers, for the Home page's Radio row: one for each kind of music
+ * the audio analysis finds in it, so two kinds make two stations. Worked out from the analysis
+ * alone, on the device. How: "Radio stations" in docs/schema.md.
  *
- * How many there are depends on the library. mc_radio_station_limit() says what its size allows;
- * a library whose tracks all sound alike gets fewer than that, as there are only ever as many
- * stations as sounds to tell apart. One with too little analysed gets none.
+ * A station keeps to its own kind (musiccore/radio.h). Every track belongs to one kind, the one
+ * it sounds nearest, so stations don't overlap. A library that doesn't divide clearly gets one
+ * station, and one with too little analysed gets none.
  *
- * Nothing is stored. The same library gives the same stations all day, however often it's asked
- * and however much is played in the meantime, and the next day they may move to other tracks.
- * Results arriving or tracks coming and going can change them sooner. */
+ * Nothing is stored. What a library divides into depends only on the results, so it holds however
+ * often it's asked and however much is played, until results arrive or tracks come and go. A
+ * station's seed, which names it, stays all day and may move to another track of its kind the next
+ * day. Its start track is drawn afresh each time the stations are listed. */
 #ifndef MUSICCORE_RADIO_STATIONS_H
 #define MUSICCORE_RADIO_STATIONS_H
 
@@ -26,7 +27,8 @@ enum {
 };
 
 typedef struct mc_radio_station_info {
-  char seed_track[MC_UID_STRLEN]; /* for mc_radio_options.seed_track */
+  char seed_track[MC_UID_STRLEN];  /* for mc_radio_options.seed_track: what the station is */
+  char start_track[MC_UID_STRLEN]; /* for mc_radio_options.start_track: where it starts this time */
   char artist_uid[MC_UID_STRLEN]; /* the seed's first artist; "" if unknown */
   char *name;       /* "Zedd Radio"; after the seed's title if it has no artist */
   char *sub;        /* the line beneath, which tells it from any station of the same name */
@@ -39,13 +41,9 @@ typedef struct mc_radio_station_list {
   int count;
 } mc_radio_station_list;
 
-/* The most stations a library of that many eligible tracks may have: one from
- * MC_RADIO_STATION_MIN_TRACKS, and another each time that doubles, so MC_RADIO_STATIONS_MAX
- * from 3,200 tracks. */
-int mc_radio_station_limit(int tracks);
-
 /* The stations as of now_ms (0: now), which only decides the day. *out may hold none; free it
- * with mc_radio_station_list_free(). Reads every result, so it's for a background thread. */
+ * with mc_radio_station_list_free(). Reads every result, so it's for a background thread. Each
+ * call draws new start tracks, so a frontend lists again after starting a station. */
 mc_status mc_radio_stations_list(mc_library *lib, int64_t now_ms, mc_radio_station_list **out);
 void mc_radio_station_list_free(mc_radio_station_list *list);
 

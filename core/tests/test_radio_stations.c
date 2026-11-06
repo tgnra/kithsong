@@ -12,6 +12,7 @@
 #include "musiccore/musiccore.h"
 #include "musiccore/radio.h"
 #include "musiccore/radio_stations.h"
+#include "radio/groups.h"
 #include "test.h"
 #include "util/platform.h"
 #include "util/uid.h"
@@ -145,18 +146,12 @@ static int same_seeds(const mc_radio_station_list *a, const mc_radio_station_lis
   return 1;
 }
 
-static void test_limit(void) {
-  CHECK(mc_radio_station_limit(0) == 0);
-  CHECK(mc_radio_station_limit(24) == 0);
-  CHECK(mc_radio_station_limit(25) == 1);
-  CHECK(mc_radio_station_limit(49) == 1);
-  CHECK(mc_radio_station_limit(50) == 2);
-  CHECK(mc_radio_station_limit(100) == 3);
-  CHECK(mc_radio_station_limit(799) == 5);
-  CHECK(mc_radio_station_limit(800) == 6);
-  CHECK(mc_radio_station_limit(3199) == 7);
-  CHECK(mc_radio_station_limit(3200) == MC_RADIO_STATIONS_MAX);
-  CHECK(mc_radio_station_limit(1000000) == MC_RADIO_STATIONS_MAX);
+/* A mix as long as the library from a seed: what its station can play. Returns how many. */
+static int station_tracks(mc_library *lib, const char *seed, mc_radio_pick *picks, int room) {
+  mc_radio_options opts = {seed, room, 1, 0, 0, NULL};
+  int n = 0;
+  CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
+  return n;
 }
 
 static void test_arguments(void) {
@@ -165,7 +160,7 @@ static void test_arguments(void) {
   mc_radio_station_list_free(NULL);
 }
 
-/* One seed in each sound, the seeds usable by a mix, and no more stations than its size allows. */
+/* One station for each sound, the seeds usable by a mix. */
 static void test_distinct(const char *scratch) {
   mc_library *lib = open_library(scratch, "test_stations_distinct.d");
   if (!lib) return;
@@ -194,7 +189,7 @@ static void test_distinct(const char *scratch) {
   mc_library_close(lib);
 }
 
-/* The size allows four, but there are two sounds to tell apart, or one. */
+/* As many stations as there are sounds to tell apart: two, or one, which has all of the library. */
 static void test_alike(const char *scratch) {
   mc_library *lib = open_library(scratch, "test_stations_two.d");
   if (lib) {
@@ -209,6 +204,8 @@ static void test_alike(const char *scratch) {
     add_clusters(lib, 1, 200);
     mc_radio_station_list *list = stations(lib, noon_ms());
     CHECK(list && list->count == 1);
+    static mc_radio_pick picks[200];
+    if (list && list->count) CHECK(station_tracks(lib, list->items[0].seed_track, picks, 200) == 200);
     mc_radio_station_list_free(list);
     mc_library_close(lib);
   }
@@ -468,6 +465,239 @@ static void test_no_artist(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* Each track is on one station, the one of its own sound, and they cover the library between them. */
+static void test_no_overlap(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_stations_apart.d");
+  if (!lib) return;
+  enum { PER = 40 };
+  add_clusters(lib, 2, PER);
+  mc_radio_station_list *list = stations(lib, noon_ms());
+  CHECK(list && list->count == 2);
+  static mc_radio_pick picks[2 * PER];
+  char seen[2][PER] = {{0}};
+  for (int i = 0; list && i < list->count; i++) {
+    int n = station_tracks(lib, list->items[i].seed_track, picks, 2 * PER);
+    CHECK(n == PER);
+    for (int k = 0; k < n; k++) {
+      CHECK(picks[k].track_uid[1] == list->items[i].seed_track[1]);
+      seen[picks[k].track_uid[1] - '0'][atoi(picks[k].track_uid + 3)]++;
+    }
+  }
+  for (int c = 0; c < 2; c++)
+    for (int k = 0; k < PER; k++) CHECK(seen[c][k] == 1);
+  mc_radio_station_list_free(list);
+  mc_library_close(lib);
+}
+
+/* The seed stays and the start doesn't: it's drawn afresh from the station's own sound. */
+static void test_start_is_random(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_stations_start.d");
+  if (!lib) return;
+  add_clusters(lib, 2, 40);
+  int64_t noon = noon_ms();
+  mc_radio_station_list *first = stations(lib, noon);
+  CHECK(first && first->count == 2);
+  char seen[2][40] = {{0}};
+  for (int run = 0; first && run < 40; run++) {
+    mc_radio_station_list *list = stations(lib, noon);
+    CHECK(list && same_seeds(first, list));
+    for (int i = 0; list && i < list->count; i++) {
+      const mc_radio_station_info *s = &list->items[i];
+      CHECK(s->start_track[1] == s->seed_track[1]);
+      CHECK_STR(s->name, first->items[i].name);
+      seen[s->start_track[1] - '0'][atoi(s->start_track + 3)] = 1;
+    }
+    mc_radio_station_list_free(list);
+  }
+  for (int c = 0; c < 2; c++) {
+    int starts = 0;
+    for (int k = 0; k < 40; k++) starts += seen[c][k];
+    CHECK(starts > 5);
+  }
+  mc_radio_station_list_free(first);
+  mc_library_close(lib);
+}
+
+/* The start comes first and what follows is measured from it, in the seed's group. */
+static void test_start_track(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_stations_from.d");
+  if (!lib) return;
+  add_clusters(lib, 2, 40);
+  mc_radio_options opts = {"c0-1", 10, 1, 0, 0, "c0-30"};
+  mc_radio_pick picks[10];
+  int n = 0;
+  CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
+  CHECK(n == 10);
+  CHECK_STR(picks[0].track_uid, "c0-30");
+  CHECK(picks[0].distance == 0.0);
+  for (int i = 0; i < n; i++) CHECK(picks[i].track_uid[1] == '0');
+  opts.start_track = "unheard-of";
+  CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_ERR_NOT_FOUND);
+  /* A seed that's gone from here gives way to the start, as what was playing goes on. */
+  opts.seed_track = "unheard-of";
+  opts.start_track = "c1-5";
+  CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
+  for (int i = 0; i < n; i++) CHECK(picks[i].track_uid[1] == '1');
+  opts.seed_track = "c0-1";
+  /* The groups can move on after a start was drawn. It still comes first, then the seed's group. */
+  opts.start_track = "c1-5";
+  CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
+  CHECK_STR(picks[0].track_uid, "c1-5");
+  for (int i = 1; i < n; i++) CHECK(picks[i].track_uid[1] == '0');
+  mc_library_close(lib);
+}
+
+/* A track half way between two sounds belongs to one of them all the same, and it's never where
+ * a station starts, nor what it's named after. */
+static void test_between(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_stations_between.d");
+  if (!lib) return;
+  enum { PER = 40, BETWEEN = 4 };
+  add_clusters(lib, 2, PER);
+  add_artist(lib, "Mid");
+  add_album(lib, "mid", "Mid", 0);
+  char uid[32];
+  for (int i = 0; i < BETWEEN; i++) {
+    snprintf(uid, sizeof uid, "mid%d", i);
+    add_track(lib, uid, uid, "Mid", "mid", TRACK_MS, 1.0, i, 1, 1);
+  }
+  static mc_radio_pick picks[2 * PER + BETWEEN];
+  int on_stations[BETWEEN] = {0};
+  for (int run = 0; run < 30; run++) {
+    mc_radio_station_list *list = stations(lib, noon_ms());
+    CHECK(list && list->count == 2);
+    for (int i = 0; list && i < list->count; i++) {
+      CHECK(strncmp(list->items[i].seed_track, "mid", 3));
+      CHECK(strncmp(list->items[i].start_track, "mid", 3));
+      if (run) continue;
+      int n = station_tracks(lib, list->items[i].seed_track, picks, 2 * PER + BETWEEN);
+      for (int k = 0; k < n; k++)
+        if (!strncmp(picks[k].track_uid, "mid", 3)) on_stations[picks[k].track_uid[3] - '0']++;
+    }
+    mc_radio_station_list_free(list);
+  }
+  for (int i = 0; i < BETWEEN; i++) CHECK(on_stations[i] == 1);
+  mc_library_close(lib);
+}
+
+/* Two kinds make two stations however small the library, down to what's worth a station. Below
+ * that a small kind is no station, and its tracks are on the one there is. */
+static void test_small_groups(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_stations_small.d");
+  if (lib) {
+    add_clusters(lib, 2, 13);
+    mc_radio_station_list *list = stations(lib, noon_ms());
+    CHECK(list && list->count == 2);
+    mc_radio_station_list_free(list);
+    mc_library_close(lib);
+  }
+  lib = open_library(scratch, "test_stations_lopsided.d");
+  if (lib) {
+    add_clusters(lib, 1, 20);
+    add_artist(lib, "Few");
+    add_album(lib, "few", "Few", 0);
+    char uid[32];
+    for (int i = 0; i < 5; i++) {
+      snprintf(uid, sizeof uid, "few%d", i);
+      add_track(lib, uid, uid, "Few", "few", TRACK_MS, 3.0, i, 1, 1);
+    }
+    mc_radio_station_list *list = stations(lib, noon_ms());
+    CHECK(list && list->count == 1);
+    mc_radio_pick picks[25];
+    if (list && list->count) CHECK(station_tracks(lib, list->items[0].seed_track, picks, 25) == 25);
+    mc_radio_station_list_free(list);
+    mc_library_close(lib);
+  }
+}
+
+/* Only so much is ever offered, and more kinds than that aren't taken for one, for all that so few
+ * centres can't fit them well. Each sound goes its own way from the rest, as on a line a few centres
+ * would do. */
+static void test_many_kinds(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_stations_many.d");
+  if (!lib) return;
+  enum { SOUNDS = 24, PER = 14 };
+  add_artist(lib, "Many");
+  add_album(lib, "many", "Many", 0);
+  char uid[32];
+  for (int c = 0; c < SOUNDS; c++) {
+    for (int i = 0; i < PER; i++) {
+      snprintf(uid, sizeof uid, "k%d-%d", c, i);
+      add_track(lib, uid, uid, "Many", "many", TRACK_MS, 0, 0, 0, 1);
+      mc_analysis a;
+      result_of(0, i, &a);
+      a.mfcc_mean[1 + c % 12] += c < 12 ? 60.0f : -60.0f;
+      CHECK(mc_analysis_store(lib, uid, NULL, MC_ANALYSIS_ORIGINAL, &a) == MC_OK);
+    }
+  }
+  mc_radio_station_list *list = stations(lib, noon_ms());
+  CHECK(list && list->count > 1 && list->count <= MC_RADIO_STATIONS_MAX);
+  mc_radio_station_list_free(list);
+  mc_library_close(lib);
+}
+
+/* What's analysed so far is what's divided, and results arriving bring the stations they show. */
+static void test_partly_analysed(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_stations_partly.d");
+  if (!lib) return;
+  enum { PER = 30 };
+  add_clusters(lib, 1, PER);
+  add_artist(lib, "Waiting");
+  add_album(lib, "waiting", "Waiting", 0);
+  char uid[32];
+  for (int i = 0; i < PER; i++) {
+    snprintf(uid, sizeof uid, "w%d", i);
+    add_track(lib, uid, uid, "Waiting", "waiting", TRACK_MS, 2.0, i, 0, 1);
+  }
+  mc_radio_station_list *list = stations(lib, noon_ms());
+  CHECK(list && list->count == 1);
+  static mc_radio_pick picks[2 * PER];
+  if (list && list->count) {
+    int n = station_tracks(lib, list->items[0].seed_track, picks, 2 * PER);
+    CHECK(n == PER);
+    for (int i = 0; i < n; i++) CHECK(picks[i].track_uid[0] == 'c');
+  }
+  mc_radio_station_list_free(list);
+
+  for (int i = 0; i < PER; i++) {
+    mc_analysis a;
+    result_of(2.0, i, &a);
+    snprintf(uid, sizeof uid, "w%d", i);
+    CHECK(mc_analysis_store(lib, uid, NULL, MC_ANALYSIS_ORIGINAL, &a) == MC_OK);
+  }
+  list = stations(lib, noon_ms());
+  CHECK(list && list->count == 2);
+  mc_radio_station_list_free(list);
+  mc_library_close(lib);
+}
+
+/* What a library divides into has nothing to do with the day, or with what's played. */
+static void test_groups_hold(const char *scratch) {
+  mc_library *lib = open_library(scratch, "test_stations_hold.d");
+  if (!lib) return;
+  add_clusters(lib, 4, 50);
+  mc_radio_groups before, after;
+  CHECK(mc_radio_groups_load(lib, NULL, NULL, &before) == MC_OK);
+  CHECK(before.count == 4);
+  played(lib, "c2-3", 30, noon_ms() - DAY_MS);
+  CHECK(mc_radio_groups_load(lib, NULL, NULL, &after) == MC_OK);
+  CHECK(after.count == 4);
+  for (int g = 0; g < 4 && g < after.count; g++) {
+    CHECK(after.centre[g] == before.centre[g]);
+    CHECK(after.tracks[g] == 50);
+  }
+  int64_t noon = noon_ms();
+  for (int d = 0; d < 6; d++) {
+    mc_radio_station_list *list = stations(lib, noon + d * DAY_MS);
+    CHECK(list && list->count == 4);
+    int seen[4] = {0};
+    for (int i = 0; list && i < list->count; i++) seen[list->items[i].seed_track[1] - '0']++;
+    for (int c = 0; c < 4; c++) CHECK(seen[c] == 1);
+    mc_radio_station_list_free(list);
+  }
+  mc_library_close(lib);
+}
+
 /* What the Home row makes of them. */
 static void test_home_row(const char *scratch) {
   mc_library *lib = open_library(scratch, "test_stations_home.d");
@@ -485,6 +715,7 @@ static void test_home_row(const char *scratch) {
     CHECK(p->title && strstr(p->title, " Radio"));
     CHECK_STR(p->sub, "Station");
     CHECK_STR(p->seed_title, p->seed_uid);
+    CHECK(p->start_uid[0] == 'c' && p->start_uid[1] == p->seed_uid[1]);
     CHECK(p->cover_dir != NULL);
     CHECK_STR(p->seed_uid, b.rows[MC_HOME_ROW_RADIO][i].seed_uid);
   }
@@ -499,7 +730,6 @@ static void test_home_row(const char *scratch) {
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
-  test_limit();
   test_arguments();
   test_distinct(scratch);
   test_alike(scratch);
@@ -513,6 +743,14 @@ int main(int argc, char **argv) {
   test_days_differ(scratch);
   test_same_name(scratch);
   test_no_artist(scratch);
+  test_no_overlap(scratch);
+  test_start_is_random(scratch);
+  test_start_track(scratch);
+  test_between(scratch);
+  test_small_groups(scratch);
+  test_many_kinds(scratch);
+  test_partly_analysed(scratch);
+  test_groups_hold(scratch);
   test_home_row(scratch);
   mc_shutdown();
   return TEST_RESULT();

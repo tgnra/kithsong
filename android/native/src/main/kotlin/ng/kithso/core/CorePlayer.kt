@@ -70,18 +70,19 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         nativeLoadQueue(handle, paths.toTypedArray(), trackUids.toTypedArray(), origin.context.ordinal, origin.contextUid, start)
 
     /**
-     * Plays a station from a track (mc_player_play_radio): the queue becomes that track, which
+     * Plays a station (mc_player_play_station): the queue becomes the track [startUid], which
      * starts at once, and a station from it keeps a few tracks queued ahead for as long as this
-     * queue stays. [libraryDir] is the library's folder, [seedPath] the track's file. Check the
-     * seed first ([radioSeedUsable]): one that can't be used plays by itself.
+     * queue stays. [libraryDir] is the library's folder, [startPath] the track's file, and [seedUid]
+     * what the station is, the same track or another, which plays are logged under. Check the
+     * start first ([radioSeedUsable]): one that can't be used plays by itself.
      *
      * The queue grows by itself, only at the end. [Event.Queue] says so, and can lag by seconds
      * behind [Status.count], which is right all along; [queueUid] says what the new items are.
      * Next from the last item plays what's added. It plays in the station's order whatever
      * shuffle says, even once the station has stopped; shuffle applies again to the next queue.
      */
-    fun playRadio(libraryDir: String, seedPath: String, seedUid: String) =
-        nativePlayRadio(handle, libraryDir, seedPath, seedUid)
+    fun playRadio(libraryDir: String, startPath: String, startUid: String, seedUid: String) =
+        nativePlayRadio(handle, libraryDir, startPath, startUid, seedUid)
 
     /** Queue item [index]'s track uid; null if there's no such item, or it isn't logged. */
     fun queueUid(index: Int): String? = nativeQueueUid(handle, index)
@@ -176,7 +177,7 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         @JvmStatic external fun nativeLoadQueue(
             handle: Long, paths: Array<String>, uids: Array<String>, context: Int, contextUid: String?, start: Int,
         )
-        @JvmStatic external fun nativePlayRadio(handle: Long, libraryDir: String, seedPath: String, seedUid: String)
+        @JvmStatic external fun nativePlayRadio(handle: Long, libraryDir: String, startPath: String, startUid: String, seedUid: String)
         @JvmStatic external fun nativeQueueUid(handle: Long, index: Int): String?
         @JvmStatic external fun nativeQueueSetPath(handle: Long, index: Int, path: String)
         @JvmStatic external fun nativeCommand(handle: Long, command: Int)

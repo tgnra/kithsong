@@ -61,6 +61,7 @@ typedef struct home_pick {
   BOOL station, smart;
   char uid[MC_UID_STRLEN];
   char seed_uid[MC_UID_STRLEN]; /* a station's */
+  char start_uid[MC_UID_STRLEN]; /* a station of the Radio row's, this time */
   wchar_t *title, *sub, *cover_dir;
   char *seed_title; /* UTF-8, as mc_wformat() takes it */
 } home_pick;
@@ -508,6 +509,7 @@ static home_pick wide_pick(const mc_home_pick *p) {
   home_pick w = {.kind = p->kind, .station = p->station != 0, .smart = p->smart != 0};
   memcpy(w.uid, p->uid, sizeof w.uid);
   memcpy(w.seed_uid, p->seed_uid, sizeof w.seed_uid);
+  memcpy(w.start_uid, p->start_uid, sizeof w.start_uid);
   w.seed_title = p->seed_title ? _strdup(p->seed_title) : NULL;
   w.title = wstr_dup_from_utf8(p->title);
   w.sub = wstr_dup_from_utf8(p->sub);
@@ -788,9 +790,10 @@ static void on_mouse_down(int x, int y) {
 static void open_tile(int row, int index) {
   const tile *t = &g.rows[row].tiles[index];
   if (t->pick.station) {
-    char seed[MC_UID_STRLEN]; /* playing can bring a reload, which frees the tile */
+    char seed[MC_UID_STRLEN], start[MC_UID_STRLEN]; /* playing can bring a reload, which frees the tile */
     memcpy(seed, t->pick.seed_uid, sizeof seed);
-    playback_play_radio(seed);
+    memcpy(start, t->pick.start_uid, sizeof start);
+    playback_play_station(seed, start);
     return;
   }
   memcpy(g.clicked_uid, t->pick.uid, sizeof g.clicked_uid);
@@ -901,7 +904,7 @@ static void show_tile_menu(int row, int index, POINT pt) {
   const tile *t = &g.rows[row].tiles[index];
   /* A station's own uid is its artist's: as a recent it goes by its seed. */
   const char *uid = t->pick.station ? t->pick.seed_uid : t->pick.uid;
-  item_menu_options o = {.wnd = g.wnd, .lib = g.lib, .uid = uid, .name = t->pick.title, .pt = pt,
+  item_menu_options o = {.wnd = g.wnd, .lib = g.lib, .uid = uid, .start = t->pick.start_uid, .name = t->pick.title, .pt = pt,
                          .recent = row == MC_HOME_ROW_RECENTS};
   char recent[MC_UID_STRLEN];
   memcpy(recent, uid, sizeof recent);

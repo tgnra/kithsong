@@ -30,7 +30,10 @@ typedef struct mc_home_pick {
                 * that's unknown. Several can share one, so seed_uid is what tells them apart */
   int smart;   /* a smart playlist or group */
   char uid[MC_UID_STRLEN];
-  char seed_uid[MC_UID_STRLEN]; /* a station's seed track, to start its mix from; "" otherwise */
+  char seed_uid[MC_UID_STRLEN]; /* a station's seed track, which is what it is; "" otherwise */
+  /* The track a station of the Radio row starts from this time, with seed_uid to pass along with
+   * it; a new one each load. "" for a station in Recents, which starts from its seed, as it says. */
+  char start_uid[MC_UID_STRLEN];
   char *title;
   char *sub;       /* the line beneath it */
   char *cover_dir; /* the folder holding its cover; NULL for none, and for playlists and

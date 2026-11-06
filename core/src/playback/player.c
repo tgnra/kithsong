@@ -266,6 +266,7 @@ struct mc_player {
   int feeding;        /* and it's still being added to */
   unsigned radio_gen; /* bumped when the station changes or ends, so the feed drops its work */
   char *radio_dir;    /* the library it's from */
+  char radio_start[MC_UID_STRLEN]; /* the track it started from, whatever becomes of the queue */
   int radio_skip;     /* next() ran out of items: play the first one added */
   int radio_failures; /* items in a row that wouldn't open */
   mc_play_event feed_skips[MAX_SKIPS]; /* those the station hasn't been told of, oldest first */
@@ -1137,18 +1138,20 @@ static int feed_cancelled(void *user) {
 
 /* With a connection of its own, as a library handle stays on its thread. It's let go at once:
  * a station doesn't need it, and an open database would be in the way of moving the library. */
-static mc_status feed_open(feed_job *job, const char *dir, const char *seed, mc_radio_station **out) {
+static mc_status feed_open(feed_job *job, const char *dir, const char *seed, const char *start,
+                           mc_radio_station **out) {
   mc_library *lib = NULL;
   mc_status st = mc_library_open_internal(dir, &lib);
   if (st != MC_OK) return st;
   mc_radio_options opts;
   memset(&opts, 0, sizeof opts);
   opts.seed_track = seed;
+  opts.start_track = start;
   opts.random = new_seed();
   st = mc_radio_station_open(lib, &opts, feed_cancelled, job, out);
   mc_library_close(lib);
   if (st == MC_OK) {
-    mc_radio_pick first; /* the seed, which is queued already */
+    mc_radio_pick first; /* the start, which is queued already */
     mc_radio_station_next(*out, &first, 1);
   }
   return st;
@@ -1202,11 +1205,12 @@ static void feed_run(void *arg) {
     unsigned gen = p->radio_gen;
     if (!station) {
       char *dir = mc_strdup(p->radio_dir);
-      char seed[MC_UID_STRLEN];
+      char seed[MC_UID_STRLEN], start[MC_UID_STRLEN];
       memcpy(seed, p->context_uid, sizeof seed);
+      memcpy(start, p->radio_start, sizeof start);
       feed_job job = {p, gen};
       mc_mutex_unlock(&p->lock);
-      mc_status st = dir ? feed_open(&job, dir, seed, &station) : MC_ERR_NOMEM;
+      mc_status st = dir ? feed_open(&job, dir, seed, start, &station) : MC_ERR_NOMEM;
       free(dir);
       mc_mutex_lock(&p->lock);
       station_gen = gen;
@@ -1325,6 +1329,7 @@ static mc_status set_queue(mc_player *p, const char *const *paths, int count, in
   p->radio_gen++; /* whatever was on is over, as is anything else that replaces the queue */
   free(p->radio_dir);
   p->radio_dir = dir;
+  if (radio_dir) memcpy(p->radio_start, track_uids[0], sizeof p->radio_start);
   p->radio_failures = 0;
   p->nfeed_skips = 0;
   p->nplays = 0;
@@ -1359,14 +1364,20 @@ mc_status mc_player_load_queue(mc_player *p, const char *const *paths, int count
 
 mc_status mc_player_play_radio(mc_player *p, const char *library_dir, const char *seed_path,
                                const char *seed_uid) {
-  if (!p || !library_dir || !seed_path || !seed_uid || !*seed_uid || strlen(seed_uid) >= MC_UID_STRLEN)
+  return mc_player_play_station(p, library_dir, seed_path, seed_uid, seed_uid);
+}
+
+mc_status mc_player_play_station(mc_player *p, const char *library_dir, const char *start_path,
+                                 const char *start_uid, const char *seed_uid) {
+  if (!p || !library_dir || !start_path || !start_uid || !*start_uid || strlen(start_uid) >= MC_UID_STRLEN ||
+      !seed_uid || !*seed_uid || strlen(seed_uid) >= MC_UID_STRLEN)
     return MC_ERR_INVALID_ARG;
   mc_mutex_lock(&p->lock);
   mc_status st = p->feed_started ? MC_OK : mc_thread_start(&p->feed, feed_run, p);
   if (st == MC_OK) p->feed_started = 1;
   mc_mutex_unlock(&p->lock);
   if (st != MC_OK) return st;
-  const char *const paths[] = {seed_path}, *const uids[] = {seed_uid};
+  const char *const paths[] = {start_path}, *const uids[] = {start_uid};
   mc_play_origin origin = {uids, MC_PLAY_CONTEXT_RADIO, seed_uid};
   return set_queue(p, paths, 1, 0, 1, &origin, library_dir);
 }

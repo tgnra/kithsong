@@ -138,6 +138,7 @@ class CoreLibrarySource(
     private var artLookups = 0 // bumped by each read, so only the latest read's lookup is used
 
     private var stations: List<Station> = emptyList() // only touched on [core]
+    private var stationStarts: Map<String, String> = emptyMap() // seed to start, only touched on [core]
     private val radio = Dispatchers.IO.limitedParallelism(1)
     private var radioLib: CoreLibrary? = null // only touched on [radio]
     private var stationsLookup: Job? = null
@@ -219,6 +220,7 @@ class CoreLibrarySource(
                         covers.station(info.seedTrack, info.name, info.coverDir, info.artistUid), info.artistUid,
                     )
                 }
+                stationStarts = found.associate { it.seedTrack to it.startTrack }
                 if (list == stations) return@withContext
                 stations = list
                 state.value = state.value?.copy(stations = list)
@@ -371,16 +373,21 @@ class CoreLibrarySource(
         }
     }
 
+    // A station of the Radio row has a start drawn for it, and any other starts from its seed.
     override suspend fun stationSeed(seedUid: String): Track? = withContext(core) {
         try {
             val lib = open() ?: return@withContext null
-            if (!lib.radioSeedUsable(seedUid)) return@withContext null
-            // The check goes by the library, which still has a file that's since gone.
-            lib.track(seedUid)?.takeIf { info -> info.path?.let { File(it).exists() } == true }?.let { Covers().track(it) }
+            listOfNotNull(stationStarts[seedUid], seedUid).firstNotNullOfOrNull { stationTrack(lib, it) }
         } catch (e: MusicCoreException) {
             Log.e(TAG, "Couldn't check station $seedUid", e)
             null
         }
+    }
+
+    private fun stationTrack(lib: CoreLibrary, uid: String): Track? {
+        if (!lib.radioSeedUsable(uid)) return null
+        // The check goes by the library, which still has a file that's since gone.
+        return lib.track(uid)?.takeIf { info -> info.path?.let { File(it).exists() } == true }?.let { Covers().track(it) }
     }
 
     override suspend fun tracks(uids: List<String>): List<Track?> = withContext(core) {
@@ -406,6 +413,7 @@ class CoreLibrarySource(
                 return@launch
             }
             state.value = state.value?.copy(recents = recents())
+            if (ref.kind == CollectionRef.Kind.Station) refreshStations() // each listing draws new starts
             onChanged()
         }
     }
