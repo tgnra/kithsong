@@ -777,10 +777,10 @@ static void test_limit_duration(mc_library *lib) {
   CHECK(mc_smart_delete(lib, uid) == MC_OK);
   char *s = NULL;
   CHECK(mc_smart_describe(lib, MC_SMART_TRACKS, "{\"v\":1,\"limit_duration\":5400}", &s) == MC_OK);
-  CHECK_STR(s, "All tracks · 1 hr 30 min of music");
+  CHECK_STR(s, "All tracks · 1\xC2\xA0" "hr\xC2\xA0" "30\xC2\xA0" "min of music");
   mc_free(s);
   CHECK(mc_smart_describe(lib, MC_SMART_ALBUMS, "{\"v\":1,\"limit_duration\":1790}", &s) == MC_OK);
-  CHECK_STR(s, "All albums · 30 min of music");
+  CHECK_STR(s, "All albums · 30\xC2\xA0" "min of music");
   mc_free(s);
 }
 

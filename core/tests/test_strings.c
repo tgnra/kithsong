@@ -7,6 +7,9 @@
 #include "musiccore/musiccore.h"
 #include "test.h"
 
+/* The no-break space that keeps a length whole. */
+#define NB "\xC2\xA0"
+
 /* CHECK_STR for a char array, which is never NULL. */
 #define CHECK_BUF(buf, s) CHECK(strcmp((buf), (s)) == 0)
 
@@ -101,30 +104,30 @@ static void test_playing_time(void) {
   } cases[] = {
     {0, ""},                                /* not known: nothing to show */
     {-1, ""},
-    {1, "1 min"},                           /* a few seconds of music isn't 0 min */
-    {29999, "1 min"},
-    {89999, "1 min"},
-    {90000, "2 min"},
-    {47 * 60000LL, "47 min"},
-    {3569000, "59 min"},
-    {3570000, "1 hr 0 min"},                /* 59:30 rounds up to the hour */
-    {90 * 60000LL, "1 hr 30 min"},
-    {25 * 3600000LL + 4 * 60000LL, "25 hr 4 min"}, /* over a day */
-    {99 * 3600000LL + 29 * 60000LL, "99 hr 29 min"},
-    {99 * 3600000LL + 30 * 60000LL, "100 hours"},
-    {100 * 3600000LL, "100 hours"},
-    {700 * 3600000LL, "700 hours"},         /* past what an int of ms holds */
-    {1234 * 3600000LL + 29 * 60000LL, "1234 hours"},
+    {1, "1" NB "min"},                           /* a few seconds of music isn't 0 min */
+    {29999, "1" NB "min"},
+    {89999, "1" NB "min"},
+    {90000, "2" NB "min"},
+    {47 * 60000LL, "47" NB "min"},
+    {3569000, "59" NB "min"},
+    {3570000, "1" NB "hr" NB "0" NB "min"},                /* 59:30 rounds up to the hour */
+    {90 * 60000LL, "1" NB "hr" NB "30" NB "min"},
+    {25 * 3600000LL + 4 * 60000LL, "25" NB "hr" NB "4" NB "min"}, /* over a day */
+    {99 * 3600000LL + 29 * 60000LL, "99" NB "hr" NB "29" NB "min"},
+    {99 * 3600000LL + 30 * 60000LL, "100" NB "hours"},
+    {100 * 3600000LL, "100" NB "hours"},
+    {700 * 3600000LL, "700" NB "hours"},         /* past what an int of ms holds */
+    {1234 * 3600000LL + 29 * 60000LL, "1234" NB "hours"},
   };
   for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
     size_t n = mc_format_playing_time(buf, sizeof buf, cases[i].ms);
     CHECK_BUF(buf, cases[i].text);
     CHECK(n == strlen(cases[i].text));
   }
-  CHECK_STR(mc_str_plural(MC_STR_DURATION_HOURS, 1), "{0} hour");
+  CHECK_STR(mc_str_plural(MC_STR_DURATION_HOURS, 1), "{0}" NB "hour");
 
   /* Cut short like mc_format, and nothing needs no room. */
-  CHECK(mc_format_playing_time(buf, 3, 47 * 60000LL) == 6);
+  CHECK(mc_format_playing_time(buf, 3, 47 * 60000LL) == 7);
   CHECK_BUF(buf, "47");
   CHECK(mc_format_playing_time(NULL, 0, 0) == 0);
 }

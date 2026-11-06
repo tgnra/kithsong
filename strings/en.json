@@ -37,9 +37,9 @@
     "track_byline": { "text": "{0} – {1}", "note": "Two names joined by a dash: under a track's title, its artist and album; in the window title, the track and its artist." },
     "separator_dot": { "text": " · ", "note": "Between the parts of a summary, e.g. \"1997 · 12 tracks · 47 min\"." },
     "import_list_separator": { "text": ", ", "note": "Between the items of a list, e.g. \"12 imported, 3 skipped\"." },
-    "duration_minutes": { "text": "{0:d} min", "note": "A total playing time under an hour." },
-    "duration_hours_minutes": { "text": "{0:d} hr {1:d} min", "note": "A total playing time of an hour or more." },
-    "duration_hours": { "one": "{0} hour", "other": "{0} hours", "note": "A total playing time of 100 hours or more, where the minutes tell nothing. {0} is the number, already formatted, such as 1,234." },
+    "duration_minutes": { "text": "{0:d} min", "note": "A total playing time under an hour. Its spaces are no-break spaces, so a line that wraps keeps a length whole." },
+    "duration_hours_minutes": { "text": "{0:d} hr {1:d} min", "note": "A total playing time of an hour or more, with no-break spaces." },
+    "duration_hours": { "one": "{0} hour", "other": "{0} hours", "note": "A total playing time of 100 hours or more, where the minutes tell nothing, with a no-break space. {0} is the number, already formatted, such as 1,234." },
 
     "settings": "Settings",
     "section_albums": "Albums",
