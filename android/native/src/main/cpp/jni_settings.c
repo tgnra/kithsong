@@ -129,6 +129,20 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSettings_nativeSetAlbumInOrder(JN
   if (st != MC_OK) throw_status(env, st);
 }
 
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreSettings_nativeQueueTracks(JNIEnv *env, jclass cls,
+                                                                              jlong handle) {
+  (void)env;
+  (void)cls;
+  return mc_settings_queue_tracks(settings_of(handle)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreSettings_nativeSetQueueTracks(JNIEnv *env, jclass cls,
+                                                                             jlong handle, jboolean on) {
+  (void)cls;
+  mc_status st = mc_settings_set_queue_tracks(settings_of(handle), on ? 1 : 0);
+  if (st != MC_OK) throw_status(env, st);
+}
+
 JNIEXPORT jint JNICALL Java_ng_kithso_core_CoreSettings_nativeVolume(JNIEnv *env, jclass cls, jlong handle) {
   (void)env;
   (void)cls;

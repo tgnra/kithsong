@@ -39,6 +39,14 @@ class CoreSettings(dir: String) : AutoCloseable {
         @Synchronized get() = nativeAlbumInOrder(handle)
         @Synchronized set(value) = nativeSetAlbumInOrder(handle, value)
 
+    /**
+     * Whether what's added to the queue goes in as a row per track rather than one row
+     * (mc_settings_queue_tracks). Off if never set.
+     */
+    var queueTracks: Boolean
+        @Synchronized get() = nativeQueueTracks(handle)
+        @Synchronized set(value) = nativeSetQueueTracks(handle, value)
+
     /** The playback volume, 0 to 100, as it was left (CorePlayer.setVolume). 100 if never set. */
     var volume: Int
         @Synchronized get() = nativeVolume(handle)
@@ -75,6 +83,8 @@ class CoreSettings(dir: String) : AutoCloseable {
         @JvmStatic external fun nativeSetShuffle(handle: Long, on: Boolean)
         @JvmStatic external fun nativeAlbumInOrder(handle: Long): Boolean
         @JvmStatic external fun nativeSetAlbumInOrder(handle: Long, on: Boolean)
+        @JvmStatic external fun nativeQueueTracks(handle: Long): Boolean
+        @JvmStatic external fun nativeSetQueueTracks(handle: Long, on: Boolean)
         @JvmStatic external fun nativeVolume(handle: Long): Int
         @JvmStatic external fun nativeSetVolume(handle: Long, volume: Int)
         @JvmStatic external fun nativeScrobble(handle: Long): Boolean
