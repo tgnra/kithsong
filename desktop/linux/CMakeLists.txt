@@ -43,7 +43,7 @@ add_executable(kithsong
   src/first_run.c
   src/edit_dialog.c)
 # yyjson for the smart list editor, which reads and writes rules (smart_editor.c).
-target_link_libraries(kithsong PRIVATE musiccore mc_yyjson PkgConfig::ADW m)
+target_link_libraries(kithsong PRIVATE kithcore mc_yyjson PkgConfig::ADW m)
 
 # The logo, built in for the header bar and the empty pages' glows (brand_backdrop.c), so
 # they show without the icon installed.

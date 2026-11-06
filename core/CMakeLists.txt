@@ -16,7 +16,7 @@ kithsong_lastfm_key_header("${CMAKE_CURRENT_BINARY_DIR}/generated/lastfm_key.h")
 
 # Embeds a .sql file as a NUL-terminated C string named symbol; the generated source's path
 # is returned in out_var.
-function(musiccore_embed_sql out_var src symbol)
+function(kithcore_embed_sql out_var src symbol)
   get_filename_component(_name "${src}" NAME_WE)
   set(_c "${CMAKE_CURRENT_BINARY_DIR}/generated/${_name}.c")
   add_custom_command(
@@ -31,8 +31,8 @@ function(musiccore_embed_sql out_var src symbol)
   set(${out_var} "${_c}" PARENT_SCOPE)
 endfunction()
 
-musiccore_embed_sql(_schema_c src/library/schema_v1.sql mc_schema_v1_sql)
-musiccore_embed_sql(_sync_schema_c src/sync/sync_schema_v1.sql mc_sync_schema_v1_sql)
+kithcore_embed_sql(_schema_c src/library/schema_v1.sql mc_schema_v1_sql)
+kithcore_embed_sql(_sync_schema_c src/sync/sync_schema_v1.sql mc_sync_schema_v1_sql)
 
 # UI strings: strings/*.json becomes enum mc_str_id (mc_strings_gen.h, public, for the
 # frontends) and a table per language (mc_strings_gen.c). See strings/README.md.
@@ -49,7 +49,7 @@ add_custom_command(
   DEPENDS ${_strings_json} "${PROJECT_SOURCE_DIR}/cmake/gen_strings.cmake"
   COMMENT "Generating UI strings")
 
-add_library(musiccore STATIC
+add_library(kithcore STATIC
   src/core.c
   src/settings.c
   src/source_run.c
@@ -139,24 +139,24 @@ add_library(musiccore STATIC
   src/sync/problems.c
   src/sync/waiting.c
   "${_sync_schema_c}")
-add_library(musiccore::musiccore ALIAS musiccore)
+add_library(kithcore::kithcore ALIAS kithcore)
 
-target_include_directories(musiccore
+target_include_directories(kithcore
   PUBLIC include "${_strings_out}"
   PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(musiccore PRIVATE
+target_link_libraries(kithcore PRIVATE
   mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs mc_stb mc_miniz mc_mdns mc_opusenc mc_opusfile tag
   CURL::libcurl mbedcrypto)
 if(WIN32)
-  target_compile_definitions(musiccore PRIVATE _WIN32_WINNT=0x0A00)
+  target_compile_definitions(kithcore PRIVATE _WIN32_WINNT=0x0A00)
   # ws2_32 for sockets (sync and discovery), iphlpapi for discovery's interface list,
   # shell32 for the Recycle Bin (mc_trash).
-  target_link_libraries(musiccore PRIVATE bcrypt ws2_32 iphlpapi shell32)
+  target_link_libraries(kithcore PRIVATE bcrypt ws2_32 iphlpapi shell32)
 endif()
 if(UNIX)
-  target_link_libraries(musiccore PRIVATE m)  # art_colors.c
+  target_link_libraries(kithcore PRIVATE m)  # art_colors.c
 endif()
-kithsong_warnings(musiccore)
+kithsong_warnings(kithcore)
 
 if(KITHSONG_BUILD_TESTS)
   add_subdirectory(tests)

@@ -4,7 +4,7 @@ function(kithsong_test name)
   # safe_trash.c keeps what a test trashes out of the real Recycle Bin or trash.
   add_executable(${name} ${name}.c safe_trash.c)
   target_compile_definitions(${name} PRIVATE MC_TEST_TRASH_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-trash/${name}")
-  target_link_libraries(${name} PRIVATE musiccore mc_sqlite3)
+  target_link_libraries(${name} PRIVATE kithcore mc_sqlite3)
   # White-box tests may include core's private headers.
   target_include_directories(${name} PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
   kithsong_warnings(${name})
@@ -116,38 +116,38 @@ set_tests_properties(test_discovery PROPERTIES SKIP_RETURN_CODE 77)  # no multic
 
 # Hit musicbrainz.org; run by hand, not part of ctest.
 add_executable(manual_stress manual_stress.c)
-target_link_libraries(manual_stress PRIVATE musiccore)
+target_link_libraries(manual_stress PRIVATE kithcore)
 target_include_directories(manual_stress PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 
 add_executable(manual_mb_ping manual_mb_ping.c)
-target_link_libraries(manual_mb_ping PRIVATE musiccore)
+target_link_libraries(manual_mb_ping PRIVATE kithcore)
 # Signs in and scrobbles for real; see the comment at its top.
 add_executable(manual_scrobble manual_scrobble.c)
-target_link_libraries(manual_scrobble PRIVATE musiccore)
+target_link_libraries(manual_scrobble PRIVATE kithcore)
 target_include_directories(manual_scrobble PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 # Timing Opus encoding and an Opus sync.
 add_executable(manual_opus_sync manual_opus_sync.c)
-target_link_libraries(manual_opus_sync PRIVATE musiccore mc_sqlite3)
+target_link_libraries(manual_opus_sync PRIVATE kithcore mc_sqlite3)
 target_include_directories(manual_opus_sync PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 add_executable(manual_opus_bench manual_opus_bench.c)
-target_link_libraries(manual_opus_bench PRIVATE musiccore mc_opusenc mbedcrypto)
+target_link_libraries(manual_opus_bench PRIVATE kithcore mc_opusenc mbedcrypto)
 target_include_directories(manual_opus_bench PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 # Two paired scratch instances to try the orphan sweep in the real app; see the comment at its top.
 add_executable(manual_orphan_seed manual_orphan_seed.c)
-target_link_libraries(manual_orphan_seed PRIVATE musiccore mc_sqlite3)
+target_link_libraries(manual_orphan_seed PRIVATE kithcore mc_sqlite3)
 target_include_directories(manual_orphan_seed PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 add_executable(manual_analysis manual_analysis.c)
-target_link_libraries(manual_analysis PRIVATE musiccore)
+target_link_libraries(manual_analysis PRIVATE kithcore)
 target_include_directories(manual_analysis PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 add_executable(manual_radio manual_radio.c)
-target_link_libraries(manual_radio PRIVATE musiccore mc_sqlite3)
+target_link_libraries(manual_radio PRIVATE kithcore mc_sqlite3)
 target_include_directories(manual_radio PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 add_executable(manual_stations manual_stations.c)
-target_link_libraries(manual_stations PRIVATE musiccore mc_sqlite3)
+target_link_libraries(manual_stations PRIVATE kithcore mc_sqlite3)
 target_include_directories(manual_stations PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 add_executable(manual_import manual_import.c)
 
-target_link_libraries(manual_import PRIVATE musiccore)
+target_link_libraries(manual_import PRIVATE kithcore)
 target_include_directories(manual_import PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 
 # UI strings: the app's table, then language selection and fallback against a small table

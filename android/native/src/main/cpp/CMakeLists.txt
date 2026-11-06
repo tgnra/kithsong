@@ -7,7 +7,7 @@ set(KITHSONG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../..")
 add_subdirectory("${KITHSONG_ROOT}" kithsong)
 
 add_library(kithsong_jni SHARED jni_bridge.c jni_browse.c jni_scrobbler.c)
-target_link_libraries(kithsong_jni PRIVATE musiccore log)
+target_link_libraries(kithsong_jni PRIVATE kithcore log)
 
 # Playlist and album group editing (PlaylistNatives, AlbumGroupNatives), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_playlist_edit.c)
