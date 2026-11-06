@@ -145,20 +145,6 @@ static int same_seeds(const mc_radio_station_list *a, const mc_radio_station_lis
   return 1;
 }
 
-static void test_limit(void) {
-  CHECK(mc_radio_station_limit(0) == 0);
-  CHECK(mc_radio_station_limit(24) == 0);
-  CHECK(mc_radio_station_limit(25) == 1);
-  CHECK(mc_radio_station_limit(49) == 1);
-  CHECK(mc_radio_station_limit(50) == 2);
-  CHECK(mc_radio_station_limit(100) == 3);
-  CHECK(mc_radio_station_limit(799) == 5);
-  CHECK(mc_radio_station_limit(800) == 6);
-  CHECK(mc_radio_station_limit(3199) == 7);
-  CHECK(mc_radio_station_limit(3200) == MC_RADIO_STATIONS_MAX);
-  CHECK(mc_radio_station_limit(1000000) == MC_RADIO_STATIONS_MAX);
-}
-
 static void test_arguments(void) {
   mc_radio_station_list *list = NULL;
   CHECK(mc_radio_stations_list(NULL, 0, &list) == MC_ERR_INVALID_ARG);
@@ -499,7 +485,6 @@ static void test_home_row(const char *scratch) {
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
-  test_limit();
   test_arguments();
   test_distinct(scratch);
   test_alike(scratch);

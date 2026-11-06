@@ -30,6 +30,7 @@
 #include "musiccore/musiccore.h"
 #include "musiccore/radio.h"
 #include "musiccore/radio_stations.h"
+#include "radio/groups.h"
 #include "util/platform.h"
 
 #define DAY_MS (24 * 60 * 60 * 1000LL)
@@ -217,6 +218,18 @@ static int make_library(const char *dir, int tracks, int skips) {
   return rc != SQLITE_OK;
 }
 
+/* What the library divides into, and how clearly each count did. */
+static void print_groups(mc_library *lib) {
+  mc_radio_groups groups;
+  uint64_t start = mc_wall_ms();
+  if (mc_radio_groups_load(lib, NULL, NULL, &groups) != MC_OK) return;
+  printf("Groups: %d, in %llu ms, of", groups.count, (unsigned long long)(mc_wall_ms() - start));
+  for (int g = 0; g < groups.count; g++) printf(" %d", groups.tracks[g]);
+  printf(" tracks. Silhouettes:");
+  for (int k = 2; k <= MC_RADIO_STATIONS_MAX; k++) printf(" %d: %.3f", k, groups.silhouette[k]);
+  printf("\n");
+}
+
 static void print_stations(const mc_radio_station_list *list) {
   for (int i = 0; i < list->count; i++) {
     const mc_radio_station_info *s = &list->items[i];
@@ -322,6 +335,7 @@ int main(int argc, char **argv) {
     mc_library_close(lib);
     return 0;
   }
+  print_groups(lib);
   for (int d = 0; d < days; d++) {
     mc_radio_station_list *list = NULL;
     mc_status st = mc_radio_stations_list(lib, now + d * DAY_MS, &list);

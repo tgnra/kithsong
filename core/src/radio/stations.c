@@ -1,9 +1,7 @@
 /* See musiccore/radio_stations.h, and "Radio stations" in docs/schema.md for the reasoning.
  *
- * Choosing takes three steps: leave out the tracks too alone to make a station of, spread seeds
- * as far apart as they'll go over what's left (farthest-point selection), then let each seed give
- * way to a track close by that makes a better one. The first two work on a sample, so what they
- * cost doesn't grow with the library; the last is one pass over all of it per seed. */
+ * There's a station for each group of radio/groups.h. Its seed starts as the group's centre, and
+ * gives way to a track close by that makes a better one: one pass over the library per seed. */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L /* localtime_r */
 #endif
@@ -20,6 +18,7 @@
 #include "library/library_internal.h"
 #include "musiccore/analysis.h"
 #include "musiccore/i18n.h"
+#include "radio/groups.h"
 #include "util/platform.h"
 
 /* The same limits as a mix's own, so a seed chosen here is one mc_radio_make() takes. */
@@ -30,28 +29,8 @@
  * for telling what today added to a track's plays. */
 #define COUNTED_MS 30000
 
-enum {
-  SAMPLE = 1024, /* tracks compared with each other: the matrix is 4 MB */
-  NEIGHBOURS = 8 /* how a track's company is measured: the distance to this many */
-};
+#define LOAD_CHECK 256 /* rows read between asking whether to give up */
 
-/* A track further from its neighbours than this many times the usual is too alone to seed a
- * station: a mix from it would straight away be nothing like it. Real libraries have a few, an
- * intro or a noise track, and farthest-point selection goes for exactly those if it's let. */
-#define LONELY 1.5
-/* But this near, on the library's scales, is company whatever's usual: otherwise a loose genre
- * beside a tight one would be left out whole. */
-#define COMPANY 0.7
-
-/* Two seeds closer than this aren't different stations. It's on the fixed scales, as the
- * library's own put any library's tracks about 1 apart, however alike they all sound. In a real
- * library of 700 tracks two tracks of an album were 0.51 apart at the median and any two 0.62, so
- * this asks for about what two tracks picked at random from a varied library have. */
-#define MIN_APART 0.6
-
-/* On the library's scales, how close a track must be for a seed to give way to it: about as far
- * as a track's nearest few in that same library. */
-#define NEARBY 0.45
 
 typedef struct track {
   char uid[MC_UID_STRLEN];
@@ -64,12 +43,14 @@ typedef struct track {
 typedef struct pool {
   track *items;
   mc_analysis *results; /* parallel to items, as mc_analysis_stats_from() wants them */
+  unsigned *lasting;    /* parallel too: hashes of the uids alone, for mc_radio_groups_find() */
   int count, cap;
 } pool;
 
 static void pool_free(pool *p) {
   free(p->items);
   free(p->results);
+  free(p->lasting);
 }
 
 static mc_status pool_grow(pool *p) {
@@ -81,6 +62,9 @@ static mc_status pool_grow(pool *p) {
   mc_analysis *results = realloc(p->results, (size_t)cap * sizeof *results);
   if (!results) return MC_ERR_NOMEM;
   p->results = results;
+  unsigned *lasting = realloc(p->lasting, (size_t)cap * sizeof *lasting);
+  if (!lasting) return MC_ERR_NOMEM;
+  p->lasting = lasting;
   p->cap = cap;
   return MC_OK;
 }
@@ -118,7 +102,7 @@ static double column_real(sqlite3_stmt *stmt, int col) {
 /* Every track that may seed a station, in one query, each track's rows best first as
  * mc_analysis_get() has them. Plays are as of the start of the day, so playing doesn't move the
  * stations while they're showing. */
-static mc_status pool_load(mc_library *lib, int64_t day_ms, pool *p) {
+static mc_status pool_load(mc_library *lib, int64_t day_ms, mc_analysis_cancel_fn cancel, void *user, pool *p) {
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_library_db(lib),
                          "SELECT t.uid, a.source, a.analysis_version, a.features, a.lufs, a.lra,"
@@ -143,7 +127,11 @@ static mc_status pool_load(mc_library *lib, int64_t day_ms, pool *p) {
   char last[MC_UID_STRLEN] = "";
   mc_status st = MC_OK;
   int rc;
-  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+  for (unsigned rows = 1; st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW; rows++) {
+    if (cancel && rows % LOAD_CHECK == 0 && cancel(user)) {
+      st = MC_ERR_IN_USE;
+      break;
+    }
     const char *uid = (const char *)sqlite3_column_text(stmt, 0);
     if (!uid || strlen(uid) >= MC_UID_STRLEN || !strcmp(uid, last)) continue;
     mc_analysis result;
@@ -166,18 +154,12 @@ static mc_status pool_load(mc_library *lib, int64_t day_ms, pool *p) {
     t->has_art = sqlite3_column_int(stmt, 8);
     t->plays = sqlite3_column_int64(stmt, 9);
     t->hash = uid_hash(uid, day);
+    p->lasting[p->count] = uid_hash(uid, 0);
     p->results[p->count++] = result;
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
   return st;
-}
-
-int mc_radio_station_limit(int tracks) {
-  int limit = 0;
-  for (int64_t need = MC_RADIO_STATION_MIN_TRACKS; tracks >= need && limit < MC_RADIO_STATIONS_MAX; need *= 2)
-    limit++;
-  return limit;
 }
 
 /* Doublings of a play count, so that one more play seldom outranks anything. */
@@ -187,129 +169,7 @@ static int plays_rank(int64_t plays) {
   return rank;
 }
 
-/* --- Spreading the seeds, over a sample --- */
-
-typedef struct by_hash {
-  unsigned hash;
-  int index;
-} by_hash;
-
-static int by_hash_cmp(const void *a, const void *b) {
-  const by_hash *x = a, *y = b;
-  if (x->hash != y->hash) return x->hash < y->hash ? -1 : 1;
-  return x->index - y->index;
-}
-
-/* Up to SAMPLE tracks by the day's hash, into sample. How many, 0 if out of memory. */
-static int draw_sample(const pool *p, int *sample) {
-  by_hash *order = malloc((size_t)p->count * sizeof *order);
-  if (!order) return 0;
-  for (int i = 0; i < p->count; i++) order[i] = (by_hash){p->items[i].hash, i};
-  qsort(order, (size_t)p->count, sizeof *order, by_hash_cmp);
-  int n = p->count < SAMPLE ? p->count : SAMPLE;
-  for (int i = 0; i < n; i++) sample[i] = order[i].index;
-  free(order);
-  return n;
-}
-
-static int float_cmp(const void *a, const void *b) {
-  float x = *(const float *)a, y = *(const float *)b;
-  return x < y ? -1 : x > y;
-}
-
-/* Sets company[i] for each track of the sample that has some, from the distances between them
- * (n by n). tracks is the size of what it's a sample of. */
-static mc_status find_company(const float *dist, int n, int tracks, char *company) {
-  /* In a sample as thin as this, the same neighbours are nearer the front of the queue. Below
-   * the third it says little. */
-  int nth = (int)((int64_t)NEIGHBOURS * n / tracks);
-  if (nth < 3) nth = 3;
-  if (nth > n - 1) nth = n - 1;
-  float *row = malloc((size_t)n * sizeof *row), *nearest = malloc((size_t)n * sizeof *nearest);
-  if (!row || !nearest) {
-    free(row);
-    free(nearest);
-    return MC_ERR_NOMEM;
-  }
-  for (int i = 0; i < n; i++) {
-    memcpy(row, &dist[(size_t)i * n], (size_t)n * sizeof *row);
-    qsort(row, (size_t)n, sizeof *row, float_cmp);
-    nearest[i] = row[nth]; /* row[0] is the track itself */
-  }
-  memcpy(row, nearest, (size_t)n * sizeof *row);
-  qsort(row, (size_t)n, sizeof *row, float_cmp);
-  float limit = row[n / 2] * (float)LONELY;
-  if (limit < (float)COMPANY) limit = (float)COMPANY;
-  for (int i = 0; i < n; i++) company[i] = nearest[i] <= limit;
-  free(row);
-  free(nearest);
-  return MC_OK;
-}
-
-/* Where to start in the sample: the most played with company, the day's hash deciding among
- * equals, so a library not played much still moves on from day to day. -1 if there's none. */
-static int first_seed(const pool *p, const int *sample, const char *company, int n) {
-  int best = -1;
-  for (int i = 0; i < n; i++) {
-    if (!company[i]) continue;
-    if (best < 0) {
-      best = i;
-      continue;
-    }
-    const track *t = &p->items[sample[i]], *b = &p->items[sample[best]];
-    int rank = plays_rank(t->plays), best_rank = plays_rank(b->plays);
-    if (rank > best_rank || (rank == best_rank && t->hash < b->hash)) best = i;
-  }
-  return best;
-}
-
-/* Farthest-point selection: each seed is the track furthest from all the seeds so far, until
- * limit or until nothing is MIN_APART from them all. Fills seeds with indices into the pool and
- * sets *count. */
-static mc_status spread_seeds(const pool *p, const mc_analysis_stats *stats, int limit, int *seeds, int *count) {
-  *count = 0;
-  int cap = p->count < SAMPLE ? p->count : SAMPLE;
-  int *sample = malloc((size_t)cap * sizeof *sample);
-  float *dist = malloc((size_t)cap * cap * sizeof *dist);
-  float *from_seeds = malloc((size_t)cap * sizeof *from_seeds);
-  float *fixed_from_seeds = malloc((size_t)cap * sizeof *fixed_from_seeds);
-  char *company = malloc((size_t)cap);
-  int n = sample ? draw_sample(p, sample) : 0;
-  mc_status st = MC_ERR_NOMEM;
-  if (n && dist && from_seeds && fixed_from_seeds && company) {
-    for (int i = 0; i < n; i++) {
-      dist[(size_t)i * n + i] = 0;
-      for (int k = 0; k < i; k++)
-        dist[(size_t)i * n + k] = dist[(size_t)k * n + i] =
-          (float)mc_analysis_distance(&p->results[sample[i]], &p->results[sample[k]], stats);
-    }
-    st = find_company(dist, n, p->count, company);
-  }
-  if (st == MC_OK) {
-    for (int i = 0; i < n; i++) from_seeds[i] = fixed_from_seeds[i] = FLT_MAX;
-    for (int at = first_seed(p, sample, company, n); at >= 0 && *count < limit;) {
-      seeds[(*count)++] = sample[at];
-      int next = -1;
-      for (int i = 0; i < n; i++) {
-        float d = dist[(size_t)at * n + i];
-        float fixed = (float)mc_analysis_distance(&p->results[sample[at]], &p->results[sample[i]], NULL);
-        if (d < from_seeds[i]) from_seeds[i] = d;
-        if (fixed < fixed_from_seeds[i]) fixed_from_seeds[i] = fixed;
-        if (company[i] && fixed_from_seeds[i] >= MIN_APART && (next < 0 || from_seeds[i] > from_seeds[next]))
-          next = i;
-      }
-      at = next;
-    }
-  }
-  free(sample);
-  free(dist);
-  free(from_seeds);
-  free(fixed_from_seeds);
-  free(company);
-  return st;
-}
-
-/* --- Each seed's best neighbour, over the whole library --- */
+/* --- Each station's seed and start, over the whole library --- */
 
 static int artist_is_new(const pool *p, const track *t, const int *seeds, int count, int self) {
   for (int i = 0; i < count; i++)
@@ -330,20 +190,42 @@ static int better(const pool *p, int a, int b, const int *seeds, int count, int 
   return x->hash < y->hash;
 }
 
-/* Lets each seed move to a better track near it, if that's still MIN_APART from the others. */
-static void settle_seeds(const pool *p, const mc_analysis_stats *stats, int *seeds, int count) {
+/* Each track's group if it's plainly of one, or -1. The caller frees it. NULL if out of memory. */
+static signed char *typical_tracks(const pool *p, const mc_radio_groups *groups) {
+  signed char *typical = malloc((size_t)p->count);
+  for (int i = 0; typical && i < p->count; i++) {
+    int group = mc_radio_group_of(groups, &p->results[i]);
+    typical[i] = (signed char)(group >= 0 && mc_radio_group_typical(groups, &p->results[i], group) ? group : -1);
+  }
+  return typical;
+}
+
+/* Each seed starts as its group's centre, which stays put from day to day, and moves to a better
+ * track near it that's plainly of the group, so what a station is called can change with the day
+ * while what it plays doesn't. */
+static void settle_seeds(const pool *p, const mc_radio_groups *groups, const signed char *typical, int *seeds, int count) {
   for (int s = 0; s < count; s++) {
     int centre = seeds[s], best = centre;
     for (int i = 0; i < p->count; i++) {
-      if (i == best || !better(p, i, best, seeds, count, s)) continue;
-      if (mc_analysis_distance(&p->results[centre], &p->results[i], stats) > NEARBY) continue;
-      int apart = 1;
-      for (int k = 0; k < count && apart; k++)
-        apart = k == s || mc_analysis_distance(&p->results[seeds[k]], &p->results[i], NULL) >= MIN_APART;
-      if (apart) best = i;
+      if (typical[i] != s || i == best || !better(p, i, best, seeds, count, s)) continue;
+      if (mc_analysis_distance(&p->results[centre], &p->results[i], &groups->stats) <= MC_RADIO_NEARBY) best = i;
     }
     seeds[s] = best;
   }
+}
+
+/* Where group's station starts this time: any track plainly of it, at random, so it isn't the
+ * same every time. The seed if there's none, which a group that's all stragglers can come to. */
+static int draw_start(const pool *p, const signed char *typical, int group, int seed) {
+  int tracks = 0;
+  for (int i = 0; i < p->count; i++) tracks += typical[i] == group;
+  uint32_t draw;
+  if (mc_random_bytes(&draw, sizeof draw) != MC_OK) draw = (uint32_t)mc_mono_ms() * 2654435761u;
+  if (!tracks) return seed;
+  int left = (int)(draw % (uint32_t)tracks);
+  for (int i = 0; i < p->count; i++)
+    if (typical[i] == group && !left--) return i;
+  return seed;
 }
 
 /* The most played first, as what's familiar is the way in, then the day's order. */
@@ -446,6 +328,24 @@ static mc_status finish_stations(mc_radio_station_list *list, char **albums) {
   return st;
 }
 
+/* The library's groups, with pool's results as they stand. Too little analysed leaves it no
+ * groups, as it has no stations. */
+static mc_status find_groups(const pool *p, mc_radio_groups *groups) {
+  mc_analysis_stats stats;
+  memset(groups, 0, sizeof *groups);
+  if (p->count < MC_RADIO_STATION_MIN_TRACKS) return MC_OK;
+  mc_analysis_stats_from(p->results, p->count, &stats);
+  return mc_radio_groups_find(p->results, p->lasting, p->count, &stats, groups);
+}
+
+mc_status mc_radio_groups_load(mc_library *lib, mc_analysis_cancel_fn cancel, void *user, mc_radio_groups *out) {
+  pool p = {0};
+  mc_status st = pool_load(lib, 0, cancel, user, &p);
+  if (st == MC_OK) st = find_groups(&p, out);
+  pool_free(&p);
+  return st;
+}
+
 mc_status mc_radio_stations_list(mc_library *lib, int64_t now_ms, mc_radio_station_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
@@ -453,16 +353,19 @@ mc_status mc_radio_stations_list(mc_library *lib, int64_t now_ms, mc_radio_stati
   if (!list) return MC_ERR_NOMEM;
 
   pool p = {0};
-  mc_status st = pool_load(lib, day_start_ms(now_ms ? now_ms : (int64_t)mc_wall_ms()), &p);
-  int limit = mc_radio_station_limit(p.count), seeds[MC_RADIO_STATIONS_MAX], count = 0;
-  if (st == MC_OK && limit) {
-    mc_analysis_stats stats;
-    mc_analysis_stats_from(p.results, p.count, &stats);
-    st = spread_seeds(&p, &stats, limit, seeds, &count);
-    if (st == MC_OK) {
-      settle_seeds(&p, &stats, seeds, count);
-      sort_seeds(&p, seeds, count);
-    }
+  mc_radio_groups groups;
+  mc_status st = pool_load(lib, day_start_ms(now_ms ? now_ms : (int64_t)mc_wall_ms()), NULL, NULL, &p);
+  if (st == MC_OK) st = find_groups(&p, &groups);
+  int seeds[MC_RADIO_STATIONS_MAX], count = 0;
+  signed char *typical = NULL;
+  if (st == MC_OK && groups.count) {
+    if (!(typical = typical_tracks(&p, &groups))) st = MC_ERR_NOMEM;
+  }
+  if (st == MC_OK && typical) {
+    count = groups.count;
+    memcpy(seeds, groups.centre, (size_t)count * sizeof *seeds);
+    settle_seeds(&p, &groups, typical, seeds, count);
+    sort_seeds(&p, seeds, count);
   }
   char *albums[MC_RADIO_STATIONS_MAX] = {0};
   if (st == MC_OK && count) {
@@ -471,10 +374,13 @@ mc_status mc_radio_stations_list(mc_library *lib, int64_t now_ms, mc_radio_stati
     for (int i = 0; st == MC_OK && i < count; i++) {
       list->count = i + 1;
       st = read_seed(lib, &p.items[seeds[i]], &list->items[i], &albums[i]);
+      int start = draw_start(&p, typical, mc_radio_group_of(&groups, &p.results[seeds[i]]), seeds[i]);
+      memcpy(list->items[i].start_track, p.items[start].uid, sizeof list->items[i].start_track);
     }
     if (st == MC_OK) st = finish_stations(list, albums);
   }
   for (int i = 0; i < count; i++) mc_free(albums[i]);
+  free(typical);
   pool_free(&p);
   if (st != MC_OK) {
     mc_radio_station_list_free(list);

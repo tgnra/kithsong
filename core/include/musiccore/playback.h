@@ -104,6 +104,11 @@ mc_status mc_player_load_queue(mc_player *player, const char *const *paths, int 
  * in the station's order whatever shuffle says; shuffle applies again to the next queue. */
 mc_status mc_player_play_radio(mc_player *player, const char *library_dir, const char *seed_path,
                                const char *seed_uid);
+/* As mc_player_play_radio(), for a station that starts from another track than its seed, as the
+ * Home page's do. The queue becomes the track start_uid, whose file is start_path, and it's the
+ * seed that plays are logged under, as what the station is. mc_radio_seed_check() the start. */
+mc_status mc_player_play_station(mc_player *player, const char *library_dir, const char *start_path,
+                                 const char *start_uid, const char *seed_uid);
 /* Stops adding to the queue, which plays out what it has. For when the library closes, as the
  * station's tracks are that library's. */
 mc_status mc_player_stop_radio(mc_player *player);

@@ -13,6 +13,7 @@
 
 #include "library/library_internal.h"
 #include "musiccore/analysis.h"
+#include "radio/groups.h"
 #include "util/platform.h"
 
 #define MIN_TRACK_MS 60000 /* shorter is mostly intros and interludes */
@@ -73,7 +74,8 @@ typedef struct pool {
 struct mc_radio_station {
   pool pool;
   mc_analysis_stats stats;
-  int seed;
+  int seed;  /* what the station is: its group, and what skips are told of */
+  int start; /* where it started: the first pick, and what the rest are measured from */
   uint32_t random;
   int64_t now_ms; /* 0: the clock, at each pick */
   int *recent;    /* the last picks, a ring of recent_cap */
@@ -84,13 +86,15 @@ struct mc_radio_station {
   double *nudges; /* what skips add to each item's score, before SKIP_MOST. NULL: nothing */
 };
 
+static void candidate_free(candidate *c) {
+  free(c->artist);
+  free(c->album);
+  free(c->title);
+  free(c->path);
+}
+
 static void pool_free(pool *p) {
-  for (int i = 0; i < p->count; i++) {
-    free(p->items[i].artist);
-    free(p->items[i].album);
-    free(p->items[i].title);
-    free(p->items[i].path);
-  }
+  for (int i = 0; i < p->count; i++) candidate_free(&p->items[i]);
   free(p->items);
   free(p->results);
 }
@@ -221,7 +225,7 @@ static void mark_used(mc_radio_station *s, const candidate *c) {
 
 static double score(const mc_radio_station *s, int c, int prev, int64_t now_ms) {
   const pool *p = &s->pool;
-  double value = SEED_WEIGHT * mc_analysis_distance(&p->results[s->seed], &p->results[c], &s->stats) +
+  double value = SEED_WEIGHT * mc_analysis_distance(&p->results[s->start], &p->results[c], &s->stats) +
                  (1.0 - SEED_WEIGHT) * mc_analysis_distance(&p->results[prev], &p->results[c], &s->stats);
   int64_t played = p->items[c].last_played_ms;
   if (played > 0) {
@@ -274,9 +278,9 @@ static void new_round(mc_radio_station *s, int keep) {
   for (int back = 1; back <= keep; back++) mark_used(s, picked_back(s, back));
 }
 
-/* The seed, then whatever follows it; -1 once a mix has run out. */
+/* The start, then whatever follows it; -1 once a mix has run out. */
 static int take_pick(mc_radio_station *s, int64_t now_ms) {
-  int c = s->seed;
+  int c = s->start;
   if (s->picked) {
     c = pick_next(s, now_ms);
     if (c < 0 && s->endless) {
@@ -302,7 +306,7 @@ static int take_picks(mc_radio_station *s, mc_radio_pick *out, int count) {
     int c = take_pick(s, now_ms);
     if (c < 0) break;
     memcpy(out[n].track_uid, s->pool.items[c].uid, MC_UID_STRLEN);
-    out[n].distance = mc_analysis_distance(&s->pool.results[s->seed], &s->pool.results[c], &s->stats);
+    out[n].distance = mc_analysis_distance(&s->pool.results[s->start], &s->pool.results[c], &s->stats);
     out[n].path = s->pool.items[c].path;
   }
   return n;
@@ -483,6 +487,29 @@ static mc_status skips_load(mc_radio_station *s, mc_library *lib, int64_t now_ms
   return st;
 }
 
+/* Lets go of what isn't of the seed's group, leaving the order as it was. The seed and start stay
+ * whatever happens: the groups can have moved since a station's start was drawn. A library that
+ * doesn't divide has nothing to let go of. */
+static mc_status keep_group(mc_radio_station *s, mc_library *lib, mc_analysis_cancel_fn cancel, void *user) {
+  pool *p = &s->pool;
+  mc_radio_groups groups;
+  mc_status st = mc_radio_groups_load(lib, cancel, user, &groups);
+  if (st != MC_OK || groups.count < 2) return st;
+  int group = mc_radio_group_of(&groups, &p->results[s->seed]), kept = 0, seed = s->seed, start = s->start;
+  for (int i = 0; i < p->count; i++) {
+    if (i != seed && i != start && mc_radio_group_of(&groups, &p->results[i]) != group) {
+      candidate_free(&p->items[i]);
+      continue;
+    }
+    if (i == seed) s->seed = kept;
+    if (i == start) s->start = kept;
+    p->items[kept] = p->items[i];
+    p->results[kept++] = p->results[i];
+  }
+  p->count = kept;
+  return MC_OK;
+}
+
 /* Loads s, which has what's particular to it set and the rest zeroed. */
 static mc_status station_start(mc_radio_station *s, mc_library *lib, const mc_radio_options *opts,
                                mc_analysis_cancel_fn cancel, void *user) {
@@ -501,7 +528,11 @@ static mc_status station_start(mc_radio_station *s, mc_library *lib, const mc_ra
       if (!strcmp(s->pool.items[i].uid, opts->seed_track)) s->seed = i;
     if (s->seed < 0) return MC_ERR_NOT_FOUND;
   }
+  s->start = opts->start_track ? pool_find(&s->pool, opts->start_track) : s->seed;
+  if (s->start < 0) return MC_ERR_NOT_FOUND;
   mc_analysis_stats_from(s->pool.results, s->pool.count, &s->stats);
+  /* After the scales, which stay the library's: what's near on a station is what's near anywhere. */
+  if ((st = keep_group(s, lib, cancel, user)) != MC_OK) return st;
   s->now_ms = opts->now_ms;
   return skips_load(s, lib, opts->now_ms ? opts->now_ms : (int64_t)mc_wall_ms(), cancel, user);
 }

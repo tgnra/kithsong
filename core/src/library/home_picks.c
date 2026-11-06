@@ -464,6 +464,7 @@ static void pick_radio(const sources *s, row *r) {
     const mc_artist_info *artist = find_artist(s, st->artist_uid);
     p->station = 1;
     memcpy(p->seed_uid, st->seed_track, sizeof p->seed_uid);
+    memcpy(p->start_uid, st->start_track, sizeof p->start_uid);
     p->title = mc_strdup(st->name);
     p->sub = mc_strdup(st->sub);
     p->seed_title = mc_strdup(st->seed_title);
