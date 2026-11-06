@@ -241,7 +241,18 @@ FetchContent_Declare(opusfile
   URL_HASH SHA256=118d8601c12dd6a44f52423e68ca9083cc9f2bfe72da7a8c1acb22a80ae3550b
   DOWNLOAD_EXTRACT_TIMESTAMP ON
   SOURCE_SUBDIR _none_)
+# libopus's run-time CPU check on Arm Windows only builds with MSVC, and every 64-bit Arm CPU has
+# NEON anyway. Turning off "may have" turns the check off; its CMake then presumes NEON but
+# leaves out the definitions that goes with, so they're added below.
+set(_opus_arm_windows OFF)
+if(WIN32 AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+  set(_opus_arm_windows ON)
+  set(OPUS_MAY_HAVE_NEON OFF CACHE BOOL "" FORCE)
+endif()
 FetchContent_MakeAvailable(ogg opus opusenc opusfile)
+if(_opus_arm_windows)
+  target_compile_definitions(opus PRIVATE OPUS_ARM_MAY_HAVE_NEON OPUS_ARM_MAY_HAVE_NEON_INTR)
+endif()
 
 # Its own Speex resampler is built in, under a prefix so it can't clash.
 add_library(mc_opusenc STATIC

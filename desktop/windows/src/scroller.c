@@ -1,5 +1,7 @@
 #include "scroller.h"
 
+#include <limits.h> /* WHEEL_PAGESCROLL is UINT_MAX */
+
 #include "musiccore/perf.h"
 #include "theme.h"
 

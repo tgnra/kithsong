@@ -21,11 +21,16 @@ if(NOT EXISTS "${_root}/bin/${KITHSONG_TRIPLE}-clang.exe")
                       "LLVM_MINGW to where it is.")
 endif()
 
-# Only when the CPUs differ: setting these makes CMake treat the build as a cross-compile, and
-# a native one has to stay able to run what it builds.
-if(NOT CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL KITHSONG_WINDOWS_CPU)
-  set(CMAKE_SYSTEM_NAME Windows)
-  set(CMAKE_SYSTEM_PROCESSOR ${KITHSONG_WINDOWS_CPU})
+# Set whichever machine this is, as libopus's CMake only takes the name in lower case: with
+# Windows' own ARM64 it quietly builds without NEON. Setting these alone would count as a
+# cross-compile, so say which it is. A native build has to stay able to run what it builds.
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR ${KITHSONG_WINDOWS_CPU})
+if(_host STREQUAL KITHSONG_WINDOWS_CPU OR
+   (_host STREQUAL "x86_64" AND KITHSONG_WINDOWS_CPU STREQUAL "AMD64"))
+  set(CMAKE_CROSSCOMPILING FALSE)
+else()
+  set(CMAKE_CROSSCOMPILING TRUE)
 endif()
 
 set(CMAKE_C_COMPILER "${_root}/bin/${KITHSONG_TRIPLE}-clang.exe")

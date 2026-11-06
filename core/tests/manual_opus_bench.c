@@ -553,7 +553,11 @@ static void sampler(void *arg) {
     CONTEXT c;
     memset(&c, 0, sizeof c);
     c.ContextFlags = CONTEXT_CONTROL;
+#if defined(__aarch64__)
+    if (GetThreadContext(p->target, &c)) p->rips[p->n++] = c.Pc;
+#else
     if (GetThreadContext(p->target, &c)) p->rips[p->n++] = c.Rip;
+#endif
     ResumeThread(p->target);
   }
 }

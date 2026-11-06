@@ -69,7 +69,7 @@ try {
 # What ships is this one exe, so it has to be for the right CPU and need nothing Windows doesn't
 # come with: llvm-mingw's runtime DLLs, or the older msvcrt, would mean a wrong link.
 $objdump = (Select-String -Path "$buildDir\CMakeCache.txt" -Pattern '^CMAKE_OBJDUMP:FILEPATH=(.+)$').Matches[0].Groups[1].Value
-$format = @{ x64 = 'coff-x86-64'; arm64 = 'coff-aarch64' }[$Arch]
+$format = @{ x64 = 'coff-x86-64'; arm64 = 'coff-arm64' }[$Arch]
 if (-not ((& $objdump -f "$stage\kithsong.exe") -match "file format $format")) { Write-Error "kithsong.exe isn't $format." }
 $foreign = (& $objdump -p "$stage\kithsong.exe") -match 'DLL Name: (lib|msvc|vcruntime)'
 if ($foreign) { Write-Error "kithsong.exe needs a DLL it doesn't ship with: $foreign" }
