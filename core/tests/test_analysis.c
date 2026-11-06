@@ -1,6 +1,7 @@
 /* Local audio analysis (musiccore/analysis.h): loudness against EBU Tech 3341 and 3342's test
  * signals, timbre from synthetic ones, and how results are stored, scanned and synced. */
 #include <math.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1015,6 +1016,62 @@ static int wait_for(mc_library *lib, int count) {
   return 0;
 }
 
+/* Until the status says this, which must be a state that lasts: a moment can pass between two
+ * looks, on a busy machine as long as a whole run. Those are for the hooks below. */
+static int wait_status(mc_analysis_scanner *s, int active, int paced, mc_analysis_status *status) {
+  uint64_t until = mc_mono_ms() + WAIT_MS;
+  while (mc_mono_ms() < until) {
+    mc_analysis_scanner_status(s, status);
+    if (status->active == active && status->paced == paced) return 1;
+    mc_sleep_ms(10);
+  }
+  return 0;
+}
+
+/* All a run's status went through, for reading once the scanner has stopped. */
+typedef struct run_log {
+  int most;     /* the highest total */
+  int ahead;    /* the most it ever had left to do */
+  int done;     /* as it last said while active */
+  int finished; /* done, when it said there was no more */
+  int went_back, over, large;
+} run_log;
+
+static void log_status(const mc_analysis_status *st, void *user) {
+  run_log *r = user;
+  if (st->done > st->total) r->over = 1;
+  if (!st->active) {
+    if (st->total) r->finished = st->done; /* all zero is the run over, or a look finding nothing */
+    return;
+  }
+  if (st->total > r->most) r->most = st->total;
+  if (st->total - st->done > r->ahead) r->ahead = st->total - st->done;
+  if (st->done < r->done) r->went_back = 1;
+  if (st->large) r->large = 1;
+  r->done = st->done;
+}
+
+/* Stops a scanner where its pass has found nothing and it's about to wait, until told to go. */
+typedef struct idle_stop {
+  atomic_int blank, stopped, go;
+} idle_stop;
+
+static void stop_at_idle(const mc_analysis_status *st, void *user) {
+  idle_stop *p = user;
+  if (st->total || atomic_fetch_add(&p->blank, 1) != 1) return; /* the first is its count */
+  atomic_store(&p->stopped, 1);
+  while (!atomic_load(&p->go)) mc_sleep_ms(1);
+}
+
+static int wait_stopped(idle_stop *p) {
+  uint64_t until = mc_mono_ms() + WAIT_MS;
+  while (mc_mono_ms() < until) {
+    if (atomic_load(&p->stopped)) return 1;
+    mc_sleep_ms(10);
+  }
+  return 0;
+}
+
 static void test_scanner(const char *scratch) {
   enum { TRACKS = 6 };
   char dir[1024], path[1200], name[32];
@@ -1037,7 +1094,7 @@ static void test_scanner(const char *scratch) {
   CHECK(analysed(lib) == 0);
   uint64_t from = mc_mono_ms();
   mc_analysis_scanner_stop(s);
-  CHECK(mc_mono_ms() - from < 2000);
+  CHECK(mc_mono_ms() - from < WAIT_MS); /* this hold never ends, however busy the machine */
   CHECK(analysed(lib) == 0);
 
   /* Released, it works; stopped part-way, it stops; started again, it goes on from there. */
@@ -1108,52 +1165,49 @@ static void test_scanner(const char *scratch) {
   mc_analysis_hold();
   CHECK(mc_analysis_scanner_start_sized(dir, 0, &s) == MC_OK);
   mc_analysis_status status = {0};
-  for (int i = 0; i < 200 && !status.active; i++) {
-    mc_sleep_ms(10);
-    mc_analysis_scanner_status(s, &status);
-  }
-  CHECK(status.active && status.large && !status.paced && status.total == 1 && status.done == 0);
+  CHECK(wait_status(s, 1, 0, &status));
+  CHECK(status.large && status.total == 1 && status.done == 0);
   mc_analysis_scanner_set_paced(s, 1);
   mc_analysis_scanner_status(s, &status);
   CHECK(status.paced);
   mc_analysis_release();
   CHECK(wait_for(lib, TRACKS + 4));
-  for (int i = 0; i < 500 && status.paced; i++) {
-    mc_sleep_ms(10);
-    mc_analysis_scanner_status(s, &status);
-  }
-  CHECK(!status.paced && !status.active);
+  CHECK(wait_status(s, 0, 0, &status));
   mc_analysis_scanner_stop(s);
 
-  /* A short batch isn't large, and an idle sized scanner sees the end of a hold at once. */
+  /* An idle sized scanner sees the end of a hold at once, even one that ended after its pass
+   * looked and before it began to wait: the import's tracks would sit there until the next look. */
+  idle_stop at_idle = {0};
   mc_analysis_scanner_set_timing(0, 600000, 1, 0);
+  mc_analysis_scanner_set_status_hook(stop_at_idle, &at_idle);
   CHECK(mc_analysis_scanner_start_sized(dir, 0, &s) == MC_OK);
-  mc_sleep_ms(200);
+  CHECK(wait_stopped(&at_idle));
   snprintf(path, sizeof path, "%s/woken.wav", dir);
   CHECK(write_wav(path, 44100, 1.0, 0.5));
   add_track(lib, "woken.wav", 0, other);
   mc_analysis_hold();
   mc_analysis_release();
+  atomic_store(&at_idle.go, 1);
   CHECK(wait_for(lib, TRACKS + 5));
   mc_analysis_scanner_stop(s);
+  mc_analysis_scanner_set_status_hook(NULL, NULL);
   mc_analysis_scanner_set_timing(0, 20, 0, 0);
   mc_analysis_scanner_status(NULL, &status);
   CHECK(!status.active);
 
   /* Tracks that arrive under a run join it, as an import's do: a pass has started on the first
    * of them, the rest are in its count, and it comes to the end of them. Some of the new uids
-   * may be behind the cursor, for another pass, which goes on with the same count. */
+   * may be behind the cursor, for another pass, which goes on with the same count. All of it
+   * from the hook, as the run can be over between two looks at its status. */
   enum { FIRST = 2, MORE = 6 };
+  run_log run = {0};
+  mc_analysis_scanner_set_status_hook(log_status, &run);
   for (int i = 0; i < FIRST + MORE; i++) {
     if (i == FIRST) {
       mc_analysis_hold();
       CHECK(mc_analysis_scanner_start_sized(dir, 0, &s) == MC_OK);
-      status.active = 0;
-      for (int k = 0; k < 500 && !status.active; k++) {
-        mc_sleep_ms(10);
-        mc_analysis_scanner_status(s, &status);
-      }
-      CHECK(status.active && status.total == FIRST && !status.large);
+      CHECK(wait_status(s, 1, 0, &status));
+      CHECK(status.total == FIRST && !status.large);
     }
     snprintf(name, sizeof name, "late%d.wav", i);
     snprintf(path, sizeof path, "%s/%s", dir, name);
@@ -1165,26 +1219,19 @@ static void test_scanner(const char *scratch) {
   CHECK(sqlite3_exec(mc_library_db(lib), sql, NULL, NULL, NULL) == SQLITE_OK);
   mc_analysis_scanner_set_recount_ms(0);
   mc_analysis_release();
-  int most = 0, last_done = 0, went_back = 0, over = 0, large = 0;
-  for (uint64_t until = mc_mono_ms() + WAIT_MS; mc_mono_ms() < until;) {
-    mc_analysis_scanner_status(s, &status);
-    if (status.active) {
-      if (status.total > most) most = status.total;
-      if (status.done < last_done) went_back = 1;
-      if (status.done > status.total) over = 1;
-      if (status.large) large = 1;
-      last_done = status.done;
-    }
-    if (analysed(lib) >= TRACKS + 5 + FIRST + MORE && !status.active) break;
-    mc_sleep_ms(1);
-  }
-  CHECK(analysed(lib) == TRACKS + 5 + FIRST + MORE);
-  CHECK(most == FIRST + MORE);
-  CHECK(!went_back);
-  CHECK(!over);
-  CHECK(large);
+  CHECK(wait_for(lib, TRACKS + 5 + FIRST + MORE));
+  CHECK(wait_status(s, 0, 0, &status));
   mc_analysis_scanner_stop(s);
+  mc_analysis_scanner_set_status_hook(NULL, NULL);
   mc_analysis_scanner_set_recount_ms(5000);
+  CHECK(analysed(lib) == TRACKS + 5 + FIRST + MORE);
+  CHECK(run.most == FIRST + MORE);
+  /* From a count, not from done pushing total up: with the first track done, the rest are ahead. */
+  CHECK(run.ahead == FIRST + MORE - 1);
+  CHECK(run.finished == FIRST + MORE);
+  CHECK(!run.went_back);
+  CHECK(!run.over);
+  CHECK(run.large);
 
   /* Resumed, it goes at once whatever the wait to start, and paced. */
   mc_analysis_scanner_set_timing(600000, 600000, 0, 0);
@@ -1299,8 +1346,14 @@ static void test_power_sysfs(const char *scratch) {
   printf("this machine: %s\n", mc_power_on_ac() ? "on AC" : "on battery");
 }
 
-/* Unplugged it does nothing; unplugged part-way it finishes the track in hand and stops; plugged
- * in it goes on; and a stop never waits for the next look. */
+/* Pulls the plug as the first track comes in, on the scanner's thread: from the test's own, it
+ * could come after the last. */
+static void unplug_after_one(const mc_analysis_status *st, void *user) {
+  if (st->done >= 1 && atomic_exchange((atomic_int *)user, 0)) mc_power_set_override(0);
+}
+
+/* Unplugged it does nothing; unplugged part-way it stops at the next track; plugged in it goes
+ * on; and a stop never waits for the next look. */
 static void test_power_scan(const char *scratch) {
   enum { TRACKS = 5 };
   char dir[1024], path[1200], name[32], uid[MC_UID_STRLEN];
@@ -1316,6 +1369,8 @@ static void test_power_scan(const char *scratch) {
   mc_analysis_scanner_set_power_poll_ms(20);
 
   mc_power_set_override(0);
+  atomic_int armed = 1;
+  mc_analysis_scanner_set_status_hook(unplug_after_one, &armed);
   mc_analysis_scanner *s = NULL;
   CHECK(mc_analysis_scanner_start(dir, &s) == MC_OK);
   mc_sleep_ms(300);
@@ -1323,8 +1378,7 @@ static void test_power_scan(const char *scratch) {
 
   mc_power_set_override(1);
   CHECK(wait_for(lib, 1));
-  mc_power_set_override(0);
-  /* What it had in hand comes in; then nothing does. */
+  /* Then nothing comes in. */
   int settled = analysed(lib), now;
   for (int quiet = 0; quiet < 10; settled = now) {
     mc_sleep_ms(100);
@@ -1332,11 +1386,12 @@ static void test_power_scan(const char *scratch) {
     quiet = now == settled ? quiet + 1 : 0;
   }
   printf("unplugged part-way: %d of %d done, and it stopped there\n", settled, TRACKS);
-  CHECK(settled < TRACKS);
+  CHECK(settled == 1);
 
   mc_power_set_override(1);
   CHECK(wait_for(lib, TRACKS));
   mc_analysis_scanner_stop(s);
+  mc_analysis_scanner_set_status_hook(NULL, NULL);
 
   /* Waiting for power with a long look ahead of it. */
   mc_power_set_override(0);
@@ -1345,7 +1400,7 @@ static void test_power_scan(const char *scratch) {
   mc_sleep_ms(200);
   uint64_t from = mc_mono_ms();
   mc_analysis_scanner_stop(s);
-  CHECK(mc_mono_ms() - from < 2000);
+  CHECK(mc_mono_ms() - from < WAIT_MS); /* well under the look's 60 s, however busy the machine */
   mc_analysis_scanner_set_power_poll_ms(20);
 
 #ifdef __linux__

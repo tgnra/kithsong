@@ -55,6 +55,8 @@ static uint32_t g_start_ms = 30000, g_idle_ms = 5 * 60 * 1000;
 static int g_rests = 1, g_background = 1;
 static uint32_t g_power_poll_ms = 30000;
 static uint32_t g_recount_ms = RECOUNT_MS;
+static mc_analysis_status_hook g_status_hook;
+static void *g_status_user;
 
 void mc_analysis_hold(void) {
   atomic_fetch_add(&g_holds, 1);
@@ -82,6 +84,11 @@ void mc_analysis_scanner_set_power_poll_ms(uint32_t ms) {
 
 void mc_analysis_scanner_set_recount_ms(uint32_t ms) {
   g_recount_ms = ms;
+}
+
+void mc_analysis_scanner_set_status_hook(mc_analysis_status_hook hook, void *user) {
+  g_status_hook = hook;
+  g_status_user = user;
 }
 
 /* --- One track --- */
@@ -323,6 +330,13 @@ static int busy(void *user, int tries) {
   return 1;
 }
 
+/* Instead of unlocking after a change to the status. */
+static void status_changed(mc_analysis_scanner *s) {
+  mc_analysis_status status = s->status;
+  mc_mutex_unlock(&s->lock);
+  if (g_status_hook) g_status_hook(&status, g_status_user);
+}
+
 /* What's ahead, for the status: on top of what this run has done. */
 static void count_ahead(mc_analysis_scanner *s, mc_library *lib) {
   int tracks = 0;
@@ -333,27 +347,27 @@ static void count_ahead(mc_analysis_scanner *s, mc_library *lib) {
   s->status.active = tracks > 0;
   s->status.large = s->status.large || ms >= LARGE_BATCH_MS; /* the frontend has been told */
   s->status.total = s->status.done + tracks;
-  mc_mutex_unlock(&s->lock);
+  status_changed(s);
 }
 
 static void count_done(mc_analysis_scanner *s, mc_library *lib) {
   mc_mutex_lock(&s->lock);
   s->status.done++;
   if (s->status.total < s->status.done) s->status.total = s->status.done;
-  mc_mutex_unlock(&s->lock);
+  status_changed(s);
   if (mc_mono_ms() - s->counted_at >= g_recount_ms) count_ahead(s, lib);
 }
 
 static void end_run(mc_analysis_scanner *s) {
   mc_mutex_lock(&s->lock);
   memset(&s->status, 0, sizeof s->status);
-  mc_mutex_unlock(&s->lock);
+  status_changed(s);
 }
 
 /* Until the next look: the end of g_idle_ms, or of a hold, as an import has just left work.
- * Whether it was told to stop. */
-static int wait_idle(mc_analysis_scanner *s) {
-  unsigned releases = atomic_load(&g_releases);
+ * releases is g_releases from before the pass that found nothing, as a hold may have ended since
+ * it looked, and its tracks would wait out g_idle_ms. Whether it was told to stop. */
+static int wait_idle(mc_analysis_scanner *s, unsigned releases) {
   uint64_t until = mc_mono_ms() + g_idle_ms;
   for (;;) {
     uint64_t now = mc_mono_ms();
@@ -365,6 +379,7 @@ static int wait_idle(mc_analysis_scanner *s) {
 
 static void scan(mc_analysis_scanner *s, mc_library *lib) {
   char cursor[MC_UID_STRLEN] = "";
+  unsigned releases = atomic_load(&g_releases);
   int worked = 0;
   s->burst_from = mc_mono_ms();
   count_ahead(s, lib);
@@ -402,8 +417,9 @@ static void scan(mc_analysis_scanner *s, mc_library *lib) {
     }
     /* Paced was for that batch, and the next may be small. Not after an error: it isn't done. */
     if (!worked && st == MC_OK) atomic_store(&s->paced, 0);
-    if (!worked && wait_idle(s)) break;
+    if (!worked && wait_idle(s, releases)) break;
     worked = 0;
+    releases = atomic_load(&g_releases);
     s->burst_from = mc_mono_ms();
     count_ahead(s, lib);
   }
