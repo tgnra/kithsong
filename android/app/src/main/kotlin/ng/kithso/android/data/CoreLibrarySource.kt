@@ -434,7 +434,6 @@ class CoreLibrarySource(
                 return@launch
             }
             state.value = state.value?.copy(recents = recents())
-            if (ref.kind == CollectionRef.Kind.Station) refreshStations() // each listing draws new starts
             onChanged()
         }
     }
