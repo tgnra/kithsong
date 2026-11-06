@@ -29,18 +29,16 @@ static const char k_stats_sql[] =
   "   OR EXISTS (SELECT 1 FROM tracks t WHERE t.artist_uid = ar.uid)"
   "   OR EXISTS (SELECT 1 FROM track_artists c WHERE c.artist_uid = ar.uid AND c.position > 0)"
   "   OR EXISTS (SELECT 1 FROM album_artists c WHERE c.artist_uid = ar.uid AND c.position > 0)),"
-  /* As mc_library_list_artists_here(). */
-  " (SELECT count(*) FROM artists WHERE uid IN ("
-  "   SELECT a.artist_uid FROM albums a WHERE " ALBUM_HERE
-  "   UNION SELECT c.artist_uid FROM album_artists c JOIN albums a ON a.uid = c.album_uid"
-  "    WHERE c.position > 0 AND " ALBUM_HERE
-  "   UNION SELECT coalesce(t.artist_uid, al.artist_uid) FROM tracks t"
-  "    LEFT JOIN albums al ON al.uid = t.album_uid WHERE " TRACK_HERE
-  "   UNION SELECT c.artist_uid FROM track_artists c JOIN tracks t ON t.uid = c.track_uid"
-  "    WHERE c.position > 0 AND " TRACK_HERE
-  "   UNION SELECT c.artist_uid FROM tracks t"
-  "    JOIN album_artists c ON c.album_uid = t.album_uid AND c.position > 0"
-  "    WHERE t.artist_uid IS NULL AND " TRACK_HERE ")),"
+  /* As mc_library_list_artists_here(), asked of each artist so that the first thing of theirs
+   * found here ends it, which makes this quick while most of the library is here. A track with
+   * no artist of its own goes by its album's, and an album here covers those. */
+  " (SELECT count(*) FROM artists ar"
+  "  WHERE EXISTS (SELECT 1 FROM tracks t WHERE t.artist_uid = ar.uid AND " TRACK_HERE ")"
+  "   OR EXISTS (SELECT 1 FROM albums a WHERE a.artist_uid = ar.uid AND " ALBUM_HERE ")"
+  "   OR EXISTS (SELECT 1 FROM track_artists c JOIN tracks t ON t.uid = c.track_uid"
+  "    WHERE c.artist_uid = ar.uid AND c.position > 0 AND " TRACK_HERE ")"
+  "   OR EXISTS (SELECT 1 FROM album_artists c JOIN albums a ON a.uid = c.album_uid"
+  "    WHERE c.artist_uid = ar.uid AND c.position > 0 AND " ALBUM_HERE ")),"
   " (SELECT count(*), sum(size_bytes) FROM files),"
   " (SELECT count(*) FROM playlists),"
   " (SELECT count(*) FROM album_groups),"
