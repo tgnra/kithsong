@@ -449,7 +449,7 @@ private fun MatchPage(d: ReviewDetails, index: Int, match: CoreImport.Match, bus
             stringResource(R.string.import_use_as_track_hint),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 24.dp),
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
         )
     }
     LazyColumn(Modifier.heightIn(max = 400.dp)) {

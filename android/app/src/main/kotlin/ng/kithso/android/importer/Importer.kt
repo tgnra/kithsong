@@ -630,6 +630,10 @@ class Importer(
     // What's said of an item the library already had some of, kept for when its session is closed.
     private fun noteOutcome(batch: Batch, session: CoreImport, item: Int) {
         val text = when (session.itemInfo(item).outcome) {
+            CoreImport.Outcome.Moved -> {
+                moved += ItemKey(batch.id, item)
+                return
+            }
             CoreImport.Outcome.Replaced -> R.string.import_state_replaced
             CoreImport.Outcome.Added -> R.string.import_state_added_missing
             CoreImport.Outcome.Duplicate -> R.string.import_state_duplicate
@@ -704,10 +708,10 @@ class Importer(
             batch = batchIndex,
             batches = batchTotal,
             filesFound = batches.sumOf { it.found },
-            items = all.size,
+            items = all.size - moved.size,
             imported = counts[CoreImport.State.Done] ?: 0,
             review = review,
-            skipped = counts[CoreImport.State.Skipped] ?: 0,
+            skipped = (counts[CoreImport.State.Skipped] ?: 0) - moved.size,
             failed = counts[CoreImport.State.Failed] ?: 0,
             offline = !skipTagging && batches.any { !it.closed && it.offline },
             unreachable = if (skipTagging) 0 else unreachableCount(),
@@ -732,6 +736,8 @@ class Importer(
     }
 
     private val outcomes = LinkedHashMap<ItemKey, String>()
+    // Items whose files all went to another item: nothing to count them as.
+    private val moved = HashSet<ItemKey>()
 
     // Failed items keep their names once their session is closed.
     private val failedNames = mutableMapOf<ItemKey, String>()
@@ -777,6 +783,7 @@ class Importer(
         state.value = p?.copy(phase = phase, reviewItems = emptyList(), offline = false)
         failedNames.clear()
         outcomes.clear()
+        moved.clear()
         Log.i(TAG, "Import ${phase.name.lowercase()}: ${p?.imported} imported, ${p?.skipped} skipped, ${p?.failed} failed")
         // Even if cancelled: what was imported stays.
         if ((p?.imported ?: 0) > 0) AnalysisWorker.schedule(context)
