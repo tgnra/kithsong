@@ -1,8 +1,10 @@
 /* Up next, the queue people add to. The list's own workings need no audio device: blocks and
- * tracks, Play Next against Play Last, moving, removing, clearing, and the setting. The rest plays
- * silent WAVs on the real device, and is skipped (exit 77) without one: up next plays before the
- * list carries on, blocks in their own order with shuffle on, what's left of a block, Next and
- * Previous, a file that won't open, and what the play log says. */
+ * tracks, Play Next against Play Last, moving, removing, clearing, what a new list does to it, and
+ * the setting. The rest plays silent WAVs on the real device, and is skipped (exit 77) without one:
+ * up next plays before the list carries on, blocks in their own order with shuffle on, what's left
+ * of a block, Next and Previous, a file that won't open, what the play log says, and what clears
+ * it while playing and what leaves it alone. */
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -194,7 +196,7 @@ static void test_list(const char *const *paths) {
 
   /* The order after the current item has up next in it. */
   const char *one[] = {paths[0]};
-  CHECK(mc_player_load_queue(player, one, 1, 0, NULL) == MC_OK);
+  CHECK(mc_player_restore_queue(player, one, 1, 0, NULL) == MC_OK);
   int order[6];
   CHECK(mc_player_order(player, 0, 6, order) == MC_OK);
   CHECK(order[0] == 0 && order[5] == -1);
@@ -202,7 +204,7 @@ static void test_list(const char *const *paths) {
     CHECK(order[i] > 0 && mc_player_queue_uid(player, order[i], uid) == MC_OK && uid[0] == "fged"[i - 1]);
   }
 
-  /* Replacing the list keeps up next. */
+  /* Bringing a list back keeps up next. */
   CHECK(!strcmp(titles(player), "f,g,e,d"));
   mc_player_status_get(player, &st);
   CHECK(st.count == 5);
@@ -216,6 +218,88 @@ static void test_list(const char *const *paths) {
   mc_up_next_track no_path = {NULL, NULL, "x", NULL, 0};
   mc_up_next_add bad = {&no_path, 1, NULL, NULL, MC_PLAY_CONTEXT_UNKNOWN, NULL};
   CHECK(mc_player_play_last(player, &bad) == MC_ERR_INVALID_ARG);
+  mc_player_free(player);
+}
+
+static atomic_int g_up_next_events;
+
+static void on_event(void *user, mc_player_event event) {
+  (void)user;
+  if (event == MC_PLAYER_EVENT_UP_NEXT) atomic_fetch_add(&g_up_next_events, 1);
+}
+
+/* Polls until up next's event has come, or ms pass. */
+static int wait_event(unsigned ms) {
+  uint64_t end = mc_mono_ms() + ms;
+  while (!atomic_load(&g_up_next_events)) {
+    if (mc_mono_ms() >= end) return 0;
+    mc_sleep_ms(5);
+  }
+  return 1;
+}
+
+/* What a new list does to up next, which the call settles there and then. */
+static void test_new_list(const char *const *paths) {
+  mc_player *player = NULL;
+  CHECK(mc_player_new(on_event, NULL, &player) == MC_OK);
+  const char *two[] = {paths[0], paths[1]};
+  const char *uids[] = {uid_of('a'), uid_of('b')};
+  mc_play_origin origin = {uids, MC_PLAY_CONTEXT_PLAYLIST, uid_of('y')};
+  mc_player_status st;
+  char uid[MC_UID_STRLEN];
+
+  /* With nothing to clear, up next hasn't changed. */
+  mc_player_status_get(player, &st);
+  unsigned changes = st.up_next_changes;
+  CHECK(mc_player_load_queue(player, two, 2, 0, &origin) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.up_next_changes == changes);
+
+  /* Loading is someone starting something on Android, so it clears, and an open list hears of it.
+   * Only the new list's items are left, with what follows the current one the list's. */
+  CHECK(add(player, 0, "Album", "cde", paths) == MC_OK);
+  CHECK(add(player, 0, NULL, "f", paths) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.up_next == 2 && st.count == 6);
+  changes = st.up_next_changes;
+  mc_sleep_ms(50); /* the adds' own events */
+  atomic_store(&g_up_next_events, 0);
+  CHECK(mc_player_load_queue(player, two, 2, 0, &origin) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.up_next == 0 && st.count == 2 && st.index == 0 && st.up_next_changes != changes);
+  CHECK(!strcmp(titles(player), ""));
+  CHECK(wait_event(3000));
+  CHECK(mc_player_queue_uid(player, 1, uid) == MC_OK && uid[0] == 'b');
+  CHECK(mc_player_queue_uid(player, 2, uid) == MC_ERR_NOT_FOUND);
+  int order[3];
+  CHECK(mc_player_order(player, 0, 3, order) == MC_OK);
+  CHECK(order[0] == 0 && order[1] == 1 && order[2] == -1);
+
+  /* A call that fails has lost nothing, nor has a list of nothing, which starts nothing. */
+  CHECK(add(player, 0, NULL, "c", paths) == MC_OK);
+  const char *no_file[] = {paths[0], NULL};
+  CHECK(mc_player_set_queue(player, two, 2, 2, &origin) == MC_ERR_INVALID_ARG);
+  CHECK(mc_player_load_queue(player, two, 2, -2, &origin) == MC_ERR_INVALID_ARG);
+  CHECK(mc_player_set_queue(player, no_file, 2, 0, &origin) == MC_ERR_INVALID_ARG);
+  CHECK(!strcmp(titles(player), "c"));
+  CHECK(mc_player_set_queue(player, NULL, 0, 0, NULL) == MC_OK);
+  CHECK(!strcmp(titles(player), "c"));
+  CHECK(mc_player_load_queue(player, NULL, 0, 0, NULL) == MC_OK);
+  CHECK(!strcmp(titles(player), "c"));
+  mc_player_status_get(player, &st);
+  CHECK(st.index == -1 && st.count == 1);
+
+  /* A list brought back keeps it, after the list, whichever item is current. */
+  CHECK(mc_player_restore_queue(player, two, 2, 1, &origin) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.up_next == 1 && st.count == 3 && st.index == 1 && st.state == MC_PLAYER_STOPPED);
+  CHECK(mc_player_order(player, 0, 3, order) == MC_OK);
+  CHECK(order[0] == 1 && order[1] == 2 && order[2] == -1);
+  CHECK(mc_player_queue_uid(player, 2, uid) == MC_OK && uid[0] == 'c');
+
+  /* Its own items aren't the list's to skip to, and trying leaves them. */
+  CHECK(mc_player_skip_to(player, 2) == MC_ERR_INVALID_ARG);
+  CHECK(!strcmp(titles(player), "c"));
   mc_player_free(player);
 }
 
@@ -281,11 +365,13 @@ static void test_playing(mc_player *player) {
   CHECK(wait_for(player, 'c', 3000));
   CHECK(wait_stopped(player, 3000));
 
-  /* Something new playing leaves up next as it is, and up next follows the track that was picked. */
+  /* Something new clears up next, and the list goes straight on with nothing of it in between. */
   CHECK(add(player, 0, NULL, "t", more) == MC_OK);
   play_list(player, list);
+  CHECK(!strcmp(titles(player), ""));
   CHECK(wait_for(player, 'a', 3000));
-  CHECK(!strcmp(titles(player), "t"));
+  CHECK(wait_for(player, 'b', 3000));
+  CHECK(add(player, 0, NULL, "t", more) == MC_OK);
   CHECK(mc_player_up_next_clear(player) == MC_OK);
   mc_player_status_get(player, &st);
   CHECK(st.state == MC_PLAYER_PLAYING); /* Clear doesn't stop it */
@@ -374,10 +460,160 @@ static void test_playing(mc_player *player) {
   CHECK(mc_player_stop(player) == MC_OK);
 }
 
+/* Going through what's playing leaves up next alone. The tracks are long enough to stay put while
+ * it's looked at. */
+static void test_going_through(mc_player *player) {
+  const char *list[] = {wav("long_a", 4000), wav("long_b", 4000), wav("long_c", 4000)};
+  const char *block[] = {wav("q", 300), wav("r", 300), wav("s", 300)};
+  const char *more[] = {wav("t", 300)};
+
+  play_list(player, list);
+  CHECK(wait_for(player, 'a', 3000));
+  CHECK(add(player, 0, "Block", "qrs", block) == MC_OK);
+  CHECK(add(player, 0, NULL, "t", more) == MC_OK);
+
+  /* Jumping within the list, there and back. */
+  CHECK(mc_player_skip_to(player, 1) == MC_OK);
+  CHECK(wait_for(player, 'b', 3000));
+  CHECK(!strcmp(titles(player), "Block,t"));
+  CHECK(mc_player_previous(player) == MC_OK);
+  CHECK(wait_for(player, 'a', 3000));
+  CHECK(!strcmp(titles(player), "Block,t"));
+
+  /* Seeking, pausing, stopping, and shuffle on and off. */
+  CHECK(mc_player_seek_ms(player, 100) == MC_OK);
+  CHECK(mc_player_pause(player) == MC_OK);
+  CHECK(mc_player_resume(player) == MC_OK);
+  CHECK(mc_player_set_shuffle(player, 1) == MC_OK);
+  CHECK(mc_player_set_shuffle(player, 0) == MC_OK);
+  CHECK(!strcmp(titles(player), "Block,t"));
+  CHECK(mc_player_stop(player) == MC_OK);
+  CHECK(mc_player_resume(player) == MC_OK);
+  CHECK(wait_for(player, 'a', 3000));
+  CHECK(!strcmp(titles(player), "Block,t"));
+
+  /* Next takes one track of it, and no more. */
+  CHECK(mc_player_next(player) == MC_OK);
+  CHECK(wait_for(player, 'q', 3000));
+  mc_up_next_list *left = NULL;
+  CHECK(mc_player_up_next(player, &left) == MC_OK && left->count == 2 && left->items[0].tracks == 2);
+  mc_up_next_list_free(left);
+  CHECK(mc_player_up_next_clear(player) == MC_OK);
+  CHECK(mc_player_stop(player) == MC_OK);
+}
+
+/* A list of a, b and c from an artist. uid_of() goes round, so this is for using straight away. */
+static mc_play_origin from_artist(const char **uids) {
+  uids[0] = uid_of('a');
+  uids[1] = uid_of('b');
+  uids[2] = uid_of('c');
+  return (mc_play_origin){uids, MC_PLAY_CONTEXT_ARTIST, uid_of('x')};
+}
+
+/* Starting something new, whatever's playing. */
+static void test_starting(mc_player *player) {
+  const char *list[] = {wav("a", 600), wav("b", 600), wav("c", 600)};
+  const char *block[] = {wav("q", 300), wav("r", 300), wav("s", 300)};
+  const char *more[] = {wav("t", 300)};
+  const char *uids[3];
+  mc_play_origin artist;
+  mc_player_status st;
+  mc_play_event e;
+  char uid[MC_UID_STRLEN];
+  while (mc_player_take_ended(player, &e) == MC_OK) {}
+
+  /* From a track of up next. That play's row says what it was, the new list's say the list, and
+   * the items are the list's alone. Previous has nothing of the block to go back into. */
+  play_list(player, list);
+  CHECK(wait_for(player, 'a', 3000));
+  CHECK(add(player, 0, "Block", "qrs", block) == MC_OK);
+  CHECK(mc_player_next(player) == MC_OK);
+  CHECK(wait_for(player, 'q', 3000));
+  mc_sleep_ms(50); /* a command it replaced would leave no row */
+  artist = from_artist(uids);
+  CHECK(mc_player_set_queue(player, list, 3, 1, &artist) == MC_OK);
+  CHECK(wait_for(player, 'b', 3000));
+  CHECK(!strcmp(titles(player), ""));
+  mc_player_status_get(player, &st);
+  CHECK(st.count == 3 && st.index == 1);
+  CHECK(mc_player_queue_uid(player, 3, uid) == MC_ERR_NOT_FOUND);
+  CHECK(logged(player, 'q', &e));
+  CHECK(e.context == MC_PLAY_CONTEXT_ALBUM && !strcmp(e.context_uid, uid_of('z')) && e.end == MC_PLAY_END_REPLACED);
+  CHECK(mc_player_previous(player) == MC_OK);
+  CHECK(wait_for(player, 'a', 3000));
+  CHECK(logged(player, 'b', &e));
+  CHECK(e.context == MC_PLAY_CONTEXT_ARTIST && !strcmp(e.context_uid, uid_of('x')));
+  CHECK(mc_player_stop(player) == MC_OK);
+
+  /* What was already buffered of up next goes too, unheard. */
+  play_list(player, list);
+  CHECK(wait_for(player, 'a', 3000));
+  CHECK(add(player, 0, NULL, "t", more) == MC_OK);
+  mc_sleep_ms(200);
+  play_list(player, list);
+  CHECK(wait_for(player, 'a', 3000));
+  CHECK(wait_for(player, 'b', 3000));
+  while (mc_player_take_ended(player, &e) == MC_OK) CHECK(e.track_uid[0] != 't');
+  CHECK(mc_player_stop(player) == MC_OK);
+
+  /* A track of the list that's playing, pressed, is new as well. */
+  play_list(player, list);
+  CHECK(wait_for(player, 'a', 3000));
+  CHECK(add(player, 0, NULL, "t", more) == MC_OK);
+  artist = from_artist(uids);
+  CHECK(mc_player_set_queue(player, list, 3, 2, &artist) == MC_OK);
+  CHECK(wait_for(player, 'c', 3000));
+  CHECK(!strcmp(titles(player), ""));
+  CHECK(mc_player_stop(player) == MC_OK);
+
+  /* With a list played out, and something waiting for Play. */
+  CHECK(mc_player_set_queue(player, list, 1, 0, NULL) == MC_OK);
+  CHECK(wait_stopped(player, 3000));
+  CHECK(add(player, 0, NULL, "t", more) == MC_OK);
+  play_list(player, list);
+  CHECK(wait_for(player, 'a', 3000));
+  CHECK(!strcmp(titles(player), ""));
+  CHECK(mc_player_stop(player) == MC_OK);
+
+  /* Shuffled, from any track: the order is the new list's, each item once a round. */
+  CHECK(add(player, 0, "Block", "qrs", block) == MC_OK);
+  CHECK(mc_player_set_shuffle(player, 1) == MC_OK);
+  artist = from_artist(uids);
+  CHECK(mc_player_set_queue(player, list, 3, -1, &artist) == MC_OK);
+  CHECK(!strcmp(titles(player), ""));
+  mc_player_status_get(player, &st);
+  CHECK(st.count == 3);
+  int order[3], seen = 0;
+  CHECK(mc_player_order(player, 0, 3, order) == MC_OK);
+  for (int i = 0; i < 3; i++) {
+    CHECK(order[i] >= 0 && order[i] < 3);
+    seen |= 1 << order[i];
+  }
+  CHECK(seen == 7);
+  CHECK(mc_player_set_shuffle(player, 0) == MC_OK);
+  CHECK(mc_player_stop(player) == MC_OK);
+
+  /* A list brought back, though, plays up next after the item it stopped on, and the list after
+   * that, with up next's row still its own. */
+  CHECK(add(player, 0, NULL, "t", more) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.up_next == 1);
+  artist = from_artist(uids);
+  CHECK(mc_player_restore_queue(player, list, 3, 1, &artist) == MC_OK);
+  CHECK(mc_player_resume(player) == MC_OK);
+  CHECK(wait_for(player, 'b', 3000));
+  CHECK(wait_for(player, 't', 3000));
+  CHECK(wait_for(player, 'c', 3000));
+  CHECK(logged(player, 't', &e));
+  CHECK(e.context == MC_PLAY_CONTEXT_ALBUM && !strcmp(e.context_uid, uid_of('z')));
+  CHECK(mc_player_stop(player) == MC_OK);
+}
+
 int main(int argc, char **argv) {
   snprintf(g_dir, sizeof g_dir, "%s", argc > 1 ? argv[1] : ".");
   const char *paths[] = {wav("1", 100), wav("2", 100), wav("3", 100)};
   test_list(paths);
+  test_new_list(paths);
   test_setting();
 
   mc_player *player = NULL;
@@ -397,6 +633,8 @@ int main(int argc, char **argv) {
     return SKIP;
   }
   test_playing(player);
+  test_going_through(player);
+  test_starting(player);
   mc_player_free(player);
   return TEST_RESULT();
 }

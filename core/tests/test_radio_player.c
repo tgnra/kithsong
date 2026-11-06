@@ -378,6 +378,58 @@ static void test_up_next(mc_player *player, const char *dir) {
   CHECK(mc_player_stop(player) == MC_OK);
 }
 
+/* A station started clears up next. One topping up doesn't, and nor does one that was loaded
+ * stopped and only now gets going. The seed is long enough for up next to wait behind it. */
+static void test_clears_up_next(mc_player *player, const char *dir) {
+  char path[1200], from[1200], other[1200], uid[MC_UID_STRLEN];
+  seed_path(path, sizeof path, dir, "t00");
+  seed_path(from, sizeof from, dir, "t05");
+  seed_path(other, sizeof other, dir, "t01");
+  mc_up_next_track track = {other, "queued", "Queued", NULL, WAV_MS};
+  mc_up_next_add add = {&track, 1, NULL, NULL, MC_PLAY_CONTEXT_MANUAL, NULL};
+  mc_player_status st;
+
+  CHECK(mc_player_play_next(player, &add) == MC_OK);
+  CHECK(mc_player_play_radio(player, dir, path, "t00") == MC_OK);
+  CHECK(mc_player_pause(player) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.up_next == 0);
+
+  CHECK(mc_player_play_next(player, &add) == MC_OK);
+  CHECK(wait_for_count(player, AHEAD + 2, 10000));
+  mc_player_status_get(player, &st);
+  CHECK(st.up_next == 1);
+
+  /* A call that fails has lost nothing. */
+  CHECK(mc_player_play_radio(player, NULL, path, "t00") == MC_ERR_INVALID_ARG);
+  CHECK(mc_player_play_station(player, dir, from, "t05", NULL) == MC_ERR_INVALID_ARG);
+  mc_player_status_get(player, &st);
+  CHECK(st.up_next == 1);
+
+  CHECK(mc_player_play_station(player, dir, from, "t05", "t00") == MC_OK);
+  CHECK(mc_player_pause(player) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.up_next == 0);
+
+  /* As Android has it: what's added between the two is wanted. */
+  const char *const paths[] = {path}, *const uids[] = {"t00"};
+  mc_play_origin origin = {uids, MC_PLAY_CONTEXT_RADIO, "t00"};
+  CHECK(mc_player_load_queue(player, paths, 1, 0, &origin) == MC_OK);
+  CHECK(mc_player_play_next(player, &add) == MC_OK);
+  CHECK(mc_player_resume_station(player, dir, path, "t00", "t00") == MC_OK);
+  CHECK(mc_player_pause(player) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.up_next == 1 && st.radio);
+  int after = -1;
+  CHECK(mc_player_order(player, 1, 1, &after) == MC_OK);
+  CHECK(mc_player_queue_uid(player, after, uid) == MC_OK);
+  CHECK_STR(uid, "queued");
+
+  CHECK(mc_player_stop_radio(player) == MC_OK);
+  CHECK(mc_player_stop(player) == MC_OK);
+  CHECK(mc_player_up_next_clear(player) == MC_OK);
+}
+
 /* With every file gone, it gives up rather than failing through the library for ever. */
 static void test_files_gone(mc_player *player, const char *dir) {
   char path[1200];
@@ -419,6 +471,7 @@ int main(int argc, char **argv) {
   test_tops_up(player, dir);
   test_bad_seed(player, dir);
   test_from_start(player, dir);
+  test_clears_up_next(player, dir);
 
   /* Anything more needs sound to come out. */
   char path[1200];
