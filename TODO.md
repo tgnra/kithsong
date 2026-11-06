@@ -4,7 +4,7 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 ## For 1.0
 
-- **Home page** - On Windows and Linux, from core's musiccore/home_picks.h: stations from the audio analysis (musiccore/radio_stations.h), and the played rows from the play log, with track_plays for what's older than it. The phone app has only the Radio row, on its main page
+- **Home page** - On Windows and Linux, from core's musiccore/home_picks.h: a station for each kind of music the audio analysis finds (musiccore/radio_stations.h), and the played rows from the play log, with track_plays for what's older than it. The phone app has only the Radio row, on its main page
 - **Repeat and a play queue** - A major item, to be designed by hand rather than handed to agents. Decided: repeat all is always on when shuffling, which is intended, and there's no repeat one, as it's not much use and would clutter the UI. Ctrl+R for repeat on Windows and Linux is Tania's to add. For later: Play next / Play last (Windows shows them greyed out in the track menu; Linux and Android have neither) and a view of what's queued, as the queue's UI needs thought on every platform
 
 ## Needs input
