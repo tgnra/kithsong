@@ -2,7 +2,8 @@
 # Builds the GTK app as a Flatpak and bundles it into one file,
 # dist/kithsong-<version>-linux-<arch>.flatpak. The release workflow runs this too. With
 # $KITHSONG_FLATPAK_GPG_KEY_ID (a key in gpg's keyring) it also signs the repo and writes
-# dist/kithsong-flatpak-repo.tar.gz, which the website serves.
+# dist/kithsong-flatpak-repo.tar.gz, which the website serves. That's x86_64 only: other
+# architectures get the bundle.
 #
 #   scripts/release-linux.sh
 #
@@ -32,6 +33,13 @@ runtime_version="$(sed -n "s/^runtime-version: '\([^']*\)'.*/\1/p" "$manifest")"
 flathub=https://dl.flathub.org/repo/flathub.flatpakrepo
 bundle="dist/kithsong-$version-linux-$arch.flatpak"
 branch=stable
+
+# The website's repo is replaced whole by this build's, so any other architecture's would take
+# x86_64 away from everyone on it.
+if [[ -n "${KITHSONG_FLATPAK_GPG_KEY_ID:-}" && "$arch" != x86_64 ]]; then
+    echo "The website's Flatpak repo is x86_64 only; don't set KITHSONG_FLATPAK_GPG_KEY_ID on $arch." >&2
+    exit 1
+fi
 
 # The manifest's build reads these from an initial-cache file, which is gitignored and
 # removed again afterwards.
