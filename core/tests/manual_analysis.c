@@ -1,6 +1,7 @@
 /* Analyses a file or a folder of them and prints what came out, for a person to judge:
  *   build/<preset>/core/tests/manual_analysis <file or folder> [neighbours]
- * Each file's loudness, range, peak and brightness, and its nearest neighbours among the rest
+ * Each file's loudness, range, peak, brightness, rhythm, bands and how fast its sound moves, and
+ * its nearest neighbours among the rest
  * (5 by default), by the distance a library of just these files would give. Then the cost, as
  * CPU seconds per hour of audio, which only means anything from a release build. Reads the
  * files and writes nothing. */
@@ -71,6 +72,14 @@ static void print_features(const entry *e) {
   for (int c = 0; c < MC_ANALYSIS_MFCCS; c++) printf(" %.1f", a->mfcc_mean[c]);
   printf("\n  mfcc sd  ");
   for (int c = 0; c < MC_ANALYSIS_MFCCS; c++) printf(" %.1f", sqrt(a->mfcc_var[c]));
+  printf("\n  mfcc delta");
+  for (int c = 0; c < MC_ANALYSIS_MFCCS; c++) printf(" %.1f", a->mfcc_delta[c]);
+  printf("\n  rhythm    %.1f bpm  pulse %.2f  %.2f onsets a second\n  lags      ", a->bpm, a->pulse, a->onset_rate);
+  for (int i = 0; i < MC_ANALYSIS_LAGS; i++) printf(" %.2f", a->rhythm[i]);
+  printf("\n  share dB  ");
+  for (int i = 0; i < MC_ANALYSIS_BANDS; i++) printf(" %.1f", a->band_share[i]);
+  printf("\n  flat dB   ");
+  for (int i = 0; i < MC_ANALYSIS_FLATNESS; i++) printf(" %.1f", a->band_flatness[i]);
   printf("\n");
 }
 

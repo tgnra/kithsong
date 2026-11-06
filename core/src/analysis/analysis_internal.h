@@ -1,5 +1,5 @@
-/* Inside the analysis: the two halves one decode feeds (loudness.c, timbre.c), the feature
- * BLOB, and what the scanner writes. Internal to core; white-box tests use it. */
+/* Inside the analysis: what one decode feeds (loudness.c, timbre.c and rhythm.c behind it), the
+ * feature BLOB, and what the scanner writes. Internal to core; white-box tests use it. */
 #ifndef MC_ANALYSIS_INTERNAL_H
 #define MC_ANALYSIS_INTERNAL_H
 
@@ -16,8 +16,9 @@
 #define MC_ANALYSIS_MELS 40
 
 /* Layout byte, MFCC count, two reserved bytes, then floats; see docs/schema.md. */
-#define MC_ANALYSIS_LAYOUT 1
-#define MC_ANALYSIS_BLOB_SIZE (4 + 4 * (2 * MC_ANALYSIS_MFCCS + 2))
+#define MC_ANALYSIS_LAYOUT 2
+#define MC_ANALYSIS_BLOB_SIZE \
+  (4 + 4 * (3 * MC_ANALYSIS_MFCCS + 2 + MC_ANALYSIS_LAGS + 3 + MC_ANALYSIS_BANDS + MC_ANALYSIS_FLATNESS))
 
 /* --- Loudness: at the file's own rate and channels --- */
 
@@ -36,12 +37,25 @@ typedef struct mc_timbre mc_timbre;
 mc_timbre *mc_timbre_new(unsigned rate);
 void mc_timbre_free(mc_timbre *t);
 void mc_timbre_feed(mc_timbre *t, const float *mono, size_t frames);
-/* Fills out's mfcc and centroid fields. */
+/* Fills out's fields from the frames: all but the loudness. */
 void mc_timbre_finish(mc_timbre *t, mc_analysis *out);
 
 /* The real FFT, for tests: power[0..n/2] of n real samples (n a power of two, at most
  * MC_ANALYSIS_FRAME). */
 void mc_analysis_power_spectrum(const float *x, int n, float *power);
+
+/* --- Rhythm: the onset strength of each frame, from timbre.c --- */
+
+typedef struct mc_rhythm mc_rhythm;
+
+mc_rhythm *mc_rhythm_new(void);
+void mc_rhythm_free(mc_rhythm *r);
+/* A frame that sounded: how much rose since the last, in dB. */
+void mc_rhythm_onset(mc_rhythm *r, float strength);
+/* A frame left out as silent. */
+void mc_rhythm_silence(mc_rhythm *r);
+/* Fills out's rhythm, pulse, onset_rate and bpm, which it expects zeroed. */
+void mc_rhythm_finish(mc_rhythm *r, mc_analysis *out);
 
 /* --- Both, from interleaved samples --- */
 

@@ -2,9 +2,10 @@
  * from its audio alone, for telling which tracks sound alike, and its loudness.
  *
  * One decode of a file gives its timbre (the mean and variance of 13 MFCCs and of the spectral
- * centroid, from a mono mix at a fixed internal rate, so the file's own rate doesn't matter)
- * and its energy (integrated loudness, loudness range and true peak, per ITU-R BS.1770 and
- * EBU R 128, over the whole track). Nothing here changes playback.
+ * centroid, how fast the MFCCs change, and how energy and noise fall across five bands) and its
+ * rhythm (how onsets repeat, and a tempo), from a mono mix at a fixed internal rate, so the file's
+ * own rate doesn't matter, and its energy (integrated loudness, loudness range and true peak, per
+ * ITU-R BS.1770 and EBU R 128, over the whole track). Nothing here changes playback.
  *
  * Results live in track_analysis and sync like any row, so a device that doesn't scan has them
  * too. How they are stored and how the distance is scaled: "Audio analysis" in docs/schema.md. */
@@ -19,10 +20,16 @@ extern "C" {
 
 /* Which algorithm made a result. A change that alters results raises it: the scanner then does
  * every track again, and distances only compare results of the same version. */
-#define MC_ANALYSIS_VERSION 1
+#define MC_ANALYSIS_VERSION 2
 #define MC_ANALYSIS_MFCCS 13
+/* The rhythm profile's lag bins, log spaced: four octaves. */
+#define MC_ANALYSIS_LAGS_PER_OCTAVE 8
+#define MC_ANALYSIS_LAGS (4 * MC_ANALYSIS_LAGS_PER_OCTAVE)
+/* Sub, bass, low mid, mid and high. Flatness takes the first two as one: sub is too few bins. */
+#define MC_ANALYSIS_BANDS 5
+#define MC_ANALYSIS_FLATNESS 4
 /* What mc_analysis_distance() compares; see "Audio analysis" in docs/schema.md. */
-#define MC_ANALYSIS_DIMS 29
+#define MC_ANALYSIS_DIMS 61
 
 /* What a result was made from. A lower value is the better source. */
 typedef enum mc_analysis_source {
@@ -39,6 +46,16 @@ typedef struct mc_analysis {
   float mfcc_var[MC_ANALYSIS_MFCCS];
   float centroid_mean; /* Hz: brightness */
   float centroid_var;  /* Hz squared */
+  float mfcc_delta[MC_ANALYSIS_MFCCS]; /* dB: the RMS change over 46 ms, never across silence */
+  /* The onsets' autocorrelation by lag, 186 ms and up, with what's only a multiple of a shorter
+   * lag taken out. 0 to 1; all 0 for under 3 s of sound. */
+  float rhythm[MC_ANALYSIS_LAGS];
+  float pulse;      /* how regularly onsets repeat, from 0 for not at all to 1 */
+  float onset_rate; /* onsets a second, while there's sound */
+  float bpm;        /* the likeliest tempo, maybe an octave out; 0 for no clear pulse. Not compared */
+  float band_share[MC_ANALYSIS_BANDS]; /* dB of a frame's power, on average; -60 at the least */
+  /* dB: about -2.5 for noise, lower the more tonal. NaN for a band that's empty. */
+  float band_flatness[MC_ANALYSIS_FLATNESS];
   /* NaN when undefined: a silent track has no loudness, and one under 3 s no range. */
   double lufs;      /* integrated loudness, LUFS */
   double lra;       /* loudness range, LU */
