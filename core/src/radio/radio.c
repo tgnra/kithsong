@@ -50,8 +50,9 @@ enum { KEEP_NOTHING, KEEP_ARTISTS, KEEP_ARTISTS_AND_ALBUMS };
 #define SKIP_MOST (SKIP_NUDGE * SKIP_REPEATS) /* however many agree: LATELY_PENALTY, no worse than just played */
 /* How far a skip reaches, seed from seed and track from track, falling straight to nothing. On
  * the library's scales, where two random tracks are about 1 apart and a track's nearest few are
- * about MC_RADIO_NEARBY away: those get a quarter, and anything less alike none at all. */
-#define SKIP_REACH 0.7
+ * 0.45 to 0.48 away in a real library: those get a quarter or so, and anything less alike none at
+ * all. A fifth of that library's pairs are in reach. */
+#define SKIP_REACH 0.65
 /* A play of the same track this close to where a skipped one left off means it was started again,
  * or gone back to from what came next (which Previous does in the first 3 seconds, so this is
  * that and some room). Neither is a skip. A station never brings a track back so soon itself. */

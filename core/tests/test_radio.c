@@ -613,7 +613,7 @@ static void test_skip_fixture(const char *scratch) {
   CHECK(mc_analysis_get(lib, "up3", &up_last) == MC_OK);
   CHECK(mc_analysis_get(lib, "down0", &down) == MC_OK);
   CHECK(mc_analysis_get(lib, "far0", &far) == MC_OK);
-  double reach = 0.7; /* SKIP_REACH */
+  double reach = 0.65; /* SKIP_REACH */
   CHECK(mc_analysis_distance(&seed, &nearseed, &stats) < reach / 2);
   CHECK(mc_analysis_distance(&up, &up_last, &stats) < reach / 4);
   CHECK(mc_analysis_distance(&up, &down, &stats) > reach);

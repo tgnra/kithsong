@@ -650,8 +650,8 @@ the pause was, so it counts as a skip, which the play it starts takes back if it
 
 Each pairing then reaches this station by how close its seed is to this station's seed, and each
 candidate by how close it is to the skipped track. Both go from 1 at a distance of 0 straight down
-to nothing at 0.7, on the library's scales, where two random tracks are about 1 apart and a track's
-nearest few about 0.52. So those few get a quarter, and an unrelated station gets exactly nothing,
+to nothing at 0.65, on the library's scales, where two random tracks are about 1 apart and a track's
+nearest few about 0.45 to 0.48. So those few get a quarter or so, and an unrelated station gets exactly nothing,
 not just very little. A score gets worse by 0.05 for each skip that arrives. That's `DRAW_SOFTNESS`,
 so among tracks otherwise level a fresh skip leaves a track about a third as likely to be drawn.
 However many skips agree, a track's score goes up by 0.15 at most, what being played just now
