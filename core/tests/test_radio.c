@@ -120,7 +120,7 @@ static void test_stays_near_the_seed(const char *scratch) {
   }
   mc_radio_pick picks[10];
   int n = 0;
-  mc_radio_options opts = {"a03", 10, 7, NOW_MS, 0};
+  mc_radio_options opts = {"a03", 10, 7, NOW_MS, 0, NULL};
   CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
   CHECK(n == 10);
   CHECK_STR(picks[0].track_uid, "a03");
@@ -167,7 +167,7 @@ static void test_keeps_apart(const char *scratch) {
   }
   mc_radio_pick picks[10];
   int n = 0;
-  mc_radio_options opts = {"t0-0-0", 10, 3, NOW_MS, 0};
+  mc_radio_options opts = {"t0-0-0", 10, 3, NOW_MS, 0, NULL};
   CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
   CHECK(n == 10);
   for (int i = 0; i < n; i++) {
@@ -180,7 +180,7 @@ static void test_keeps_apart(const char *scratch) {
 
   /* Ask for more than the rules can give: they give way, and tracks never repeat. */
   mc_radio_pick all[40];
-  mc_radio_options everything = {"t0-0-0", 40, 3, NOW_MS, 0};
+  mc_radio_options everything = {"t0-0-0", 40, 3, NOW_MS, 0, NULL};
   CHECK(mc_radio_make(lib, &everything, all, &n) == MC_OK);
   CHECK(n == 30);
   for (int i = 0; i < n; i++)
@@ -207,7 +207,7 @@ static void test_leaves_out(const char *scratch) {
 
   mc_radio_pick picks[10];
   int n = 0;
-  mc_radio_options opts = {"seed", 10, 1, NOW_MS, 0};
+  mc_radio_options opts = {"seed", 10, 1, NOW_MS, 0, NULL};
   CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
   CHECK(n == 2);
   CHECK(has(picks, n, "seed"));
@@ -221,7 +221,7 @@ static void test_leaves_out(const char *scratch) {
 
   mc_library *empty = open_library(scratch, "test_radio_empty.d");
   if (!empty) return;
-  mc_radio_options none = {NULL, 10, 1, NOW_MS, 0};
+  mc_radio_options none = {NULL, 10, 1, NOW_MS, 0, NULL};
   CHECK(mc_radio_make(empty, &none, picks, &n) == MC_ERR_NOT_FOUND);
   none.count = 0;
   CHECK(mc_radio_make(empty, &none, picks, &n) == MC_ERR_INVALID_ARG);
@@ -243,7 +243,7 @@ static void test_plays_down_what_played_lately(const char *scratch) {
   }
   mc_radio_pick picks[2];
   int n = 0, nearest = 0, runs = 40;
-  mc_radio_options opts = {"seed", 2, 0, NOW_MS, 0};
+  mc_radio_options opts = {"seed", 2, 0, NOW_MS, 0, NULL};
   for (uint32_t r = 1; r <= (uint32_t)runs; r++) {
     opts.random = r;
     CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
@@ -284,7 +284,7 @@ static void test_max_length(const char *scratch) {
   /* 8 minutes unless it says, that long being fine. */
   mc_radio_pick picks[10];
   int n = 0;
-  mc_radio_options opts = {"seed", 10, 1, NOW_MS, 0};
+  mc_radio_options opts = {"seed", 10, 1, NOW_MS, 0, NULL};
   CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
   CHECK(n == 4);
   CHECK(has(picks, n, "seed") && has(picks, n, "eight") && has(picks, n, "zero") && has(picks, n, "none"));
@@ -320,7 +320,7 @@ static void test_max_length(const char *scratch) {
   mc_library_close(lib);
 }
 
-/* Two clusters again. A station plays all of the seed's, then all of the other's, with no
+/* Two clusters again. A station plays all of the seed's, and none of the other's, with no
  * repeats, and then goes on with tracks coming back. It reads the library once, so the library
  * can be closed by then. */
 static void test_station_goes_on(const char *scratch) {
@@ -336,7 +336,7 @@ static void test_station_goes_on(const char *scratch) {
     add_album(lib, album, artist, 0);
     add_track(lib, id, id, artist, album, 200000, (i < POOL / 2 ? 0.0 : 50.0) + (i % 20) * 0.1, 1, 1);
   }
-  mc_radio_options opts = {"a03", 0, 7, NOW_MS, 0};
+  mc_radio_options opts = {"a03", 0, 7, NOW_MS, 0, NULL};
   mc_radio_station *station = NULL, *again = NULL;
   CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &station) == MC_OK);
   CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &again) == MC_OK);
@@ -396,7 +396,7 @@ static void test_station_keeps_apart(const char *scratch) {
       add_track(lib, id, id, artist, album, 200000, a * 0.01 + t * 0.0001, 1, 1);
     }
   }
-  mc_radio_options opts = {"t0-0", 0, 3, NOW_MS, 0};
+  mc_radio_options opts = {"t0-0", 0, 3, NOW_MS, 0, NULL};
   mc_radio_station *station = NULL;
   CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &station) == MC_OK);
   mc_library_close(lib);
@@ -417,7 +417,7 @@ static void test_station_small(const char *scratch) {
   add_album(lib, "album1", "a1", 0);
   add_album(lib, "album2", "a1", 0);
   add_track(lib, "only", "Only", "a1", "album1", 200000, 0.0, 1, 1);
-  mc_radio_options opts = {"only", 0, 1, NOW_MS, 0};
+  mc_radio_options opts = {"only", 0, 1, NOW_MS, 0, NULL};
   mc_radio_station *station = NULL;
   CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &station) == MC_OK);
   mc_radio_pick picks[8];
@@ -451,7 +451,7 @@ static void test_station_lately(const char *scratch) {
     add_track(lib, id, id, artist, NULL, 200000, 0.5 + i * 2.0, 1, 1);
   }
   int before = 0, after = 0, runs = 40;
-  mc_radio_options opts = {"seed", 0, 0, NOW_MS, 0};
+  mc_radio_options opts = {"seed", 0, 0, NOW_MS, 0, NULL};
   mc_radio_pick picks[2];
   for (int pass = 0; pass < 2; pass++) {
     for (uint32_t r = 1; r <= (uint32_t)runs; r++) {
@@ -488,7 +488,7 @@ static void test_station_cancelled(const char *scratch) {
     snprintf(id, sizeof id, "t%03d", i);
     add_track(lib, id, id, "a1", NULL, 200000, i * 0.1, 1, 1);
   }
-  mc_radio_options opts = {NULL, 0, 1, NOW_MS, 0};
+  mc_radio_options opts = {NULL, 0, 1, NOW_MS, 0, NULL};
   mc_radio_station *station = NULL;
   CHECK(mc_radio_station_open(lib, &opts, give_up, NULL, &station) == MC_ERR_IN_USE);
   CHECK(!station);
@@ -560,7 +560,7 @@ static void radio_skip(mc_library *lib, const char *track, const char *seed, int
  * being no help: everything in reach gets into a mix of a few sooner or later. */
 static int first_to(mc_library *lib, const char *seed, int64_t now_ms, const char *const *tracks, int n) {
   int hits = 0;
-  mc_radio_options opts = {seed, 2, 0, now_ms, 0};
+  mc_radio_options opts = {seed, 2, 0, now_ms, 0, NULL};
   for (uint32_t r = 1; r <= SKIP_RUNS; r++) {
     mc_radio_pick picks[2];
     int got = 0;
@@ -578,7 +578,7 @@ typedef struct mix_print {
 } mix_print;
 
 static void mix_prints(mc_library *lib, const char *seed, int64_t now_ms, mix_print *out) {
-  mc_radio_options opts = {seed, SKIP_MIX, 0, now_ms, 0};
+  mc_radio_options opts = {seed, SKIP_MIX, 0, now_ms, 0, NULL};
   memset(out, 0, sizeof *out);
   for (uint32_t r = 0; r < 32; r++) {
     mc_radio_pick picks[SKIP_MIX];
@@ -833,7 +833,7 @@ static void test_skip_excludes_nothing(const char *scratch) {
   }
   for (int i = 1; i < ALL; i++)
     for (int k = 0; k < 6; k++) radio_skip(lib, uids[i], "seed", NOW_MS - 1000 - k);
-  mc_radio_options opts = {"seed", ALL, 5, NOW_MS, 0};
+  mc_radio_options opts = {"seed", ALL, 5, NOW_MS, 0, NULL};
   mc_radio_pick picks[ALL];
   int n = 0;
   CHECK(mc_radio_make(lib, &opts, picks, &n) == MC_OK);
@@ -867,12 +867,51 @@ static void station_picks(mc_radio_station *station, mc_radio_pick *picks, int n
   if (station) CHECK(mc_radio_station_next(station, picks, n) == MC_OK);
 }
 
+/* What's learned goes by the seed, wherever a station started: a skip of the station's own counts,
+ * and one on a station seeded by the track it happened to start from doesn't. */
+static void test_skip_goes_by_seed(const char *scratch) {
+  mc_library *lib = skip_library(scratch, "test_radio_skip_seed.d");
+  if (!lib) return;
+  mc_radio_options opts = {"seed", 0, 3, NOW_MS, 0, "nearseed"};
+  mc_radio_station *plain = NULL, *told = NULL, *other = NULL;
+  CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &plain) == MC_OK);
+  CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &told) == MC_OK);
+  CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &other) == MC_OK);
+  mc_library_close(lib);
+  if (!plain || !told || !other) return;
+  mc_play_event e;
+  memset(&e, 0, sizeof e);
+  strcpy(e.track_uid, "up0");
+  strcpy(e.context_uid, "seed");
+  e.context = MC_PLAY_CONTEXT_RADIO;
+  e.end = MC_PLAY_END_SKIPPED;
+  e.listened_ms = 10000;
+  CHECK(mc_radio_station_heard(told, &e) == MC_OK);
+  strcpy(e.context_uid, "nearseed");
+  CHECK(mc_radio_station_heard(other, &e) == MC_OK);
+  enum { RUN = 14 };
+  mc_radio_pick a[RUN], b[RUN], c[RUN];
+  station_picks(plain, a, RUN);
+  station_picks(told, b, RUN);
+  station_picks(other, c, RUN);
+  CHECK_STR(a[0].track_uid, "nearseed");
+  int differ = 0;
+  for (int i = 0; i < RUN; i++) {
+    CHECK_STR(a[i].track_uid, c[i].track_uid);
+    differ += strcmp(a[i].track_uid, b[i].track_uid) != 0;
+  }
+  CHECK(differ > 0);
+  mc_radio_station_close(plain);
+  mc_radio_station_close(told);
+  mc_radio_station_close(other);
+}
+
 /* Told of a skip, a station goes by it from the next pick, just as it would if it had been in
  * the log on opening. Only early skips of that station count. */
 static void test_skip_in_session(const char *scratch) {
   mc_library *lib = skip_library(scratch, "test_radio_skip_session.d");
   if (!lib) return;
-  mc_radio_options opts = {"seed", 0, 3, NOW_MS, 0};
+  mc_radio_options opts = {"seed", 0, 3, NOW_MS, 0, NULL};
   mc_radio_station *plain = NULL, *ignored = NULL, *told = NULL, *read_it = NULL;
   CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &plain) == MC_OK);
   CHECK(mc_radio_station_open(lib, &opts, NULL, NULL, &ignored) == MC_OK);
@@ -946,7 +985,7 @@ static void test_skip_cancelled(const char *scratch) {
   mc_library *lib = skip_library(scratch, "test_radio_skip_cancel.d");
   if (!lib) return;
   for (int i = 0; i < 300; i++) radio_skip(lib, "up0", "seed", NOW_MS - 1000 - i);
-  mc_radio_options opts = {"seed", 0, 1, NOW_MS, 0};
+  mc_radio_options opts = {"seed", 0, 1, NOW_MS, 0, NULL};
   mc_radio_station *station = NULL;
   calls_left = 0;
   CHECK(mc_radio_station_open(lib, &opts, give_up_soon, NULL, &station) == MC_ERR_IN_USE);
@@ -979,6 +1018,7 @@ int main(int argc, char **argv) {
   test_skip_excludes_nothing(scratch);
   test_skip_elsewhere(scratch);
   test_skip_in_session(scratch);
+  test_skip_goes_by_seed(scratch);
   test_skip_cancelled(scratch);
   return TEST_RESULT();
 }

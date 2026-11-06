@@ -269,7 +269,7 @@ static void open_stations(mc_library *lib, int64_t now, int runs) {
     if (sqlite3_step(stmt) != SQLITE_ROW) break;
     char seed[MC_UID_STRLEN];
     snprintf(seed, sizeof seed, "%s", (const char *)sqlite3_column_text(stmt, 0));
-    mc_radio_options opts = {seed, 0, 7, now, 0};
+    mc_radio_options opts = {seed, 0, 7, now, 0, NULL};
     for (int r = 0; r < runs; r++) {
       mc_radio_station *station = NULL;
       uint64_t start = mc_wall_ms();
