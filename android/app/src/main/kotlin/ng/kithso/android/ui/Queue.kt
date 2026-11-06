@@ -264,7 +264,7 @@ internal fun QueuePage(playback: Playback, slide: QueueSlide, modifier: Modifier
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = slide::hide) {
-                Icon(Icons.ExpandLess, contentDescription = stringResource(R.string.close_queue))
+                Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.close_queue))
             }
             Text(
                 title,

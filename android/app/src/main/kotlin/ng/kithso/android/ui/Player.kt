@@ -163,7 +163,7 @@ private fun PlayPause(playback: Playback) {
  * (see [TrackSwipeState]). [onMenu], if given, opens the track's menu from a button across from
  * the collapse button, and from a long press on the art.
  *
- * The chevron facing down at the foot of the player, away from the one in the corner that closes
+ * The chevron facing up at the foot of the player, away from the one in the corner that closes
  * it, slides the view up to show the queue ([QueuePage]), as does dragging up, and [slide] holds
  * how far. A window too short to spare the height has that chevron in the middle of the top row.
  * Only the player's own view swipes between tracks, and the background stays put under both.
@@ -252,7 +252,7 @@ internal fun FullPlayer(
 @Composable
 private fun QueueChevron(slide: QueueSlide) {
     IconButton(onClick = slide::show) {
-        Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.open_queue))
+        Icon(Icons.ExpandLess, contentDescription = stringResource(R.string.open_queue))
     }
 }
 
