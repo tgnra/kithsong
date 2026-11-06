@@ -25,6 +25,8 @@ import java.io.IOException
  */
 @OptIn(UnstableApi::class)
 class ArtBitmapLoader(private val context: Context, private val scope: CoroutineScope) : BitmapLoader {
+    private val artPx = (ART_DP * context.resources.displayMetrics.density).toInt()
+
     override fun supportsMimeType(mimeType: String) = mimeType.startsWith("image/")
 
     override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> = load {
@@ -34,12 +36,12 @@ class ArtBitmapLoader(private val context: Context, private val scope: Coroutine
     override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
         val art = ArtProvider.artFor(context, uri)
             ?: return Futures.immediateFailedFuture(UnsupportedOperationException("Art comes from MediaMetadata.artRef"))
-        return load { loadArtBitmap(context, art, ART_PX) }
+        return load { loadArtBitmap(context, art, artPx) }
     }
 
     override fun loadBitmapFromMetadata(metadata: MediaMetadata): ListenableFuture<Bitmap>? {
         val art = metadata.artRef ?: metadata.artworkUri?.let { ArtProvider.artFor(context, it) } ?: return null
-        return load { loadArtBitmap(context, art, ART_PX) }
+        return load { loadArtBitmap(context, art, artPx) }
     }
 
     private fun load(block: suspend () -> Bitmap?): ListenableFuture<Bitmap> {
@@ -56,7 +58,8 @@ class ArtBitmapLoader(private val context: Context, private val scope: Coroutine
     }
 
     private companion object {
-        // What the notification and lock screen show it at, near enough.
-        const val ART_PX = 512
+        // The largest the system keeps of a media session's art (config_mediaMetadataBitmapMaxSize):
+        // it scales down anything bigger, and the media controls draw it across the screen.
+        const val ART_DP = 320
     }
 }
