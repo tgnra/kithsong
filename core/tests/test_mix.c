@@ -7,8 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kithcore/kithcore.h"
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
 #include "search/search_internal.h"
 #include "sync/rows.h"
 #include "tagger/musicbrainz.h"

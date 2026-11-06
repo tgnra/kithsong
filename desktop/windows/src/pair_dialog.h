@@ -21,7 +21,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "sync_bridge.h"
 
 #define IDC_PAIR_CODE 1201   /* the code: an edit (enter-code) or a label (show-code) */

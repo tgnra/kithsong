@@ -32,7 +32,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef struct move_library_host {
   /* Stops everything that has the library open (playback, sync, imports, the views) and

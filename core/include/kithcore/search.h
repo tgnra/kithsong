@@ -18,10 +18,10 @@
  * playlists are listed again) and at startup, so the index is ready before the user types.
  * A search that finds the index out of date starts a build too. Results can name an item
  * deleted since the index was built; opening it gives MC_ERR_NOT_FOUND like any stale uid. */
-#ifndef MUSICCORE_SEARCH_H
-#define MUSICCORE_SEARCH_H
+#ifndef KITHCORE_SEARCH_H
+#define KITHCORE_SEARCH_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

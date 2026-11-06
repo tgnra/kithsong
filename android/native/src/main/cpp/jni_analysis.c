@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "jni_bridge.h"
-#include "musiccore/analysis.h"
+#include "kithcore/analysis.h"
 
 JNIEXPORT jlong JNICALL Java_ng_kithso_core_AnalysisNatives_nativeStart(JNIEnv *env, jclass cls, jstring dir) {
   (void)cls;

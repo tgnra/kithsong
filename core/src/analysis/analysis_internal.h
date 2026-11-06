@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "musiccore/analysis.h"
+#include "kithcore/analysis.h"
 
 /* What the timbre is worked out at, whatever the file's rate. 11 kHz of audio holds what tells
  * timbres apart, at half the frames of 44.1 kHz. */

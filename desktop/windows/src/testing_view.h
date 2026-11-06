@@ -24,7 +24,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* What the main window does for it. */
 typedef struct testing_host {

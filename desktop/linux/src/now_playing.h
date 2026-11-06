@@ -23,7 +23,7 @@
 
 #include <gtk/gtk.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "track_list.h"
 
 /* seek is called with the position the user picked, in ms; shuffle when the user turns

@@ -10,8 +10,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "musiccore/edit.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/edit.h"
+#include "kithcore/kithcore.h"
 
 #include "jni_bridge.h"
 

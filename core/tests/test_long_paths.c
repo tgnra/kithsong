@@ -13,10 +13,10 @@
 #include <windows.h>
 #endif
 
-#include "musiccore/i18n.h"
-#include "musiccore/library.h"
-#include "musiccore/musiccore.h"
-#include "musiccore/tagger.h"
+#include "kithcore/i18n.h"
+#include "kithcore/library.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/tagger.h"
 #include "playback/decoder.h"
 #include "sync/libmerge.h"
 #include "util/platform.h"

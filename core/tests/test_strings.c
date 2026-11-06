@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "test.h"
 
 /* The no-break space that keeps a length whole. */

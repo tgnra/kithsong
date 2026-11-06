@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "tagger/organize.h"
 #include "test.h"
 

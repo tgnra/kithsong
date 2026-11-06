@@ -12,9 +12,9 @@
 #include <string.h>
 
 #include "miniz.h"
-#include "musiccore/i18n.h"
-#include "musiccore/musiccore.h"
-#include "musiccore/tagger.h"
+#include "kithcore/i18n.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/tagger.h"
 #include "tagger/unzip.h"
 #include "util/platform.h"
 #include "test.h"

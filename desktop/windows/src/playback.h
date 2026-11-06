@@ -19,7 +19,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* A queue item. Strings are copied. */
 typedef struct playback_track {

@@ -19,7 +19,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Where deleted.db goes (the config dir, UTF-8; copied), and what to do just before files
  * go: before_delete (may be NULL) gets the plan, e.g. to stop playing a track in it, whose

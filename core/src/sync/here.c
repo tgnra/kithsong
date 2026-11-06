@@ -5,7 +5,7 @@
  * any other item so it syncs field by field. The files go as reconcile would drop them after
  * the next session (transfer.c), under the same one-at-a-time lock, so a session fetching
  * meanwhile can't bring back what was just removed. */
-#include "musiccore/sync_here.h"
+#include "kithcore/sync_here.h"
 
 #include <stdio.h>
 #include <stdlib.h>

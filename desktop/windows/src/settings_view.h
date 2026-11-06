@@ -62,7 +62,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #define WM_APP_OPEN_LIBRARY (WM_APP + 5)
 #define WM_APP_MOVE_LIBRARY (WM_APP + 7)

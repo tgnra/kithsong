@@ -12,9 +12,9 @@
 
 #include <stdint.h>
 
-#include "musiccore/discovery.h"
-#include "musiccore/library.h"
-#include "musiccore/sync.h"
+#include "kithcore/discovery.h"
+#include "kithcore/library.h"
+#include "kithcore/sync.h"
 #include "sync/channel.h"
 #include "sync/encode.h"
 #include "sync/pair.h"

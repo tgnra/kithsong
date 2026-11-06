@@ -6,7 +6,7 @@
 #include <mbedtls/hkdf.h>
 #include <mbedtls/md.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "sync/noise.h"
 #include "test.h"
 #include "util/platform.h"

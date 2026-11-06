@@ -7,7 +7,7 @@
 #include "media_controls.h"
 
 #include "cover.h" /* before initguid.h, which would define WIC's IIDs here too */
-#include "musiccore/edit.h"
+#include "kithcore/edit.h"
 #include "wstr.h"
 
 #include <initguid.h> /* defines the WinRT IIDs below, which no import library has */

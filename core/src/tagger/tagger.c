@@ -13,8 +13,8 @@
  *      (import_db.c)
  * After matching, the thread stays alive to work through the user's review decisions.
  */
-#include "musiccore/tagger.h"
-#include "musiccore/i18n.h"
+#include "kithcore/tagger.h"
+#include "kithcore/i18n.h"
 
 #include <ctype.h>
 #include <stddef.h>

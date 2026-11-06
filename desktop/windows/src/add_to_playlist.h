@@ -15,7 +15,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* The submenu: the playlists by name, with command ids first_id, first_id + 1, ..., then
  * New Playlist... as new_id. Free *lists with mc_playlist_list_free() once the menu is

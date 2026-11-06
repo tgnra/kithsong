@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "net/socket.h"
 #include "sync/msg.h"
 #include "sync/noise.h"

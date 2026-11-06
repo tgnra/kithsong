@@ -13,7 +13,7 @@
  * Album groups get the same grid, but their covers rank by the group's order (so the first
  * four win) and share the cache folder: uids never clash. Smart lists do as their manual
  * counterparts do, over the albums their rule picks now. */
-#include "musiccore/playlist.h"
+#include "kithcore/playlist.h"
 
 #include <stdint.h>
 #include <stdio.h>

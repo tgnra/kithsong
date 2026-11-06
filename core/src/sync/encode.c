@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "musiccore/transcode.h"
+#include "kithcore/transcode.h"
 #include "sync/sync_internal.h"
 #include "util/platform.h"
 

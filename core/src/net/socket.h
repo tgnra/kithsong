@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Timeouts are in milliseconds for the whole call, except sending and receiving (below);
  * MC_SOCKET_FOREVER waits indefinitely. */

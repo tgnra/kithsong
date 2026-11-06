@@ -4,8 +4,8 @@
 #include <time.h>
 
 #include "library/library_internal.h"
-#include "musiccore/home_picks.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/home_picks.h"
+#include "kithcore/kithcore.h"
 #include "util/platform.h"
 #include "test.h"
 

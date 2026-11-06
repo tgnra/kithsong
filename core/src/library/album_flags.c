@@ -1,5 +1,5 @@
 /* See musiccore/edit.h. */
-#include "musiccore/edit.h"
+#include "kithcore/edit.h"
 
 #include <stdio.h>
 #include <string.h>

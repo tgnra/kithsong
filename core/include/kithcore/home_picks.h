@@ -3,11 +3,11 @@
  * without touching the pages. See "Home's played rows" in docs/schema.md for the two that go by
  * what's been played.
  */
-#ifndef MUSICCORE_HOME_PICKS_H
-#define MUSICCORE_HOME_PICKS_H
+#ifndef KITHCORE_HOME_PICKS_H
+#define KITHCORE_HOME_PICKS_H
 
-#include "musiccore/i18n.h"
-#include "musiccore/library.h"
+#include "kithcore/i18n.h"
+#include "kithcore/library.h"
 
 #ifdef __cplusplus
 extern "C" {

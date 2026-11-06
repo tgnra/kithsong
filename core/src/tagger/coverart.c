@@ -11,7 +11,7 @@
 #include <stb_image.h>
 #include <yyjson.h>
 
-#include "musiccore/edit.h"
+#include "kithcore/edit.h"
 #include "tagger/match.h"
 #include "tagger/tag_io.h"
 #include "util/platform.h"

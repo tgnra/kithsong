@@ -12,8 +12,8 @@
  * file uid and bitrate: each encode writes a part file of its own and renames it into place.
  * A trim may delete a finished file the moment it appears, so callers keep it from running
  * while they use one. */
-#ifndef MUSICCORE_TRANSCODE_H
-#define MUSICCORE_TRANSCODE_H
+#ifndef KITHCORE_TRANSCODE_H
+#define KITHCORE_TRANSCODE_H
 
 /* The format types come before musiccore.h, which includes sync.h, which uses them. */
 #ifdef __cplusplus
@@ -40,7 +40,7 @@ typedef struct mc_transcode_opts {
 }
 #endif
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

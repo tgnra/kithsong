@@ -14,7 +14,7 @@
 
 #include <gtk/gtk.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* The menu, for a track in a shown playlist if in_playlist. The caller owns it. */
 GMenuModel *track_menu_model(gboolean in_playlist);

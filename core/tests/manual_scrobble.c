@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "util/platform.h"
 
 /* The first track of the first album, or NULL. */

@@ -17,7 +17,7 @@
 
 #include <adwaita.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Each asks over parent (any widget in the main window) and calls changed once the library
  * has changed. A failure is reported in a dialog of its own.

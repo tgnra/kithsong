@@ -41,7 +41,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "sync_bridge.h"
 
 /* What the page asks of the main window. */

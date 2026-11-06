@@ -1,7 +1,7 @@
 /* Playlists and album groups, ordered by fractional index keys (see schema_v1.sql,
  * playlist_entries, and docs/schema.md). Every write goes through mc_library_begin_write(),
  * and the changelog triggers record it. */
-#include "musiccore/playlist.h"
+#include "kithcore/playlist.h"
 
 #include <stdlib.h>
 #include <string.h>

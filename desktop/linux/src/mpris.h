@@ -11,7 +11,7 @@
 
 #include <gtk/gtk.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Takes the bus name, with from_source (running from a checkout) a name of its own, so an
  * installed copy that's running keeps its controls and this gets some too. Raise presents win;

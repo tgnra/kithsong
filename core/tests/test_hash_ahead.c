@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "sync/hashahead.h"
 #include "tagger/dupes.h"
 #include "test.h"

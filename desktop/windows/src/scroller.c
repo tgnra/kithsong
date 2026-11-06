@@ -2,7 +2,7 @@
 
 #include <limits.h> /* WHEEL_PAGESCROLL is UINT_MAX */
 
-#include "musiccore/perf.h"
+#include "kithcore/perf.h"
 #include "theme.h"
 
 /* Scrollbar metrics at 96 DPI. */

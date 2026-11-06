@@ -11,7 +11,7 @@
  * aren't opaque are left out by both quantizers; and HCT's solver (a colour from hue, chroma
  * and tone) is a bisection on CAM16's J and chroma rather than the original's closed form,
  * which agrees to within rounding for the toned tints this needs. */
-#include "musiccore/artcolors.h"
+#include "kithcore/artcolors.h"
 
 #include <math.h>
 #include <stdlib.h>

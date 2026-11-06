@@ -5,7 +5,7 @@
 
 #include <adwaita.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* The sidebar's library pages, in its order (nav's rows). */
 typedef enum app_view {

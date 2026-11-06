@@ -1,7 +1,7 @@
 #include "brand_backdrop.h"
 
 #include "art_backdrop.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* The logo, embedded by CMake (EmbedFile.cmake). */
 extern const unsigned char kithsong_logo_png[];

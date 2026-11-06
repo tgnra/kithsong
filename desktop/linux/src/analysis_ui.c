@@ -3,8 +3,8 @@
 
 #include <adwaita.h>
 
-#include "musiccore/analysis.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/analysis.h"
+#include "kithcore/kithcore.h"
 
 #define SETTING_BACKGROUND "analysis_background"
 #define SETTING_STOPPED "analysis_stopped"

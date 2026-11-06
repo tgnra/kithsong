@@ -6,8 +6,8 @@
 
 #include <stdint.h>
 
+#include "kithcore/tagger.h"
 #include "library/library_internal.h"
-#include "musiccore/tagger.h"
 #include "tagger/import_db.h"
 
 #define MC_SHA256_STRLEN 65 /* hex SHA-256 plus NUL */

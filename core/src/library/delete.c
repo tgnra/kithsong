@@ -4,7 +4,7 @@
  * PRAGMA table_info, and put back by inserting whichever of those columns the table still
  * has. So a record survives schema migrations that add columns (they get their defaults),
  * and nothing here needs to change when the schema does. */
-#include "musiccore/delete.h"
+#include "kithcore/delete.h"
 
 #include <stdio.h>
 #include <stdlib.h>

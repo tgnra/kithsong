@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "net/http.h"
 
 #define MC_LASTFM_API_URL MC_SCROBBLER_LASTFM_API_URL

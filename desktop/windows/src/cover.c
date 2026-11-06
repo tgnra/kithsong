@@ -8,7 +8,7 @@
 #include <wchar.h>
 
 #include "canvas.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "wstr.h"
 
 wchar_t *cover_find(const wchar_t *dir) {

@@ -7,10 +7,10 @@
  * MC_ERR_FORMAT means a rule isn't valid: bad JSON, an unknown field or operator, a value of
  * the wrong type, or a newer rule version than this build understands. MC_ERR_NOT_FOUND means
  * the smart list named doesn't exist. */
-#ifndef MUSICCORE_SMARTLIST_H
-#define MUSICCORE_SMARTLIST_H
+#ifndef KITHCORE_SMARTLIST_H
+#define KITHCORE_SMARTLIST_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

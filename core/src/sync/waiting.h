@@ -22,8 +22,8 @@
 #ifndef MC_SYNC_WAITING_H
 #define MC_SYNC_WAITING_H
 
-#include "musiccore/library.h"
-#include "musiccore/sync.h"
+#include "kithcore/library.h"
+#include "kithcore/sync.h"
 #include "sync/sync_db.h"
 
 /* Whether this device can reach device_uid now, in the sense the caller decides (sync.c:

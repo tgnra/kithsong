@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifndef _WIN32
 #include <pthread.h>

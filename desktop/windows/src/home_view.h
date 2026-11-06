@@ -42,7 +42,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Creates the view as a child of parent, hidden. */
 HWND home_view_create(HWND parent, int id);

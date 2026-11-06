@@ -11,11 +11,11 @@
  * frontends marshal them onto their UI thread. A callback may call the getters, the pairing
  * functions and mc_sync_cancel(), but not mc_sync_stop() or mc_sync_free(). Strings passed
  * to callbacks are valid only during the call. */
-#ifndef MUSICCORE_SYNC_H
-#define MUSICCORE_SYNC_H
+#ifndef KITHCORE_SYNC_H
+#define KITHCORE_SYNC_H
 
-#include "musiccore/musiccore.h"
-#include "musiccore/transcode.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/transcode.h"
 
 #ifdef __cplusplus
 extern "C" {

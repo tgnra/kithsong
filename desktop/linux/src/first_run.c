@@ -3,8 +3,8 @@
 #include <string.h>
 
 #include "brand_backdrop.h"
-#include "musiccore/musiccore.h"
-#include "musiccore/source_run.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/source_run.h"
 
 #if !ADW_CHECK_VERSION(1, 5, 0)
 #error "first_run.c needs libadwaita 1.5 or later (AdwDialog)"

@@ -17,7 +17,7 @@
 
 #include <adwaita.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Each asks over parent (any widget in the main window) about the playlist uid, currently
  * called name, and calls changed once it's renamed or deleted. A failure is reported in a

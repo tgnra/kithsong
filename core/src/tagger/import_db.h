@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 
-#include "musiccore/library.h"
+#include "kithcore/library.h"
 
 typedef struct mc_db_artist {
   const char *name;

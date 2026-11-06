@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "test.h"
 #include "util/fracindex.h"
 #include "util/hlc.h"

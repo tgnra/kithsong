@@ -49,7 +49,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "track_list.h"
 
 /* Sent to the parent as WM_COMMAND notification codes. ARN_OPEN: an artist's page opened

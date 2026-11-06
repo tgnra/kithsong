@@ -5,7 +5,7 @@
 
 #include <stddef.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "net/socket.h"
 
 /* The largest frame body, set by the 16-bit length. A Noise message has the same limit. */

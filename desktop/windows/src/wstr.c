@@ -5,7 +5,7 @@
 #include <string.h>
 #include <wchar.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 void wstr_init(void) {
   /* The display language first (the list is double-NUL-terminated; the first is the one in

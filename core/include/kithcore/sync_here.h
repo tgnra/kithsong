@@ -29,11 +29,11 @@
  * edit, it is confirmed again after it: this is the device's own user's say-so, so the device
  * isn't paused for it. Tracks can't be removed one by one yet, but a track's delete taken
  * back out of the recycle bin (below) is excluded on its own, as 'exclude_track'. */
-#ifndef MUSICCORE_SYNC_HERE_H
-#define MUSICCORE_SYNC_HERE_H
+#ifndef KITHCORE_SYNC_HERE_H
+#define KITHCORE_SYNC_HERE_H
 
-#include "musiccore/musiccore.h"
-#include "musiccore/sync.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/sync.h"
 
 #ifdef __cplusplus
 extern "C" {

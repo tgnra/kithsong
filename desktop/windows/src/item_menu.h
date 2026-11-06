@@ -23,7 +23,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef enum item_menu_result {
   ITEM_MENU_NOTHING,

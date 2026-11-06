@@ -2,7 +2,7 @@
 #ifndef MC_LIBRARY_EDIT_INTERNAL_H
 #define MC_LIBRARY_EDIT_INTERNAL_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* meta key holding an edit's journal while its files are being swapped. */
 #define MC_EDIT_SWAP_META "edit_swap"

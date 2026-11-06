@@ -17,7 +17,7 @@
 #include <glib.h>
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef enum {
   SYNC_EV_PEER,        /* on_peer: uid, online, member */

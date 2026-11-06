@@ -12,9 +12,9 @@
 #include <windowsx.h>
 
 #include "canvas.h"
-#include "musiccore/library.h"
-#include "musiccore/library_move.h"
-#include "musiccore/source_run.h"
+#include "kithcore/library.h"
+#include "kithcore/library_move.h"
+#include "kithcore/source_run.h"
 #include "pick_folder.h"
 #include "prompt_dialog.h"
 #include "resource.h"

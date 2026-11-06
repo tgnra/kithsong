@@ -28,7 +28,7 @@
 #define _DEFAULT_SOURCE /* getifaddrs, IFF_*, inet_ntop */
 #endif
 
-#include "musiccore/discovery.h"
+#include "kithcore/discovery.h"
 
 #include <stdio.h>
 #include <stdlib.h>

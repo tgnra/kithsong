@@ -4,11 +4,11 @@
  *
  * Nothing is stored. The answer depends only on the results, so working it out again gives the
  * same groups, on any day and however much is played. It's quick next to reading the results. */
-#ifndef MUSICCORE_RADIO_GROUPS_H
-#define MUSICCORE_RADIO_GROUPS_H
+#ifndef KITHCORE_RADIO_GROUPS_H
+#define KITHCORE_RADIO_GROUPS_H
 
-#include "musiccore/analysis.h"
-#include "musiccore/radio_stations.h"
+#include "kithcore/analysis.h"
+#include "kithcore/radio_stations.h"
 
 /* On the library's scales, about as far as a track's nearest few are in a varied library. */
 #define MC_RADIO_NEARBY 0.45

@@ -4,8 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kithcore/kithcore.h"
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
 #include "test.h"
 
 static void populate(mc_library *lib) {

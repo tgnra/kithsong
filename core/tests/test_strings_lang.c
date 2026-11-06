@@ -1,6 +1,6 @@
 /* Language selection and fallback, against the small table in tests/strings/ (English,
  * French and Canadian French), built with the same generator and lookup code as the app. */
-#include "musiccore/i18n.h"
+#include "kithcore/i18n.h"
 #include "test.h"
 
 static void test_select(void) {

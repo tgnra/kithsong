@@ -31,10 +31,10 @@
  *
  * Unlike most handles, a player may be used from any thread.
  */
-#ifndef MUSICCORE_PLAYBACK_H
-#define MUSICCORE_PLAYBACK_H
+#ifndef KITHCORE_PLAYBACK_H
+#define KITHCORE_PLAYBACK_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef struct mc_library mc_library;
 

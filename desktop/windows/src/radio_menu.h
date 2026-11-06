@@ -6,7 +6,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Each appends Start radio as cmd for the track, album or artist uid, and fills seed, which has
  * room for MC_UID_STRLEN, "" if it's greyed out. They read only uid's own tracks, so they're

@@ -12,7 +12,7 @@
  * Tags are read from the source with TagLib (tag_io.cpp) and written as Opus comments while
  * encoding, so the file is complete the moment it's renamed into place. The cover is the
  * album's image beside the source (coverart.c finds it), never the source's embedded one. */
-#include "musiccore/transcode.h"
+#include "kithcore/transcode.h"
 
 #include <math.h>
 #include <stdio.h>

@@ -7,7 +7,7 @@
 
 #include <mbedtls/sha256.h>
 
-#include "musiccore/tagger.h"
+#include "kithcore/tagger.h"
 #include "util/platform.h"
 #include "util/text.h"
 

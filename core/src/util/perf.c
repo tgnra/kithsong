@@ -3,7 +3,7 @@
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L /* clock_gettime under -std=c11 */
 #endif
-#include "musiccore/perf.h"
+#include "kithcore/perf.h"
 
 #include <stdarg.h>
 #include <stdio.h>

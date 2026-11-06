@@ -22,7 +22,7 @@
 
 #include <adwaita.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Shows the dialog over parent (any widget in the main window) for track_uid, which has a
  * file here if here. changed is called whenever the library's playlists change: one is

@@ -10,7 +10,7 @@
 
 #include <mbedtls/sha256.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "opusfile.h"
 #include "playback/decoder.h"
 #include "tagger/tag_io.h"

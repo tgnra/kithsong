@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "musiccore/analysis.h"
+#include "kithcore/analysis.h"
 
 /* Holds the scanner off, for as long as the work that calls it runs: it writes nothing and
  * reads no file until the last hold is released. Sync needs this. A row logged during a session

@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "util/platform.h"
 
 int main(int argc, char **argv) {

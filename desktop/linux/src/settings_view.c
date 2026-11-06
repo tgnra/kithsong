@@ -4,8 +4,8 @@
 #include <string.h>
 
 #include "analysis_ui.h"
-#include "musiccore/musiccore.h"
-#include "musiccore/source_run.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/source_run.h"
 #include "playback.h"
 
 #if !ADW_CHECK_VERSION(1, 5, 0)

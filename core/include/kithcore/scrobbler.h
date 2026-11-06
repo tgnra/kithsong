@@ -16,10 +16,10 @@
  *
  * Unlike most handles, a scrobbler may be used from any thread.
  */
-#ifndef MUSICCORE_SCROBBLER_H
-#define MUSICCORE_SCROBBLER_H
+#ifndef KITHCORE_SCROBBLER_H
+#define KITHCORE_SCROBBLER_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

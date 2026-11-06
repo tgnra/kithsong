@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "sync/pace.h"
 #include "test.h"
 

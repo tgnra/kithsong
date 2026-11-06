@@ -60,7 +60,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Each shows the dialog for uid (copied), and returns TRUE if the library changed, which it
  * can have even if Save failed partway and the user cancelled. owner is the main window. */

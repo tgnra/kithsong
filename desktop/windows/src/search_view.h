@@ -31,7 +31,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Sent to the parent as a WM_COMMAND notification code when a result is opened;
  * search_view_opened() says which. */

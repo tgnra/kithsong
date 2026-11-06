@@ -18,9 +18,9 @@
 
 #include <mbedtls/sha256.h>
 
+#include "kithcore/kithcore.h"
+#include "kithcore/transcode.h"
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
-#include "musiccore/transcode.h"
 #include "playback/decoder.h"
 #include "sync/plan.h"
 #include "sync/sync_db.h"

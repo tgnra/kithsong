@@ -5,7 +5,7 @@
 #include <string.h>
 
 #include "app.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "playback.h"
 
 enum {

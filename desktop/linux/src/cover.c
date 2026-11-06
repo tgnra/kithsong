@@ -3,7 +3,7 @@
 #include <glib/gstdio.h>
 #include <math.h>
 
-#include "musiccore/library.h"
+#include "kithcore/library.h"
 
 /* Decoded covers kept for scrolling back: about three screens of a big window at 2x. */
 enum { CACHE_BYTES = 96 * 1024 * 1024 };

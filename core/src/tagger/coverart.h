@@ -10,8 +10,8 @@
 #ifndef MC_TAGGER_COVERART_H
 #define MC_TAGGER_COVERART_H
 
-#include "musiccore/library.h" /* mc_coverart_find() */
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/library.h" /* mc_coverart_find() */
 #include "net/http.h"
 
 #define MC_ART_HASH_LEN 65 /* hex SHA-256 plus NUL */

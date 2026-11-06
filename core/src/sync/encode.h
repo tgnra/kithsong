@@ -14,7 +14,7 @@
 
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef enum mc_encode_prio {
   MC_ENCODE_NOW,       /* a FILE_REQ waits for it */

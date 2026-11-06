@@ -5,14 +5,14 @@
 #define _POSIX_C_SOURCE 200809L /* strdup */
 #endif
 
-#include "musiccore/radio.h"
+#include "kithcore/radio.h"
 
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "kithcore/analysis.h"
 #include "library/library_internal.h"
-#include "musiccore/analysis.h"
 #include "radio/groups.h"
 #include "util/platform.h"
 

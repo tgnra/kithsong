@@ -6,9 +6,9 @@
  * removing the old files walk it backwards, so files go before their folders. library.db
  * and its -wal and -shm come last at the top, so a rename that stops part-way has moved the
  * music rather than the database. */
-#include "musiccore/library_move.h"
+#include "kithcore/library_move.h"
 
-#include "musiccore/settings.h"
+#include "kithcore/settings.h"
 
 #include <stdlib.h>
 #include <string.h>

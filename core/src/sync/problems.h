@@ -13,8 +13,8 @@
 #ifndef MC_SYNC_PROBLEMS_H
 #define MC_SYNC_PROBLEMS_H
 
-#include "musiccore/library.h"
-#include "musiccore/sync.h"
+#include "kithcore/library.h"
+#include "kithcore/sync.h"
 #include "sync/sync_db.h"
 
 /* Works them out from sdb and lib; *out is never NULL on MC_OK. Reads every track on an archive

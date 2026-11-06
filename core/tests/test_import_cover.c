@@ -22,8 +22,8 @@
 #include <string.h>
 
 #include "library/library_internal.h"
-#include "musiccore/edit.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/edit.h"
+#include "kithcore/kithcore.h"
 #include "tagger/coverart.h"
 #include "tagger/musicbrainz.h"
 #include "tagger/tag_io.h"

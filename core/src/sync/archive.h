@@ -10,9 +10,9 @@
 
 #include <sqlite3.h>
 
-#include "musiccore/library.h"
-#include "musiccore/musiccore.h"
-#include "musiccore/sync.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/library.h"
+#include "kithcore/sync.h"
 #include "sync/sync_db.h"
 
 /* The device whose demotion is void into out, or "" if some current member is an archive

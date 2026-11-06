@@ -13,7 +13,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef enum drag_kind {
   DRAG_TRACK, /* onto a manual playlist */

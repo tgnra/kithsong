@@ -6,7 +6,7 @@
 #include "delete_dialog.h"
 #include "devices.h"
 #include "edit_dialog.h"
-#include "musiccore/radio_seeds.h"
+#include "kithcore/radio_seeds.h"
 #include "playback.h"
 #include "playlist_dialogs.h"
 #include "recents.h"

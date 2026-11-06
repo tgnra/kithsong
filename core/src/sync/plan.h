@@ -9,9 +9,9 @@
 
 #include <stdint.h>
 
-#include "musiccore/library.h"
-#include "musiccore/sync.h"
-#include "musiccore/transcode.h"
+#include "kithcore/library.h"
+#include "kithcore/sync.h"
+#include "kithcore/transcode.h"
 #include "sync/sync_db.h"
 
 typedef enum mc_plan_status {

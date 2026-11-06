@@ -38,10 +38,10 @@
  * fields made on another device before it heard of the delete, but later, still wins (as
  * with any row) and brings the track's row back without its files here; plays and playlist
  * places made there don't, as they belong to the deleted track. */
-#ifndef MUSICCORE_DELETE_H
-#define MUSICCORE_DELETE_H
+#ifndef KITHCORE_DELETE_H
+#define KITHCORE_DELETE_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

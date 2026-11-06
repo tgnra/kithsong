@@ -2,10 +2,10 @@
  * own yes/no answers. Stored as settings.json in a folder the frontend picks
  * (%LOCALAPPDATA%\kithsong on Windows, ~/.config/kithsong on Linux). Never synced: each
  * device has its own library folder. */
-#ifndef MUSICCORE_SETTINGS_H
-#define MUSICCORE_SETTINGS_H
+#ifndef KITHCORE_SETTINGS_H
+#define KITHCORE_SETTINGS_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

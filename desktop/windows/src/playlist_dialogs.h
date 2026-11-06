@@ -26,7 +26,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Each returns TRUE if the library changed. owner is the main window. playable is FALSE
  * when the new playlist is for a track with no file here, which the dialog then says. */

@@ -20,7 +20,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #define WAITING_BANNER_REMOVE 1 /* the notification code of the Remove from Library button */
 

@@ -3,8 +3,8 @@
 #include <string.h>
 
 #include "artist_view.h"
+#include "kithcore/radio.h"
 #include "mpris.h"
-#include "musiccore/radio.h"
 #include "now_playing.h"
 #include "queue_button.h"
 #include "track_list.h"

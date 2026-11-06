@@ -22,7 +22,7 @@
 
 #include <adwaita.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* What to do just before files go: before_remove (may be NULL) gets the plan, e.g. to stop
  * playback. */

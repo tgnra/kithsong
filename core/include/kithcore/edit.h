@@ -28,10 +28,10 @@
  * An edit can take as long as copying the files it touches, and needs that much free space
  * while it runs: one file for a track's, every file credited for an artist's rename. See "Hand
  * edits" in docs/tagging-rules.md. */
-#ifndef MUSICCORE_EDIT_H
-#define MUSICCORE_EDIT_H
+#ifndef KITHCORE_EDIT_H
+#define KITHCORE_EDIT_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Defined in library.h, which includes this through musiccore.h before it defines it. */
 typedef struct mc_library mc_library;

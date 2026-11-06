@@ -5,7 +5,7 @@
 #include <stdlib.h>
 
 #include "dlg_template.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "theme.h"
 #include "wstr.h"
 

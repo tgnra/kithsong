@@ -2,7 +2,7 @@
 
 #include <stdio.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* A MB as everywhere else in the app: sizes count in 1024s. */
 #define MB ((int64_t)1024 * 1024)

@@ -2,7 +2,7 @@
 #ifndef MC_UTIL_UID_H
 #define MC_UTIL_UID_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* A uid derived from (owner, position) alone: a name-based UUID (version 8) from the SHA-256
  * of "<owner>/<position>" (position in decimal), in mc_uid_new()'s text form. Every device derives the same uid

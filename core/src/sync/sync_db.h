@@ -6,7 +6,7 @@
 
 #include <sqlite3.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "util/changelog.h"
 #include "util/hlc.h"
 

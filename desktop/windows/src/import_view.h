@@ -29,7 +29,7 @@
 #include <windows.h>
 #include <shellapi.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Posted to the main window: import events marshalled from the import thread, and a
  * notice that the library changed. */

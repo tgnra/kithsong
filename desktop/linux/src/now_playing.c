@@ -5,7 +5,7 @@
 #include "app.h"
 #include "art_accent.h"
 #include "cover.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "playback.h"
 #include "queue_button.h"
 #include "track_menu.h"

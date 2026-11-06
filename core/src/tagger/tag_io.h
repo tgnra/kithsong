@@ -5,7 +5,7 @@
 
 #include <stddef.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

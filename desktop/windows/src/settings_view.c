@@ -12,7 +12,7 @@
 
 #include "canvas.h"
 #include "firewall.h"
-#include "musiccore/source_run.h"
+#include "kithcore/source_run.h"
 #include "playback.h"
 #include "prompt_dialog.h"
 #include "scrobble_service.h"

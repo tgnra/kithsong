@@ -3,7 +3,7 @@
 #ifndef MC_TAGGER_MUSICBRAINZ_H
 #define MC_TAGGER_MUSICBRAINZ_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "net/http.h"
 
 /* One entry of a MusicBrainz artist-credit array. */

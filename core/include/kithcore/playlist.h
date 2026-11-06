@@ -4,10 +4,10 @@
  * mc_library_list_playlist_tracks()).
  *
  * MC_ERR_NOT_FOUND means the playlist, track or entry named doesn't exist. */
-#ifndef MUSICCORE_PLAYLIST_H
-#define MUSICCORE_PLAYLIST_H
+#ifndef KITHCORE_PLAYLIST_H
+#define KITHCORE_PLAYLIST_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

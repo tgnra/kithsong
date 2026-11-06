@@ -1,7 +1,7 @@
 /* A play log row, which the player fills in and the library keeps (mc_player_take_ended(),
  * mc_library_log_play()). Included by musiccore.h, ahead of both of theirs. */
-#ifndef MUSICCORE_PLAY_LOG_H
-#define MUSICCORE_PLAY_LOG_H
+#ifndef KITHCORE_PLAY_LOG_H
+#define KITHCORE_PLAY_LOG_H
 
 #ifdef __cplusplus
 extern "C" {

@@ -19,7 +19,7 @@
 
 #include <mbedtls/sha256.h>
 
-#include "musiccore/transcode.h"
+#include "kithcore/transcode.h"
 #include "opusenc.h"
 #include "playback/decoder.h"
 #include "tagger/coverart.h"

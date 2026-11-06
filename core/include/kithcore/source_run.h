@@ -8,11 +8,11 @@
  * folder counts, and a debug build copied elsewhere doesn't. Everything here fails closed. If
  * something can't be read or doesn't match, the run is an installed one, and a library is
  * the user's. Android has no executable to go by and doesn't use this. */
-#ifndef MUSICCORE_SOURCE_RUN_H
-#define MUSICCORE_SOURCE_RUN_H
+#ifndef KITHCORE_SOURCE_RUN_H
+#define KITHCORE_SOURCE_RUN_H
 
-#include "musiccore/musiccore.h"
-#include "musiccore/settings.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/settings.h"
 
 #ifdef __cplusplus
 extern "C" {

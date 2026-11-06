@@ -6,7 +6,7 @@
 
 #include <sqlite3.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* 1 if db (a sync.db connection) holds a signed-in scrobbling account, with *username (may
  * be NULL) set to a malloc'd copy of its user name ("" if it has none); else 0. */

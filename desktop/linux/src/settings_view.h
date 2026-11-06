@@ -69,7 +69,7 @@
 
 #include <adwaita.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Switches to the library in dir (UTF-8). Returns TRUE if it's now open; FALSE if it couldn't
  * be, after telling the user why. Runs on the main thread, while the dialog is open. */

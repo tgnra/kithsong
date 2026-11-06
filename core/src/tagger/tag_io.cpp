@@ -1,7 +1,7 @@
 // Tag reading/writing via TagLib's C++ API, exposed to the rest of core as plain C.
 // We don't use TagLib's own C bindings: they take char* paths, which on Windows go through
 // the ANSI code page and break on non-ASCII file names.
-#include "musiccore/tagger.h"
+#include "kithcore/tagger.h"
 #include "tagger/tag_io.h"
 
 #include <cstdlib>

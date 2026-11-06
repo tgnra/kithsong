@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kithcore/kithcore.h"
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
 #include "test.h"
 
 #define NOW 1700000000000LL

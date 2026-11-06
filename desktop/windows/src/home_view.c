@@ -14,7 +14,7 @@
 #include "canvas.h"
 #include "cover.h"
 #include "item_menu.h"
-#include "musiccore/home_picks.h"
+#include "kithcore/home_picks.h"
 #include "playback.h"
 #include "scroller.h"
 #include "theme.h"

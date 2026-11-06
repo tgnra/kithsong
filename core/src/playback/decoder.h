@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef struct mc_decoder mc_decoder;
 

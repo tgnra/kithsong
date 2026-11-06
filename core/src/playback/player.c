@@ -41,15 +41,15 @@
  * callback holds just for the copy (and the volume). Everything else is under the mutex; the thread drops it while
  * opening, decoding and touching the device, so calls from the UI never wait on the disk.
  */
-#include "musiccore/playback.h"
+#include "kithcore/playback.h"
 
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "kithcore/radio.h"
 #include "library/library_internal.h"
 #include "miniaudio.h"
-#include "musiccore/radio.h"
 #include "playback/decoder.h"
 #include "playback/shuffle.h"
 #include "util/platform.h"

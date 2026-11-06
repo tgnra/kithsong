@@ -18,7 +18,7 @@
 #include <gtk/gtk.h>
 
 #include "drag.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #define ALBUM_TYPE_ITEM (album_item_get_type())
 G_DECLARE_FINAL_TYPE(AlbumItem, album_item, ALBUM, ITEM, GObject)

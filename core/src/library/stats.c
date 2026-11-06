@@ -1,8 +1,8 @@
 /* See mc_library_read_stats() in musiccore/library.h. */
 #include <string.h>
 
+#include "kithcore/kithcore.h"
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
 
 /* Whether track t, or any track of album a, has a file here: what gives mc_track_info a path
  * and mc_album_info a folder. */

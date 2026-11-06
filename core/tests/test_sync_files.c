@@ -27,7 +27,7 @@
 #include <mbedtls/sha256.h>
 
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "sync/plan.h"
 #include "sync/rows.h"
 #include "sync/sync_db.h"
@@ -35,7 +35,7 @@
 #include "sync/orphans.h"
 #include "sync/transfer.h"
 #include "tagger/import_db.h"
-#include "musiccore/edit.h"
+#include "kithcore/edit.h"
 #include "test.h"
 #include "test_image.h"
 #include "util/platform.h"

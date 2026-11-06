@@ -4,7 +4,7 @@
 #ifndef MC_TAGGER_MATCH_H
 #define MC_TAGGER_MATCH_H
 
-#include "musiccore/tagger.h"
+#include "kithcore/tagger.h"
 #include "tagger/musicbrainz.h"
 
 /* Normalised edit distance. Ignores case, punctuation, common Latin accents, a leading

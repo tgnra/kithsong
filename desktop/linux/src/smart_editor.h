@@ -59,7 +59,7 @@
 
 #include <adwaita.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* New Smart Playlist… or New Smart Album Group…, over parent (any widget in the main window).
  * Calls done with the new list's uid once it's made. */

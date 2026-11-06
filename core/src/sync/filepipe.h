@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef struct mc_file_reader mc_file_reader;
 typedef struct mc_file_writer mc_file_writer;

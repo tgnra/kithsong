@@ -21,8 +21,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kithcore/tagger.h"
 #include "library/library_internal.h"
-#include "musiccore/tagger.h"
 #include "tagger/credit.h"
 #include "tagger/dupes.h"
 #include "tagger/import_db.h"

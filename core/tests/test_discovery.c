@@ -12,8 +12,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kithcore/kithcore.h"
 #include "mdns.h"
-#include "musiccore/musiccore.h"
 #include "test.h"
 #include "util/platform.h"
 

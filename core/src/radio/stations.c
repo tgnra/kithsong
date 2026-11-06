@@ -6,7 +6,7 @@
 #define _POSIX_C_SOURCE 200809L /* localtime_r */
 #endif
 
-#include "musiccore/radio_stations.h"
+#include "kithcore/radio_stations.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -14,9 +14,9 @@
 #include <time.h>
 
 #include "analysis/analysis_internal.h"
+#include "kithcore/analysis.h"
+#include "kithcore/i18n.h"
 #include "library/library_internal.h"
-#include "musiccore/analysis.h"
-#include "musiccore/i18n.h"
 #include "radio/groups.h"
 #include "util/platform.h"
 

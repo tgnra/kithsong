@@ -21,7 +21,7 @@
 
 #include <gtk/gtk.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 G_BEGIN_DECLS
 

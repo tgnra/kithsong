@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "util/platform.h"
 
 typedef struct mc_buffer {

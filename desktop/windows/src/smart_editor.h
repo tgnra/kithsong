@@ -57,7 +57,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* New Smart Playlist or New Smart Album Group: the ready-made rules (or a blank one), then
  * the editor with it filled in. TRUE, with the new list's uid in out_uid, if one was

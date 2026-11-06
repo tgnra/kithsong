@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <windows.h>
 
-#include "musiccore/i18n.h"
+#include "kithcore/i18n.h"
 
 /* Picks the strings' language from the user's Windows display language. Call it at startup,
  * before other threads start. */

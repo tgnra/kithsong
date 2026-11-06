@@ -4,7 +4,7 @@
 #include <jni.h>
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #include "jni_bridge.h"
 

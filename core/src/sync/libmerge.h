@@ -10,8 +10,8 @@
 
 #include <stdint.h>
 
+#include "kithcore/sync.h"
 #include "library/library_internal.h"
-#include "musiccore/sync.h"
 #include "sync/sync_db.h"
 
 /* meta key holding the set-aside copy's file name (in the library folder) until the merge

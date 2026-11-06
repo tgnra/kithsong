@@ -26,8 +26,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "musiccore/i18n.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/i18n.h"
+#include "kithcore/kithcore.h"
 #include "tagger/musicbrainz.h"
 #include "util/platform.h"
 #include "test.h"

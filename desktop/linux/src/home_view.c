@@ -6,7 +6,7 @@
 #include "artist_view.h"
 #include "brand_backdrop.h"
 #include "cover.h"
-#include "musiccore/home_picks.h"
+#include "kithcore/home_picks.h"
 #include "playback.h"
 #include "playlist_dialogs.h"
 #include "recents.h"

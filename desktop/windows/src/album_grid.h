@@ -26,7 +26,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Creates the grid as a child of parent. Fonts arrive through WM_SETFONT. Only one grid
  * exists at a time. */

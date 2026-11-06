@@ -1,8 +1,8 @@
 /* Tag reading/writing and the MusicBrainz autotagger. */
-#ifndef MUSICCORE_TAGGER_H
-#define MUSICCORE_TAGGER_H
+#ifndef KITHCORE_TAGGER_H
+#define KITHCORE_TAGGER_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

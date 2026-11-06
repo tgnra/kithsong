@@ -3,7 +3,7 @@
  * Expected output: "MusicBrainz OK: Radiohead". */
 #include <stdio.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 int main(void) {
   if (mc_init() != MC_OK) {

@@ -46,9 +46,9 @@
 #include <android/log.h>
 #endif
 
+#include "kithcore/delete.h"
 #include "library/edit_internal.h"
 #include "library/folder_gate.h"
-#include "musiccore/delete.h"
 #include "sync/archive.h"
 #include "sync/libmerge.h"
 #include "sync/sync_db.h"

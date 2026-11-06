@@ -32,7 +32,7 @@
 #include <gtk/gtk.h>
 
 #include "album_grid.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* What the user asks of the list. The list changes nothing itself: the callee does, then
  * reloads it with track_list_show(). Any may be NULL. */

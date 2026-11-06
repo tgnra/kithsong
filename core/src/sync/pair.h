@@ -8,7 +8,7 @@
 #ifndef MC_SYNC_PAIR_H
 #define MC_SYNC_PAIR_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "sync/channel.h"
 
 #define MC_PAIR_CODE_DIGITS 6

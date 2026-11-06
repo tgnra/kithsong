@@ -4,8 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kithcore/i18n.h"
 #include "library/library_internal.h"
-#include "musiccore/i18n.h"
 #include "sync/archive.h"
 #include "sync/plan.h"
 #include "sync/sync_internal.h"

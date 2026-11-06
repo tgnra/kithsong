@@ -1,6 +1,6 @@
 /* Looking up UI strings in the generated tables (util/i18n_table.h), plural rules, and
  * {0}-style formatting. */
-#include "musiccore/i18n.h"
+#include "kithcore/i18n.h"
 
 #include <stdlib.h>
 #include <string.h>

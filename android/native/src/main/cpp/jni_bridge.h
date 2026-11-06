@@ -5,7 +5,7 @@
 #include <jni.h>
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Throws MusicCoreException(status) and returns status. */
 mc_status throw_status(JNIEnv *env, mc_status st);

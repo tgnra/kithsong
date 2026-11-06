@@ -7,7 +7,7 @@
 #include <stdlib.h>
 
 #include "jni_bridge.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* kind (an mc_profile_item_kind) checked: albums and artists only. */
 static int check_kind(JNIEnv *env, jint kind) {

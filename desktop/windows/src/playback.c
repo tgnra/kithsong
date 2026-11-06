@@ -6,10 +6,10 @@
 #include <string.h>
 #include <wchar.h>
 
+#include "kithcore/kithcore.h"
+#include "kithcore/radio.h"
+#include "kithcore/smartlist.h"
 #include "media_controls.h"
-#include "musiccore/musiccore.h"
-#include "musiccore/radio.h"
-#include "musiccore/smartlist.h"
 #include "now_playing.h"
 #include "taskbar.h"
 #include "track_list.h"

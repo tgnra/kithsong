@@ -2,8 +2,8 @@
 
 #include <stdio.h>
 
-#include "musiccore/radio.h"
-#include "musiccore/radio_seeds.h"
+#include "kithcore/radio.h"
+#include "kithcore/radio_seeds.h"
 #include "wstr.h"
 
 static void append(HMENU menu, UINT cmd, const char *seed) {

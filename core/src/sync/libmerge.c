@@ -9,7 +9,7 @@
 
 #include <sqlite3.h>
 
-#include "musiccore/tagger.h"
+#include "kithcore/tagger.h"
 #include "tagger/dupes.h"
 #include "tagger/import_db.h"
 #include "sync/transfer.h"

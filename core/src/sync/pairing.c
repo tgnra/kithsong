@@ -7,8 +7,8 @@
 
 #include <yyjson.h>
 
+#include "kithcore/tagger.h"
 #include "library/library_internal.h"
-#include "musiccore/tagger.h"
 #include "scrobble/scrobble_internal.h"
 #include "sync/archive.h"
 #include "sync/libmerge.h"

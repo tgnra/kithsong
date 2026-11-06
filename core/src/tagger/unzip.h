@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* The most a zip may hold, uncompressed: a big lossless discography fits, a zip bomb doesn't. */
 #define MC_UNZIP_MAX_BYTES ((int64_t)8 * 1024 * 1024 * 1024)

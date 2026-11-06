@@ -1,4 +1,4 @@
-#include "musiccore/home_picks.h"
+#include "kithcore/home_picks.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -6,8 +6,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "kithcore/radio_stations.h"
 #include "library/library_internal.h"
-#include "musiccore/radio_stations.h"
 #include "util/platform.h"
 
 /* Played a Lot Recently and Not Played in a While go by the play log, read back as far as

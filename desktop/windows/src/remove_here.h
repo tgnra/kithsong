@@ -19,7 +19,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* before_remove (may be NULL) gets the plan just before files go, e.g. to stop playing a
  * track in it. Call once at startup. */

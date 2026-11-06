@@ -5,8 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "musiccore/musiccore.h"
-#include "musiccore/settings.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/settings.h"
 #include "test.h"
 #include "util/platform.h"
 

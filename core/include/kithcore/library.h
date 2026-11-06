@@ -1,9 +1,9 @@
 /* Library database: artists, albums, tracks, files, playlists, and the change log
  * that sync is built on. Backed by one SQLite file in WAL mode. */
-#ifndef MUSICCORE_LIBRARY_H
-#define MUSICCORE_LIBRARY_H
+#ifndef KITHCORE_LIBRARY_H
+#define KITHCORE_LIBRARY_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

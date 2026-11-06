@@ -17,8 +17,8 @@
 #include <string.h>
 #include <wchar.h>
 
-#include "musiccore/source_run.h"
-#include "musiccore/sync.h"
+#include "kithcore/source_run.h"
+#include "kithcore/sync.h"
 #include "prompt_dialog.h"
 #include "sync_bridge.h"
 #include "wstr.h"

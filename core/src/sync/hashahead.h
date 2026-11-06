@@ -13,7 +13,7 @@
 
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #define MC_HASH_AHEAD_STRLEN 65 /* hex SHA-256 plus NUL */
 

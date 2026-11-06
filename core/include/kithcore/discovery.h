@@ -9,10 +9,10 @@
  *
  * Android and Wear OS: the frontend must hold a WifiManager.MulticastLock while discovery
  * runs, or the OS drops incoming multicast. A watch is discoverable only on Wi-Fi. */
-#ifndef MUSICCORE_DISCOVERY_H
-#define MUSICCORE_DISCOVERY_H
+#ifndef KITHCORE_DISCOVERY_H
+#define KITHCORE_DISCOVERY_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -7,8 +7,8 @@
  *  - Strings returned through out-params are owned by the caller; free with mc_free().
  *  - Handles are not thread-safe unless their header says so.
  */
-#ifndef MUSICCORE_H
-#define MUSICCORE_H
+#ifndef KITHCORE_H
+#define KITHCORE_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -61,26 +61,26 @@ mc_status mc_uid_new(char out[MC_UID_STRLEN]);
 }
 #endif
 
-#include "musiccore/play_log.h"
-#include "musiccore/library.h"
-#include "musiccore/settings.h"
-#include "musiccore/library_move.h"
-#include "musiccore/delete.h"
-#include "musiccore/playlist.h"
-#include "musiccore/smartlist.h"
-#include "musiccore/search.h"
-#include "musiccore/edit.h"
-#include "musiccore/playback.h"
-#include "musiccore/tagger.h"
-#include "musiccore/transcode.h"
-#include "musiccore/discovery.h"
-#include "musiccore/sync.h"
-#include "musiccore/sync_here.h"
-#include "musiccore/scrobbler.h"
-#include "musiccore/artcolors.h"
-#include "musiccore/perf.h"
-#include "musiccore/stress.h"
+#include "kithcore/play_log.h"
+#include "kithcore/library.h"
+#include "kithcore/settings.h"
+#include "kithcore/library_move.h"
+#include "kithcore/delete.h"
+#include "kithcore/playlist.h"
+#include "kithcore/smartlist.h"
+#include "kithcore/search.h"
+#include "kithcore/edit.h"
+#include "kithcore/playback.h"
+#include "kithcore/tagger.h"
+#include "kithcore/transcode.h"
+#include "kithcore/discovery.h"
+#include "kithcore/sync.h"
+#include "kithcore/sync_here.h"
+#include "kithcore/scrobbler.h"
+#include "kithcore/artcolors.h"
+#include "kithcore/perf.h"
+#include "kithcore/stress.h"
 
-#include "musiccore/i18n.h"
+#include "kithcore/i18n.h"
 
 #endif

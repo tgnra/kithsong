@@ -8,7 +8,7 @@
 #include "cover.h"
 #include "delete_dialog.h"
 #include "edit_dialog.h"
-#include "musiccore/radio_seeds.h"
+#include "kithcore/radio_seeds.h"
 #include "playback.h"
 #include "recents.h"
 #include "remove_here.h"

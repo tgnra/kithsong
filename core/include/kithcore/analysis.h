@@ -8,10 +8,10 @@
  *
  * Results live in track_analysis and sync like any row, so a device that doesn't scan has them
  * too. How they are stored and how the distance is scaled: "Audio analysis" in docs/schema.md. */
-#ifndef MUSICCORE_ANALYSIS_H
-#define MUSICCORE_ANALYSIS_H
+#ifndef KITHCORE_ANALYSIS_H
+#define KITHCORE_ANALYSIS_H
 
-#include "musiccore/library.h"
+#include "kithcore/library.h"
 
 #ifdef __cplusplus
 extern "C" {

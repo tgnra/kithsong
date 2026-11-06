@@ -16,7 +16,7 @@
 #include <stdint.h>
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Posted to the main window. wParam: the generation; lParam: a sync_event * (malloc'd).
  * Pass both to sync_bridge_receive(). */

@@ -4,11 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "musiccore/i18n.h"
-#include "musiccore/library.h"
-#include "musiccore/playback.h"
-#include "musiccore/playlist.h"
-#include "musiccore/smartlist.h"
+#include "kithcore/i18n.h"
+#include "kithcore/library.h"
+#include "kithcore/playback.h"
+#include "kithcore/playlist.h"
+#include "kithcore/smartlist.h"
 #include "util/platform.h"
 
 /* An mc_up_next_add, with all it points to. */

@@ -5,8 +5,8 @@
  *
  * All text is UTF-8 and static: never free it. A string a language doesn't translate comes
  * out in English. */
-#ifndef MUSICCORE_I18N_H
-#define MUSICCORE_I18N_H
+#ifndef KITHCORE_I18N_H
+#define KITHCORE_I18N_H
 
 #include <stddef.h>
 

@@ -31,7 +31,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* What OK closed the dialog with, for mc_scrobbler_set_service(): malloc'd UTF-8, all NULL
  * for Last.fm. */

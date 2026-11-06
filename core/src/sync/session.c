@@ -9,7 +9,7 @@
 #include "library/folder_gate.h"
 #include "analysis/scanner.h"
 #include "library/library_internal.h"
-#include "musiccore/transcode.h"
+#include "kithcore/transcode.h"
 #include "sync/archive.h"
 #include "sync/libmerge.h"
 #include "sync/merge.h"

@@ -2,7 +2,7 @@
 
 #include <stdlib.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 static struct {
   GtkWindow *main, *win;

@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "util/platform.h"
 
 static mc_mutex g_lock;

@@ -4,7 +4,7 @@
 
 #include <mbedtls/ecp.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "sync/sync_db.h"
 #include "test.h"
 #include "util/platform.h"

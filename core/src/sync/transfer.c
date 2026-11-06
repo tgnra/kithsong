@@ -66,10 +66,10 @@
 #include <mbedtls/sha256.h>
 #include <yyjson.h>
 
+#include "kithcore/delete.h"
+#include "kithcore/transcode.h"
 #include "library/delete_internal.h"
 #include "library/library_internal.h"
-#include "musiccore/delete.h"
-#include "musiccore/transcode.h"
 #include "sync/archive.h"
 #include "sync/filepipe.h"
 #include "sync/hashahead.h"

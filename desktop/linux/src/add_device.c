@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-#include "musiccore/i18n.h"
+#include "kithcore/i18n.h"
 
 #if !ADW_CHECK_VERSION(1, 5, 0)
 #error "add_device.c needs libadwaita 1.5 or later (AdwAlertDialog)"

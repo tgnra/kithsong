@@ -19,7 +19,7 @@
 #include "artist_view.h"
 #include "canvas.h"
 #include "cover.h"
-#include "musiccore/edit.h"
+#include "kithcore/edit.h"
 #include "now_playing.h"
 #include "pick_folder.h"
 #include "playback.h"

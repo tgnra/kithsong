@@ -8,8 +8,8 @@
 #include <stb_image.h>
 #include <stb_image_write.h>
 
+#include "kithcore/kithcore.h"
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
 #include "test.h"
 #include "util/platform.h"
 

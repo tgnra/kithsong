@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef enum media_button {
   MEDIA_PLAY,

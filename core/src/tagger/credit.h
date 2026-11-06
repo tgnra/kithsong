@@ -3,7 +3,7 @@
 #ifndef MC_TAGGER_CREDIT_H
 #define MC_TAGGER_CREDIT_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef struct mc_credit_split_part {
   char *name;

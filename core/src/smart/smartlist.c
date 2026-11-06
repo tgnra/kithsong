@@ -7,15 +7,15 @@
 #define _POSIX_C_SOURCE 200809L /* localtime_r */
 #endif
 
-#include "musiccore/smartlist.h"
+#include "kithcore/smartlist.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <yyjson.h>
 
+#include "kithcore/i18n.h"
 #include "library/library_internal.h"
-#include "musiccore/i18n.h"
 #include "util/platform.h"
 
 #define RULE_VERSION 1

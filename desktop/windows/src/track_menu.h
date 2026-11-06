@@ -27,7 +27,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef enum track_menu_pick {
   TRACK_MENU_NOTHING,

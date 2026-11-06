@@ -86,7 +86,7 @@
 #include <string.h>
 #include <wchar.h>
 
-#include "musiccore/analysis.h"
+#include "kithcore/analysis.h"
 
 #include "add_device.h"
 #include "add_to_playlist.h"
@@ -104,8 +104,8 @@
 #include "home_view.h"
 #include "import_view.h"
 #include "move_library.h"
-#include "musiccore/musiccore.h"
-#include "musiccore/source_run.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/source_run.h"
 #include "now_playing.h"
 #include "pair_dialog.h"
 #include "pick_folder.h"

@@ -9,10 +9,10 @@
  * An artist's tracks are mc_library_list_artist_tracks()'s. Of a very long list only some are
  * compared, spread over it. Either call reads no more than its own tracks, so a UI thread can
  * ask as a menu opens. */
-#ifndef MUSICCORE_RADIO_SEEDS_H
-#define MUSICCORE_RADIO_SEEDS_H
+#ifndef KITHCORE_RADIO_SEEDS_H
+#define KITHCORE_RADIO_SEEDS_H
 
-#include "musiccore/library.h"
+#include "kithcore/library.h"
 
 #ifdef __cplusplus
 extern "C" {

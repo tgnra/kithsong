@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "musiccore/artcolors.h"
+#include "kithcore/artcolors.h"
 #include "test.h"
 
 #define SIDE 128

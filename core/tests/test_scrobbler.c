@@ -8,8 +8,8 @@
 #include <mbedtls/md5.h>
 
 #include "config.h"
+#include "kithcore/kithcore.h"
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
 #include "scrobble/lastfm.h"
 #include "sync/rows.h"
 #include "sync/sync_db.h"

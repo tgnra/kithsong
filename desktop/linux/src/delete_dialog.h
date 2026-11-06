@@ -26,7 +26,7 @@
 
 #include <adwaita.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* What to do just before files go: before_delete (may be NULL) gets the plan, e.g. to stop
  * playing a track in it, which would otherwise play on from its trashed file. Call once at

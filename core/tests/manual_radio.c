@@ -16,12 +16,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kithcore/analysis.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/playlist.h"
+#include "kithcore/radio.h"
+#include "kithcore/search.h"
 #include "library/library_internal.h"
-#include "musiccore/analysis.h"
-#include "musiccore/musiccore.h"
-#include "musiccore/playlist.h"
-#include "musiccore/radio.h"
-#include "musiccore/search.h"
 #include "util/platform.h"
 
 enum { DEFAULT_COUNT = 10, MAX_COUNT = 1000 };

@@ -3,8 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kithcore/kithcore.h"
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
 #include "tagger/import_db.h"
 #include "test.h"
 #include "util/uid.h"

@@ -5,11 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kithcore/delete.h"
+#include "kithcore/library.h"
+#include "kithcore/playlist.h"
 #include "library/delete_internal.h"
 #include "library/library_internal.h"
-#include "musiccore/delete.h"
-#include "musiccore/library.h"
-#include "musiccore/playlist.h"
 #include "tagger/import_db.h"
 #include "test.h"
 #include "util/platform.h"

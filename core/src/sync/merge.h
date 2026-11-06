@@ -13,7 +13,7 @@
 
 #include <sqlite3.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 typedef struct mc_library mc_library;
 

@@ -11,12 +11,12 @@
  *
  * All of this may be called from any thread, once mc_perf_set_enabled() has been called, which
  * every frontend does at startup, on or off. Names passed in are copied. */
-#ifndef MUSICCORE_PERF_H
-#define MUSICCORE_PERF_H
+#ifndef KITHCORE_PERF_H
+#define KITHCORE_PERF_H
 
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

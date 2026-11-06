@@ -22,14 +22,14 @@
  * has the rules. With no such skips, picks are what they'd be without any of this.
  *
  * To play a station, see mc_player_play_radio() in musiccore/playback.h. */
-#ifndef MUSICCORE_RADIO_H
-#define MUSICCORE_RADIO_H
+#ifndef KITHCORE_RADIO_H
+#define KITHCORE_RADIO_H
 
 #include <stdint.h>
 
-#include "musiccore/analysis.h"
-#include "musiccore/library.h"
-#include "musiccore/play_log.h"
+#include "kithcore/analysis.h"
+#include "kithcore/library.h"
+#include "kithcore/play_log.h"
 
 #ifdef __cplusplus
 extern "C" {

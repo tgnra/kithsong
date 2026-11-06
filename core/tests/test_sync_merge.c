@@ -19,7 +19,7 @@
 #include <string.h>
 
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "scrobble/lastfm.h"
 #include "sync/libmerge.h"
 #include "sync/sync_db.h"

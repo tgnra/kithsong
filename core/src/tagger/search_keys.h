@@ -6,7 +6,7 @@
 #ifndef MC_TAGGER_SEARCH_KEYS_H
 #define MC_TAGGER_SEARCH_KEYS_H
 
-#include "musiccore/tagger.h"
+#include "kithcore/tagger.h"
 
 #define MC_KEYS_MAX 4 /* of each kind of key */
 

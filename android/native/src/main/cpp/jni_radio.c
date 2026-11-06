@@ -5,8 +5,8 @@
 #include <stdint.h>
 
 #include "jni_bridge.h"
-#include "musiccore/radio.h"
-#include "musiccore/radio_stations.h"
+#include "kithcore/radio.h"
+#include "kithcore/radio_stations.h"
 
 /* A StationInfo[] as of now_ms, the most played first. */
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_RadioNatives_nativeStations(JNIEnv *env, jclass cls, jlong handle,

@@ -19,7 +19,7 @@
  * it reads "undo" until the commit, which changes it to "done" in the same transaction. */
 #include "library/folder_gate.h"
 #include "library/edit_internal.h"
-#include "musiccore/edit.h"
+#include "kithcore/edit.h"
 
 #include <ctype.h>
 #include <stddef.h>
@@ -27,8 +27,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kithcore/tagger.h"
 #include "library/library_internal.h"
-#include "musiccore/tagger.h"
 #include "sync/transfer.h"
 #include "tagger/coverart.h"
 #include "tagger/credit.h"

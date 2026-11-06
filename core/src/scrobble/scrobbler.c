@@ -5,7 +5,7 @@
  * changes (auth, sign out, service) are written from the caller's thread on a connection of
  * its own, then the worker is woken to pick them up; ones arriving by sync are picked up on
  * its next poll. */
-#include "musiccore/scrobbler.h"
+#include "kithcore/scrobbler.h"
 
 #include <ctype.h>
 #include <stdio.h>

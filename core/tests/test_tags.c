@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "test.h"
 
 static void put_u32(unsigned char *p, uint32_t v) {

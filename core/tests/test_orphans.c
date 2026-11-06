@@ -16,7 +16,7 @@
 #include "library/edit_internal.h"
 #include "library/folder_gate.h"
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "sync/libmerge.h"
 #include "sync/orphans.h"
 #include "sync/transfer.h"

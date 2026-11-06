@@ -17,7 +17,7 @@
 #include <windows.h>
 #endif
 
-#include "musiccore/analysis.h"
+#include "kithcore/analysis.h"
 #include "playback/decoder.h"
 #include "util/platform.h"
 

@@ -32,7 +32,7 @@
 
 #include <windows.h>
 
-#include "musiccore/settings.h"
+#include "kithcore/settings.h"
 
 #define FIREWALL_HELPER_ARG L"--add-firewall-rule"
 #define FIREWALL_HELPER_PUBLIC_ARG L"--add-firewall-rule-public"

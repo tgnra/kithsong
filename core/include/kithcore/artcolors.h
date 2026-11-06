@@ -3,8 +3,8 @@
  * Android finds a wallpaper's (the Celebi quantizer, then Material's Score), so the first is
  * the art's seed colour, and each comes with its share of the art. Pure computation on pixels
  * the caller has decoded: no library, no files, safe from any thread. */
-#ifndef MUSICCORE_ARTCOLORS_H
-#define MUSICCORE_ARTCOLORS_H
+#ifndef KITHCORE_ARTCOLORS_H
+#define KITHCORE_ARTCOLORS_H
 
 #include <stddef.h>
 #include <stdint.h>

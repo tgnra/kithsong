@@ -19,10 +19,10 @@
  * Symbolic links and junctions in the library aren't followed or moved, and neither is a
  * desktop.ini or .directory at the top (they belong to the folder, e.g. Windows' name for Music
  * or KDE's icon for it); they stay behind in the old folder. */
-#ifndef MUSICCORE_LIBRARY_MOVE_H
-#define MUSICCORE_LIBRARY_MOVE_H
+#ifndef KITHCORE_LIBRARY_MOVE_H
+#define KITHCORE_LIBRARY_MOVE_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

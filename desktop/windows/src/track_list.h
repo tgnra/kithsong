@@ -30,7 +30,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Sent to the parent as WM_COMMAND notification codes. TLN_PLAY: the user plays a track
  * (see track_list_play_index). The others ask the parent to change the library; the list

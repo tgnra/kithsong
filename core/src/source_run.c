@@ -1,4 +1,4 @@
-#include "musiccore/source_run.h"
+#include "kithcore/source_run.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -13,7 +13,7 @@
 
 /* All of them, the rarest first, so anywhere else stops at the first. */
 static const char *const k_markers[] = {
-  "core/include/musiccore/musiccore.h",
+  "core/include/kithcore/kithcore.h",
   "desktop/windows/src/main.c",
   "desktop/linux/src/main.c",
   "strings/en.json",

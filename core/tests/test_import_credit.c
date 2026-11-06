@@ -16,7 +16,7 @@
 #include <string.h>
 
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "tagger/musicbrainz.h"
 #include "tagger/tagger_internal.h"
 #include "util/platform.h"

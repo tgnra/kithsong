@@ -5,11 +5,11 @@
 #include <string.h>
 
 #include "analysis/analysis_internal.h"
+#include "kithcore/analysis.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/radio.h"
+#include "kithcore/radio_seeds.h"
 #include "library/library_internal.h"
-#include "musiccore/analysis.h"
-#include "musiccore/musiccore.h"
-#include "musiccore/radio.h"
-#include "musiccore/radio_seeds.h"
 #include "test.h"
 #include "util/platform.h"
 #include "util/uid.h"

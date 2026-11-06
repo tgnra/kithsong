@@ -20,7 +20,7 @@
 #include <string.h>
 
 #include "library/library_internal.h"
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "tagger/dupes.h"
 #include "tagger/musicbrainz.h"
 #include "tagger/refresh.h"

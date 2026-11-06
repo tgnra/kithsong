@@ -31,7 +31,7 @@
 
 #include <windows.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* Runs the dialog. lib is only read here, for its folder. */
 void stats_dialog_show(HWND owner, mc_library *lib);

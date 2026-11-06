@@ -13,7 +13,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #define MC_NOISE_KEY_LEN 32  /* DHLEN, and the cipher key length */
 #define MC_NOISE_HASH_LEN 32 /* HASHLEN */

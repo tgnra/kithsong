@@ -55,7 +55,7 @@
 
 #include <adwaita.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 /* All run on the main thread; any may be NULL. */
 typedef struct import_view_callbacks {

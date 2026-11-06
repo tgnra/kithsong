@@ -21,10 +21,10 @@
  * preset far slower, and UI speed doesn't need them. Playing a track without one skips it, as
  * for any file that's gone: the player reports an error (MC_PLAYER_EVENT_ERROR) and goes on to
  * the next. Every file written is in library.db, the covers apart (cover.jpg, as usual). */
-#ifndef MUSICCORE_STRESS_H
-#define MUSICCORE_STRESS_H
+#ifndef KITHCORE_STRESS_H
+#define KITHCORE_STRESS_H
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 
 #ifdef __cplusplus
 extern "C" {

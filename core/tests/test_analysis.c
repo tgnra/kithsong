@@ -8,10 +8,10 @@
 
 #include "analysis/analysis_internal.h"
 #include "analysis/scanner.h"
+#include "kithcore/delete.h"
+#include "kithcore/kithcore.h"
 #include "library/delete_internal.h"
 #include "library/library_internal.h"
-#include "musiccore/delete.h"
-#include "musiccore/musiccore.h"
 #include "sync/rows.h"
 #include "test.h"
 #include "util/platform.h"

@@ -2,7 +2,7 @@
  * would have left them, with the triggers' logging off: nothing here ever syncs, and writing the
  * changelog as well would take most of the time. Generated from a fixed seed, uids included, so
  * a preset is the same library every time. */
-#include "musiccore/stress.h"
+#include "kithcore/stress.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,8 +10,8 @@
 
 #include <stb_image_write.h>
 
+#include "kithcore/library_move.h"
 #include "library/library_internal.h"
-#include "musiccore/library_move.h"
 #include "util/fracindex.h"
 #include "util/platform.h"
 

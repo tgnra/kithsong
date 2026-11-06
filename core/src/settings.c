@@ -1,4 +1,4 @@
-#include "musiccore/settings.h"
+#include "kithcore/settings.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -2,7 +2,7 @@
 #ifndef MC_SEARCH_INTERNAL_H
 #define MC_SEARCH_INTERNAL_H
 
-#include "musiccore/search.h"
+#include "kithcore/search.h"
 
 typedef struct mc_search mc_search;
 

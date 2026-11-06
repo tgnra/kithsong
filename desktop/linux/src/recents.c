@@ -7,7 +7,7 @@
 #include "drag.h"
 #include "edit_dialog.h"
 #include "home_view.h"
-#include "musiccore/radio_seeds.h"
+#include "kithcore/radio_seeds.h"
 #include "playback.h"
 #include "track_menu.h"
 

@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "musiccore/musiccore.h"
+#include "kithcore/kithcore.h"
 #include "net/socket.h"
 #include "sync/channel.h"
 #include "sync/sync_internal.h"

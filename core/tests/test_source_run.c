@@ -13,16 +13,16 @@
 #include <unistd.h>
 #endif
 
-#include "musiccore/musiccore.h"
-#include "musiccore/settings.h"
-#include "musiccore/source_run.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/settings.h"
+#include "kithcore/source_run.h"
 #include "test.h"
 #include "util/platform.h"
 
 static char g_scratch[1024];
 
 static const char *const k_repo_files[] = {
-  "core/include/musiccore/musiccore.h",
+  "core/include/kithcore/kithcore.h",
   "desktop/windows/src/main.c",
   "desktop/linux/src/main.c",
   "strings/en.json",

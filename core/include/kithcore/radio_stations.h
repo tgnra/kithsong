@@ -10,12 +10,12 @@
  * often it's asked and however much is played, until results arrive or tracks come and go. A
  * station's seed, which names it, stays all day and may move to another track of its kind the next
  * day. Its start track is drawn afresh each time the stations are listed. */
-#ifndef MUSICCORE_RADIO_STATIONS_H
-#define MUSICCORE_RADIO_STATIONS_H
+#ifndef KITHCORE_RADIO_STATIONS_H
+#define KITHCORE_RADIO_STATIONS_H
 
 #include <stdint.h>
 
-#include "musiccore/library.h"
+#include "kithcore/library.h"
 
 #ifdef __cplusplus
 extern "C" {
