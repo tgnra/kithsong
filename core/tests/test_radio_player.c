@@ -320,6 +320,44 @@ static void test_plays_on(mc_player *player, const char *dir) {
   mc_library_close(lib);
 }
 
+/* Up next plays in the middle of a station, which then carries on with its own items though they
+ * now sit either side of up next's. */
+static void test_up_next(mc_player *player, const char *dir) {
+  char path[1200], other[1200], uid[MC_UID_STRLEN];
+  seed_path(path, sizeof path, dir, "t00");
+  seed_path(other, sizeof other, dir, "t01");
+  take_all_ended(player);
+  CHECK(mc_player_play_radio(player, dir, path, "t00") == MC_OK);
+  CHECK(wait_for_count(player, 1 + AHEAD, 10000));
+
+  mc_up_next_track track = {other, "queued", "Queued", NULL, WAV_MS};
+  mc_up_next_add add = {&track, 1, NULL, NULL, MC_PLAY_CONTEXT_MANUAL, NULL};
+  CHECK(mc_player_play_next(player, &add) == MC_OK);
+  CHECK(mc_player_next(player) == MC_OK);
+  mc_player_status st;
+  mc_player_status_get(player, &st);
+  CHECK(st.radio && st.up_next == 0);
+  CHECK(mc_player_queue_uid(player, st.index, uid) == MC_OK && !strcmp(uid, "queued"));
+
+  mc_sleep_ms(50); /* a command it replaced would leave no row */
+
+  /* Skipped, it's logged as what it is, not as the station's, which goes on from the seed. */
+  CHECK(mc_player_next(player) == MC_OK);
+  mc_player_status_get(player, &st);
+  CHECK(st.radio && st.index == 1);
+  CHECK(mc_player_queue_uid(player, st.index, uid) == MC_OK && strcmp(uid, "queued") != 0);
+  mc_play_event e;
+  int found = 0;
+  for (uint64_t end = mc_mono_ms() + 3000; !found && mc_mono_ms() < end; mc_sleep_ms(5))
+    while (!found && mc_player_take_ended(player, &e) == MC_OK) found = !strcmp(e.track_uid, "queued");
+  CHECK(found && e.context == MC_PLAY_CONTEXT_MANUAL && e.end == MC_PLAY_END_SKIPPED);
+
+  /* And it keeps topping up, past up next's item. */
+  CHECK(wait_for_count(player, 3 + AHEAD, 10000));
+  CHECK(mc_player_stop_radio(player) == MC_OK);
+  CHECK(mc_player_stop(player) == MC_OK);
+}
+
 /* With every file gone, it gives up rather than failing through the library for ever. */
 static void test_files_gone(mc_player *player, const char *dir) {
   char path[1200];
@@ -381,6 +419,7 @@ int main(int argc, char **argv) {
     return test_failures ? 1 : SKIP;
   }
   test_plays_on(player, dir);
+  test_up_next(player, dir);
   test_files_gone(player, dir);
   mc_player_free(player);
   return TEST_RESULT();
