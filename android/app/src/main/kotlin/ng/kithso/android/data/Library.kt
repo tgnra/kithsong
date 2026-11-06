@@ -243,7 +243,7 @@ interface LibrarySource {
     suspend fun trackList(ref: CollectionRef): TrackList?
 
     /**
-     * The track to start station [seedUid] from, or null if it can't be: it has no file on this
+     * The track to start station [seedUid] from this time, or null if it can't be: it has no file on this
      * phone, say, as a station that synced into Recents may not.
      */
     suspend fun stationSeed(seedUid: String): Track?

@@ -143,7 +143,7 @@ internal class BrowseTree(private val context: Context, private val source: () -
      * first track, or shuffled, one the player picks), a collection's track plays the
      * collection from it, and a query plays its best result, or with none (as for "play
      * Kithsong"), the first of Recents. An album listed under an album group, or a track of
-     * one, plays the whole group from there. A station plays from its seed, if it can here. A
+     * one, plays the whole group from there. A station plays if it can here, from a track of its kind. A
      * collection played is noted, for Recents.
      */
     suspend fun queue(request: MediaItem): MediaItemsWithStartPosition? {

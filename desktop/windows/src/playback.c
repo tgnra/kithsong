@@ -383,7 +383,7 @@ static void play_queue(const playback_track *tracks, int count, int start, mc_pl
   s.count = count;
   s.index = s.announced = -1; /* show the track afresh even if it's the same item number */
 
-  if (radio) mc_player_play_radio(s.player, mc_library_dir(s.lib), paths[0], uids[0]);
+  if (radio) mc_player_play_station(s.player, mc_library_dir(s.lib), paths[0], uids[0], context_uid);
   else mc_player_set_queue(s.player, paths, count, start, &(mc_play_origin){uids, context, context_uid});
   free(paths);
   free(uids);
@@ -395,14 +395,11 @@ void playback_play(const playback_track *tracks, int count, int start, mc_play_c
   play_queue(tracks, count, start, context, context_uid, FALSE);
 }
 
-void playback_play_radio(const char *seed_track_uid) {
-  if (!s.lib || !seed_track_uid) return;
-  mc_radio_options opts = {.seed_track = seed_track_uid};
+/* Plays station seed from the track start. FALSE if it can't, with nothing changed. */
+static BOOL start_station(const char *seed, const char *start) {
+  mc_radio_options opts = {.seed_track = start};
   mc_track_list *list = NULL;
-  if (mc_radio_seed_check(s.lib, &opts) != MC_OK || mc_library_get_track(s.lib, seed_track_uid, &list) != MC_OK) {
-    now_playing_notice(mc_wstr(MC_STR_STATION_CANT_PLAY));
-    return;
-  }
+  if (mc_radio_seed_check(s.lib, &opts) != MC_OK || mc_library_get_track(s.lib, start, &list) != MC_OK) return FALSE;
   const mc_track_info *t = &list->items[0];
   wchar_t *title = t->title ? wstr_dup_from_utf8(t->title) : NULL;
   wchar_t *artist = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
@@ -413,13 +410,12 @@ void playback_play_radio(const char *seed_track_uid) {
   wchar_t *wide = t->path ? wstr_dup_from_utf8(t->path) : NULL;
   wchar_t *path = wide ? wstr_long_path(wide) : NULL;
   free(wide);
-  if (path && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
-    play_queue(&track, 1, 0, MC_PLAY_CONTEXT_RADIO, t->uid, TRUE);
+  BOOL playable = path && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
+  if (playable) {
+    play_queue(&track, 1, 0, MC_PLAY_CONTEXT_RADIO, seed, TRUE);
     /* Now, as opening an album is: the play log's row only comes once the seed has ended. */
-    if (mc_library_record_opened(s.lib, MC_RECENT_STATION, t->uid) == MC_OK && s.recents_changed)
+    if (mc_library_record_opened(s.lib, MC_RECENT_STATION, seed) == MC_OK && s.recents_changed)
       s.recents_changed();
-  } else {
-    now_playing_notice(mc_wstr(MC_STR_STATION_CANT_PLAY));
   }
   free(path);
   free(title);
@@ -427,6 +423,17 @@ void playback_play_radio(const char *seed_track_uid) {
   free(album);
   free(cover_dir);
   mc_track_list_free(list);
+  return playable;
+}
+
+void playback_play_station(const char *seed_track_uid, const char *start_uid) {
+  if (!s.lib || !seed_track_uid) return;
+  if (start_uid && start_uid[0] && start_station(seed_track_uid, start_uid)) return;
+  if (!start_station(seed_track_uid, seed_track_uid)) now_playing_notice(mc_wstr(MC_STR_STATION_CANT_PLAY));
+}
+
+void playback_play_radio(const char *seed_track_uid) {
+  playback_play_station(seed_track_uid, NULL);
 }
 
 void playback_set_shuffle(BOOL on) {

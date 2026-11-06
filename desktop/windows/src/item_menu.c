@@ -199,10 +199,11 @@ item_menu_result item_menu_group(const item_menu_options *o, BOOL smart) {
 item_menu_result item_menu_station(const item_menu_options *o) {
   held h = hold(o);
   HMENU menu = CreatePopupMenu();
-  char seed[MC_UID_STRLEN];
+  char seed[MC_UID_STRLEN], start[MC_UID_STRLEN]; /* the tile can go while the menu is up */
+  snprintf(start, sizeof start, "%s", o->start ? o->start : "");
   radio_menu_append_station(menu, CMD_PLAY, o->lib, h.uid, seed);
   int cmd = show(menu, o);
-  if (cmd == CMD_PLAY) playback_play_radio(seed);
+  if (cmd == CMD_PLAY) playback_play_station(seed, start);
   free(h.name);
   return result(cmd, FALSE);
 }

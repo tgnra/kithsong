@@ -35,6 +35,7 @@ typedef struct item_menu_options {
   HWND wnd;            /* owns the menu; the dialogs go over its top-level window */
   mc_library *lib;     /* may be NULL */
   const char *uid;     /* the item, or for a station its seed track */
+  const char *start;   /* for a station, where it starts if not from its seed; may be NULL */
   const wchar_t *name; /* what it's called, for the dialogs; may be NULL */
   POINT pt;            /* where the menu opens, in screen coordinates */
   BOOL recent;         /* it's a recent: add Remove from Recents and Clear Recents */

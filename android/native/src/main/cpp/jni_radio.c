@@ -16,7 +16,7 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_RadioNatives_nativeStations(J
   if (!info) return NULL;
   jmethodID ctor = (*env)->GetMethodID(env, info, "<init>",
                                        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
-                                       "Ljava/lang/String;Ljava/lang/String;)V");
+                                       "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
   if (!ctor) return NULL;
 
   mc_radio_station_list *list = NULL;
@@ -29,12 +29,13 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_RadioNatives_nativeStations(J
   for (int i = 0; out && i < list->count; i++) {
     const mc_radio_station_info *s = &list->items[i];
     jstring seed = new_string(env, s->seed_track);
+    jstring start = new_string(env, s->start_track);
     jstring artist = new_string(env, s->artist_uid[0] ? s->artist_uid : NULL);
     jstring name = new_string(env, s->name);
     jstring sub = new_string(env, s->sub);
     jstring title = new_string(env, s->seed_title);
     jstring cover = new_string(env, s->cover_dir);
-    jobject item = (*env)->NewObject(env, info, ctor, seed, artist, name, sub, title, cover);
+    jobject item = (*env)->NewObject(env, info, ctor, seed, start, artist, name, sub, title, cover);
     if (!item) {
       out = NULL;
       break;
@@ -42,6 +43,7 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_RadioNatives_nativeStations(J
     (*env)->SetObjectArrayElement(env, out, i, item);
     (*env)->DeleteLocalRef(env, item);
     (*env)->DeleteLocalRef(env, seed);
+    (*env)->DeleteLocalRef(env, start);
     if (artist) (*env)->DeleteLocalRef(env, artist);
     (*env)->DeleteLocalRef(env, name);
     if (sub) (*env)->DeleteLocalRef(env, sub);

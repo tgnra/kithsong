@@ -131,7 +131,7 @@ fun App(
     // the main list, so they're there as its screen slides in rather than fading in after.
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    // A station starts from its seed, which a station from Recents, synced from another device,
+    // A station starts from a track of its kind or its seed, which one from Recents, synced from another device,
     // may not have here: that's asked at each tap, and said if it can't.
     val playStation: (CollectionRef) -> Unit = remember(source, playback) {
         { ref ->

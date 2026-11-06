@@ -67,6 +67,9 @@ void playback_play(const playback_track *tracks, int count, int start, mc_play_c
  * set with playback_set_library(). A seed that can't be used leaves what's playing as it is, and
  * says so (playback_on_radio_failed()). */
 void playback_play_radio(const char *seed_track_uid);
+/* As playback_play_radio(), for a station that starts from start_uid, or if that can't be played
+ * or is NULL or "", from its seed (mc_player_play_station()). */
+void playback_play_station(const char *seed_track_uid, const char *start_uid);
 /* Whether a track can start a station, for a menu to say so. It reads that one track. */
 gboolean playback_can_radio(const char *seed_track_uid);
 /* Shuffle on or off (see mc_player_set_shuffle()): it applies to what's queued, and to

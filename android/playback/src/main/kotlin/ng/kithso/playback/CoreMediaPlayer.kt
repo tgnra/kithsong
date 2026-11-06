@@ -41,7 +41,8 @@ import com.google.common.util.concurrent.ListenableFuture
  * volume for a while, then puts [volume] back.
  *
  * A queue of one item whose [playOrigin] is the radio is a station from that track, in the
- * library in [libraryDir], which the core then keeps adding to (mc_player_play_radio). Media3
+ * library in [libraryDir], which the core then keeps adding to (mc_player_play_station), and the
+ * origin says what the station is, which needn't be that track. Media3
  * wants a queue up front, so [items] follows the core's: at each event, whichever it is as the
  * queue event can lag by seconds behind the core's count, what's new goes to [stationItems] to be
  * looked up, and the items it gives back are added to the end. Until then the core can be ahead
@@ -350,8 +351,9 @@ class CoreMediaPlayer(
                 if (stationWaiting) {
                     stationWaiting = false
                     stationTries = STATION_TRIES
-                    val seed = items.first()
-                    core.playRadio(libraryDir.orEmpty(), seed.path.orEmpty(), seed.mediaId)
+                    val start = items.first()
+                    val seed = start.playOrigin.contextUid ?: start.mediaId
+                    core.playRadio(libraryDir.orEmpty(), start.path.orEmpty(), start.mediaId, seed)
                 } else if (startIndex == core.status.index) {
                     core.resume()
                 } else {

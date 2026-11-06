@@ -1094,18 +1094,20 @@ JNIEXPORT jintArray JNICALL Java_ng_kithso_core_CorePlayer_nativeOrder(JNIEnv *e
   return out;
 }
 
-/* mc_player_play_radio(). */
+/* mc_player_play_station(). */
 JNIEXPORT void JNICALL Java_ng_kithso_core_CorePlayer_nativePlayRadio(JNIEnv *env, jclass cls, jlong handle,
-                                                                     jstring library_dir, jstring seed_path,
-                                                                     jstring seed_uid) {
+                                                                     jstring library_dir, jstring start_path,
+                                                                     jstring start_uid, jstring seed_uid) {
   (void)cls;
   int ok = 1;
   const char *dir = jni_chars(env, library_dir, &ok);
-  const char *path = ok ? jni_chars(env, seed_path, &ok) : NULL;
+  const char *path = ok ? jni_chars(env, start_path, &ok) : NULL;
+  const char *start = ok ? jni_chars(env, start_uid, &ok) : NULL;
   const char *uid = ok ? jni_chars(env, seed_uid, &ok) : NULL;
-  mc_status st = ok ? mc_player_play_radio(player_of(handle), dir, path, uid) : MC_OK;
+  mc_status st = ok ? mc_player_play_station(player_of(handle), dir, path, start, uid) : MC_OK;
   jni_release(env, library_dir, dir);
-  jni_release(env, seed_path, path);
+  jni_release(env, start_path, path);
+  jni_release(env, start_uid, start);
   jni_release(env, seed_uid, uid);
   if (st != MC_OK) throw_status(env, st);
 }
