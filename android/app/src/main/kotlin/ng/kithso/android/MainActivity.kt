@@ -138,7 +138,7 @@ class MainActivity : ComponentActivity() {
         if (importer.start(ImportSource.Documents(uris))) {
             askForNotificationsOnce()
         } else {
-            importer.add(uris)
+            importer.add(ImportSource.Documents(uris))
             val added = resources.getQuantityString(R.plurals.import_added, uris.size, uris.size)
             Toast.makeText(this, added, Toast.LENGTH_SHORT).show()
         }

@@ -266,8 +266,8 @@ private val AlbumLabelsHeight = 58.dp
  * The main screen: one lazy list of a header and the library's sections, over a background
  * coloured from the art on screen. [bottomPadding] keeps the last items clear of the mini
  * player and navigation bar. [banner], if any, goes under the header: how an import is going.
- * The header's menu and the empty library's button open [importPickers], unless an import
- * is [importRunning]. [onSearch] is the header's menu's Search, and pulling the list down
+ * The header's menu and the empty library's button open [importPickers], and what's picked joins an
+ * import that's [importRunning]. [onSearch] is the header's menu's Search, and pulling the list down
  * from its top (see [pullToSearch]). With [onNewList], the Playlists and Album groups headings
  * have a + for a new playlist or (with true) album group.
  */
@@ -363,7 +363,7 @@ fun MainScreen(
                 when (item) {
                     MainItem.Header -> Header(onSearch, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
                     MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
-                    MainItem.Empty -> EmptyLibrary(importPickers, importRunning, inGroup, onSync, onChooseWhatToSync)
+                    MainItem.Empty -> EmptyLibrary(importPickers, inGroup, onSync, onChooseWhatToSync)
                     is MainItem.Heading -> SectionHeading(
                         item.section,
                         sections,
@@ -519,7 +519,6 @@ private fun HeaderMenu(
 ) {
     var open by remember { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
     val pick: (() -> Unit) -> () -> Unit = { action ->
         {
             open = false
@@ -548,7 +547,7 @@ private fun HeaderMenu(
                     leadingIcon = { Icon(Icons.ArrowBack, contentDescription = null) },
                     onClick = { importing = false },
                 )
-                ImportChoices(importRunning, importPickers, onBusy = { busy = true }, onDismiss = { open = false })
+                ImportChoices(importPickers, onDismiss = { open = false })
             } else {
                 val runningText = stringResource(R.string.import_running_title)
                 DropdownMenuItem(
@@ -564,14 +563,7 @@ private fun HeaderMenu(
                     } else {
                         null
                     },
-                    onClick = {
-                        if (importRunning) {
-                            open = false
-                            busy = true
-                        } else {
-                            importing = true
-                        }
-                    },
+                    onClick = { importing = true },
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.search)) },
@@ -604,7 +596,6 @@ private fun HeaderMenu(
             }
         }
     }
-    if (busy) ImportRunningDialog(onDismiss = { busy = false })
 }
 
 /**
@@ -726,7 +717,6 @@ private fun LibraryRow(
 @Composable
 private fun LazyItemScope.EmptyLibrary(
     importPickers: ImportPickers,
-    importRunning: Boolean,
     inGroup: Boolean,
     onSync: () -> Unit,
     onChooseWhatToSync: () -> Unit,
@@ -764,7 +754,7 @@ private fun LazyItemScope.EmptyLibrary(
                 Icon(Icons.Import, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
                 Text(stringResource(R.string.import_music))
             }
-            ImportMenu(menu, importRunning, importPickers, onDismiss = { menu = false })
+            ImportMenu(menu, importPickers, onDismiss = { menu = false })
         }
     }
 }

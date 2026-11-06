@@ -106,8 +106,8 @@ data class ImportProgress(
  * items are all settled is closed and its copies deleted, so the cache holds only the batch
  * being imported and the ones with items waiting for a decision. Documents are all copied up
  * front instead, as access to shared ones can end with the activity that received them.
- * Documents shared while an import runs are copied straight away too, and imported after
- * everything it was already doing ([add]).
+ * What's shared or picked while an import runs is imported after everything it was already
+ * doing ([add]): documents are copied straight away, and a folder a batch at a time as ever.
  *
  * While a folder is being imported the app holds a persistable grant for it, released when
  * the import is over (or, after the process died mid-import, on the next start).
@@ -162,8 +162,8 @@ class Importer(
     private var batchTotal = 0
     private val copyProblems = mutableListOf<String>()
     private var lastRefresh = 0L
-    /** Documents [add]ed, being copied or waiting for the batches before them, in order. */
-    private val added = ArrayDeque<Deferred<List<Staged>>>()
+    /** What was [add]ed, waiting for the batches before it, in order. */
+    private val added = ArrayDeque<Added>()
     /** The import's own batches; those [add]ed are numbered after them, in the order they run. */
     private var sourceBatches = 0
     private var addedRun = 0
@@ -171,6 +171,12 @@ class Importer(
 
     // A batch of documents [add]ed, copied into [dir]; [path] is what the core gets, or null.
     private class Staged(val batch: StagedFiles.Batch, val dir: File, val path: File?)
+
+    private sealed interface Added {
+        // Documents, being copied.
+        class Documents(val staged: Deferred<List<Staged>>) : Added
+        class Folder(val tree: Uri) : Added
+    }
 
     init {
         scope.launch(thread) {
@@ -202,42 +208,52 @@ class Importer(
             addedRun = 0
             addedCount = 0
             cleanUp()
-            if (what is ImportSource.Folder) {
-                // For as long as the import runs, so the folder stays readable whatever
-                // happens to the activity that picked it.
-                try {
-                    context.contentResolver.takePersistableUriPermission(what.tree, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    grant = what.tree
-                } catch (e: SecurityException) {
-                    Log.w(TAG, "No persistable grant for ${what.tree}", e)
-                }
-            }
+            if (what is ImportSource.Folder) holdGrant(what.tree)
             runner = scope.launch(Dispatchers.IO) { run(what) }
         }
         return true
     }
 
     /**
-     * Adds documents shared while an import runs to the end of it, or starts one with them if
-     * it's over by now. They're copied straight away, as their grant can end with the activity
-     * they came to. A core session takes its paths up front, so they get sessions of their
-     * own, as the import's batches do, started once the batches before have nothing more to
-     * do on their own.
+     * Adds [what], shared or picked while an import runs, to the end of it, or starts one with
+     * it if it's over by now. Documents are copied straight away, as their grant can end with
+     * the activity they came to. A core session takes its paths up front, so these get sessions
+     * of their own, as the import's batches do, started once the batches before have nothing
+     * more to do on their own.
      */
-    fun add(uris: List<Uri>) {
-        if (uris.isEmpty()) return
+    fun add(what: ImportSource) {
+        if (what is ImportSource.Documents && what.uris.isEmpty()) return
         scope.launch(thread) {
             if (over) {
-                start(ImportSource.Documents(uris))
+                start(what)
                 return@launch
             }
-            val n = addedCount++
-            added += scope.async(Dispatchers.IO) { copyAdded(uris, File(root, "a$n")) }
+            added += when (what) {
+                is ImportSource.Documents -> {
+                    val n = addedCount++
+                    Added.Documents(scope.async(Dispatchers.IO) { copyAdded(what.uris, File(root, "a$n")) })
+                }
+                is ImportSource.Folder -> {
+                    holdGrant(what.tree)
+                    Added.Folder(what.tree)
+                }
+            }
             // Everything so far is waiting for the user: a runner for these.
             if (runnerDone) {
                 runnerDone = false
                 runner = scope.launch(Dispatchers.IO) { runAdded() }
             }
+        }
+    }
+
+    // For as long as the import runs, so the folder stays readable whatever happens to the
+    // activity that picked it.
+    private fun holdGrant(tree: Uri) {
+        try {
+            context.contentResolver.takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            grant = tree
+        } catch (e: SecurityException) {
+            Log.w(TAG, "No persistable grant for $tree", e)
         }
     }
 
@@ -299,7 +315,7 @@ class Importer(
         scope.launch(thread) {
             if (over) return@launch
             runner?.cancel()
-            added.forEach { it.cancel() }
+            added.forEach { (it as? Added.Documents)?.staged?.cancel() }
             added.clear()
             finish(ImportProgress.Phase.Cancelled)
         }
@@ -340,18 +356,7 @@ class Importer(
                     runBatch(i, plan[i], path)
                 }
             } else {
-                for ((i, batch) in plan.withIndex()) {
-                    var done = 0
-                    val total = batch.files.size
-                    withContext(thread) {
-                        batchIndex = i
-                        copying = 0 to total
-                        publish()
-                    }
-                    val path = files.copy(batch, File(root, "b$i")) { done++; onCopied(done, total) }
-                    withContext(thread) { copyProblems += files.takeProblems() }
-                    if (path != null) runBatch(i, batch, path)
-                }
+                for ((i, batch) in plan.withIndex()) copyAndRun(files, i, batch)
             }
             runAddedBatches()
         } catch (e: CancellationException) {
@@ -368,7 +373,21 @@ class Importer(
         }
     }
 
-    // A runner for documents [add]ed once the last one was done, or as it stopped.
+    // One batch of a folder: copied, then imported.
+    private suspend fun copyAndRun(files: StagedFiles, index: Int, batch: StagedFiles.Batch) {
+        var done = 0
+        val total = batch.files.size
+        withContext(thread) {
+            batchIndex = index
+            copying = 0 to total
+            publish()
+        }
+        val path = files.copy(batch, File(root, "b$index")) { done++; onCopied(done, total) }
+        withContext(thread) { copyProblems += files.takeProblems() }
+        if (path != null) runBatch(index, batch, path)
+    }
+
+    // A runner for what was [add]ed once the last one was done, or as it stopped.
     private suspend fun runAdded() {
         try {
             runAddedBatches()
@@ -376,6 +395,7 @@ class Importer(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Import stopped", e)
+            withContext(thread) { copyProblems += context.getString(R.string.import_read_failed) }
         } finally {
             withContext(NonCancellable + thread) { runnerFinished() }
         }
@@ -383,12 +403,28 @@ class Importer(
 
     private suspend fun runAddedBatches() {
         while (true) {
-            val next = withContext(thread) { added.removeFirstOrNull() } ?: return
-            for (staged in next.await()) {
-                if (staged.path == null) continue
-                val index = withContext(thread) { sourceBatches + addedRun++ }
-                runBatch(index, staged.batch, staged.path, staged.dir)
+            when (val next = withContext(thread) { added.removeFirstOrNull() } ?: return) {
+                is Added.Documents -> for (staged in next.staged.await()) {
+                    if (staged.path == null) continue
+                    val index = withContext(thread) { sourceBatches + addedRun++ }
+                    runBatch(index, staged.batch, staged.path, staged.dir)
+                }
+                is Added.Folder -> runAddedFolder(next.tree)
             }
+        }
+    }
+
+    private suspend fun runAddedFolder(tree: Uri) {
+        val files = StagedFiles(context, root)
+        try {
+            val plan = files.planFolder(tree)
+            withContext(thread) {
+                batchTotal += plan.size
+                publish()
+            }
+            for (batch in plan) copyAndRun(files, withContext(thread) { sourceBatches + addedRun++ }, batch)
+        } finally {
+            withContext(NonCancellable + thread) { copyProblems += files.takeProblems() }
         }
     }
 
@@ -419,7 +455,7 @@ class Importer(
         }
     }
 
-    // As a runner stops, on [thread]: documents added meanwhile get one of their own,
+    // As a runner stops, on [thread]: what was added meanwhile gets one of its own,
     // otherwise the import finishes once its items are settled.
     private fun runnerFinished() {
         copying = null

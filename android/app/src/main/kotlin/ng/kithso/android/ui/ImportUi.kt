@@ -71,15 +71,15 @@ class ImportPickers(val pickFolder: () -> Unit, val pickFiles: () -> Unit)
 /**
  * The Storage Access Framework's pickers, which need no storage permission: a folder
  * (OpenDocumentTree) or audio files and zips (OpenMultipleDocuments). What's picked starts an
- * import in [importer]; [onStarted] is called once one has.
+ * import in [importer], and [onStarted] is called; if one's running it joins the end of that.
  */
 @Composable
 fun rememberImportPickers(importer: Importer, onStarted: () -> Unit): ImportPickers {
     val folder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
-        if (tree != null && importer.start(ImportSource.Folder(tree))) onStarted()
+        if (tree != null) begin(importer, ImportSource.Folder(tree), onStarted)
     }
     val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty() && importer.start(ImportSource.Documents(uris))) onStarted()
+        if (uris.isNotEmpty()) begin(importer, ImportSource.Documents(uris), onStarted)
     }
     return remember(folder, files) {
         ImportPickers(
@@ -87,6 +87,10 @@ fun rememberImportPickers(importer: Importer, onStarted: () -> Unit): ImportPick
             pickFiles = { launch { files.launch(PICKED_TYPES) } },
         )
     }
+}
+
+private fun begin(importer: Importer, what: ImportSource, onStarted: () -> Unit) {
+    if (importer.start(what)) onStarted() else importer.add(what)
 }
 
 // Audio files, and zips such as Bandcamp's downloads.
@@ -102,46 +106,33 @@ private inline fun launch(open: () -> Unit) {
 }
 
 /**
- * A menu's ways to import: a folder, or files and zips. While an import runs, [onBusy] is called
- * instead, as the core takes one import at a time. Either way [onDismiss] closes the menu.
+ * A menu's ways to import: a folder, or files and zips, which join an import that's running.
+ * [onDismiss] closes the menu.
  */
 @Composable
-fun ImportChoices(running: Boolean, pickers: ImportPickers, onBusy: () -> Unit, onDismiss: () -> Unit) {
+fun ImportChoices(pickers: ImportPickers, onDismiss: () -> Unit) {
     DropdownMenuItem(
         text = { Text(stringResource(R.string.import_folder)) },
         onClick = {
             onDismiss()
-            if (running) onBusy() else pickers.pickFolder()
+            pickers.pickFolder()
         },
     )
     DropdownMenuItem(
         text = { Text(stringResource(R.string.import_files)) },
         onClick = {
             onDismiss()
-            if (running) onBusy() else pickers.pickFiles()
+            pickers.pickFiles()
         },
-    )
-}
-
-/** Says an import is under way, so another can't start yet. */
-@Composable
-fun ImportRunningDialog(onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.import_running_title)) },
-        text = { Text(stringResource(R.string.import_running_text)) },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) } },
     )
 }
 
 /** The empty library's Import button's menu: [ImportChoices] alone. */
 @Composable
-fun ImportMenu(expanded: Boolean, running: Boolean, pickers: ImportPickers, onDismiss: () -> Unit) {
-    var busy by remember { mutableStateOf(false) }
+fun ImportMenu(expanded: Boolean, pickers: ImportPickers, onDismiss: () -> Unit) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        ImportChoices(running, pickers, onBusy = { busy = true }, onDismiss)
+        ImportChoices(pickers, onDismiss)
     }
-    if (busy) ImportRunningDialog(onDismiss = { busy = false })
 }
 
 /**
