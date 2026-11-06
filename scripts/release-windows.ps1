@@ -55,6 +55,8 @@ if ($env:KITHSONG_BUILD_NUMBER) { $configure += "-DKITHSONG_BUILD_NUMBER=$env:KI
 Push-Location $root
 try {
     Invoke-Checked cmake @configure
+    # Turning the tests off leaves an earlier run's test list behind.
+    if (-not $runnable) { Remove-Item "$buildDir\CTestTestfile.cmake" -ErrorAction SilentlyContinue }
     Invoke-Checked cmake --build --preset $preset
     # test_analysis watches a run grow by polling, which a busy CI runner can miss.
     $ctest = @('--test-dir', $buildDir, '--output-on-failure')
