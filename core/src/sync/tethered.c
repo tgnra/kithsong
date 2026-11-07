@@ -1052,11 +1052,16 @@ static mc_status import_playlists(job *j) {
     rc = j->dt->playlists_read(j->dev, token, on_list, &ls);
     mc_status st = ls.oom ? MC_ERR_NOMEM : from_kith(rc);
     for (int i = 0; st == MC_OK && i < ls.count; i++) {
+      /* "On-The-Go 1", or "On-The-Go 1 (Walkman)" if the library has one by that name
+       * (another iPod's), counting on past any taken both ways. */
       char name[512];
-      mc_format(name, sizeof name, mc_str(MC_STR_TETHERED_OTG_PLAYLIST), MC_D(i + 1));
-      if (playlist_named(j->lib, name))
-        mc_format(name, sizeof name, mc_str(MC_STR_TETHERED_OTG_PLAYLIST_DEVICE), MC_D(i + 1),
+      for (int n = i + 1;; n++) {
+        mc_format(name, sizeof name, mc_str(MC_STR_TETHERED_OTG_PLAYLIST), MC_D(n));
+        if (!playlist_named(j->lib, name)) break;
+        mc_format(name, sizeof name, mc_str(MC_STR_TETHERED_OTG_PLAYLIST_DEVICE), MC_D(n),
                   MC_S(j->device_name));
+        if (!playlist_named(j->lib, name) || n > i + 1000) break;
+      }
       char puid[MC_UID_STRLEN];
       if ((st = mc_playlist_create(j->lib, name, puid)) != MC_OK) break;
       for (int k = 0; st == MC_OK && k < ls.items[i].count; k++) {

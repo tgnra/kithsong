@@ -124,11 +124,13 @@ foreach(_variant IN ITEMS folder badabi null)
 endforeach()
 target_compile_definitions(kith_test_badabi PRIVATE TEST_PLUGIN_BAD_ABI)
 target_compile_definitions(kith_test_null PRIVATE TEST_PLUGIN_NULL_INIT)
-foreach(_t IN ITEMS test_plugin_load test_plugin_encoder)
+foreach(_t IN ITEMS test_plugin_load test_plugin_encoder test_plugin_tethered test_plugin_plays)
   kithsong_test(${_t})
   add_dependencies(${_t} kith_test_folder kith_test_badabi kith_test_null)
 endforeach()
 target_link_libraries(test_plugin_encoder PRIVATE mbedcrypto)  # hashes what it encoded
+target_link_libraries(test_plugin_tethered PRIVATE mbedcrypto)  # hashes what it wrote
+target_link_libraries(test_plugin_plays PRIVATE mbedcrypto)
 
 set_tests_properties(test_player test_play_log test_radio_player test_up_next PROPERTIES SKIP_RETURN_CODE 77)  # no audio device
 kithsong_test(test_discovery)
