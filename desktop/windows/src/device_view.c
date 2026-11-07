@@ -2015,7 +2015,7 @@ void device_view_on_sync_event(const sync_event *ev) {
         g_dv.nbusy--;
       }
       wchar_t text[256] = L"";
-      if (ev->cancelled) {
+      if (ev->cancelled || ev->peer_cancelled) {
         swprintf(text, 256, L"%ls", mc_wstr(MC_STR_SYNC_CANCELLED));
       } else if (ev->status != MC_OK) {
         if (g_dv.is_self && ev->name[0])

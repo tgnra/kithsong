@@ -1379,8 +1379,8 @@ static void on_sync_done(void *user, const mc_sync_result *r) {
                          (jint)r->files_missing, (jint)r->files_corrupt, (jint)r->files_deleted,
                          (jint)r->files_unknown, (jint)r->files_sent, (jlong)r->bytes_received,
                          (jlong)r->bytes_sent, (jint)r->covers_received,
-                         (jboolean)(r->cancelled != 0), (jboolean)(r->user != 0),
-                         (jboolean)(r->connected != 0));
+                         (jboolean)(r->cancelled != 0), (jboolean)(r->peer_cancelled != 0),
+                         (jboolean)(r->user != 0), (jboolean)(r->connected != 0));
   if (uid) (*env)->DeleteLocalRef(env, uid);
   detach(env, attached);
 }
@@ -1411,7 +1411,7 @@ JNIEXPORT jlong JNICALL Java_ng_kithso_core_CoreSync_nativeNew(JNIEnv *env, jcla
     {"onPairCode", "(Ljava/lang/String;Ljava/lang/String;I)V"},
     {"onPairResult", "(Ljava/lang/String;Ljava/lang/String;ZIIIZLjava/lang/String;IZZLjava/lang/String;IZ)V"},
     {"onProgress", "(Ljava/lang/String;IJJIIJJIILjava/lang/String;ZZ)V"},
-    {"onSyncDone", "(Ljava/lang/String;IZZJJIIIIIIJJIZZZ)V"},
+    {"onSyncDone", "(Ljava/lang/String;IZZJJIIIIIIJJIZZZZ)V"},
     {"onPairMerge", "(Ljava/lang/String;Ljava/lang/String;ZZZJJJJZLjava/lang/String;I[Ljava/lang/String;)V"},
     {"onMergeProgress", "(III)V"},
     {"onMergeDone", "(ILjava/lang/String;[ILjava/lang/String;)V"},

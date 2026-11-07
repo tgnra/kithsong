@@ -505,7 +505,7 @@ private fun filesText(progress: SyncProgress): String =
 // How the last session with a member went.
 @Composable
 private fun resultText(result: CoreSync.Event.SyncDone): String = when {
-    result.cancelled -> stringResource(R.string.sync_cancelled)
+    result.cancelled || result.peerCancelled -> stringResource(R.string.sync_cancelled)
     result.status != 0 -> stringResource(R.string.sync_failed, statusText(LocalContext.current, result.status))
     !result.librarySynced -> stringResource(R.string.sync_device_list_only)
     else -> listOfNotNull(

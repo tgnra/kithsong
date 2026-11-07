@@ -406,7 +406,9 @@ class Syncer(
 
     /**
      * The Cancel button: ends the session with [uid] (every member's for null), deleting a file
-     * it had half fetched. None starts with it for an hour, unless [syncNow] says so.
+     * it had half fetched. None starts with it for an hour, unless [syncNow] says so. The member
+     * is told, and starts none with us by itself for 10 minutes; its sessions end as cancelled
+     * (peerCancelled), not failed.
      */
     fun cancelSync(uid: String? = null) = call { it.cancel(uid) }
 

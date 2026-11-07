@@ -14,6 +14,8 @@
 
 /* The type byte and payload fill one Noise plaintext. */
 #define MC_CHANNEL_MAX_PAYLOAD (MC_NOISE_MAX_PLAINTEXT - 1)
+/* The most a notice armed with mc_channel_arm_cancel() may carry. */
+#define MC_CHANNEL_NOTICE_MAX 64
 /* Default bound on each send or receive: an inactivity timeout, so a peer that goes silent
  * (a phone whose network was cut off drops packets rather than resetting) fails the call
  * with MC_ERR_NET instead of hanging it. A frame that keeps moving never times out. */
@@ -48,6 +50,18 @@ void mc_channel_close(mc_channel *ch);
  * The only channel function that may be called from another thread, while the channel is
  * still open. */
 void mc_channel_abort(mc_channel *ch);
+/* As abort, but first sends the message armed with mc_channel_arm_cancel(), if any, so the
+ * peer learns why: at once if no send is under way, else as soon as that send's frame is out.
+ * Never waits for the network: a notice that doesn't fit in the socket's buffer is dropped.
+ * 0 if the shutdown was left to a send under way, which may be stuck on a peer that isn't
+ * reading: mc_channel_abort() it a little later if it's still open. Any thread, like abort. */
+int mc_channel_cancel(mc_channel *ch);
+/* The channel's own thread, after the handshake: the message mc_channel_cancel() sends (len
+ * <= MC_CHANNEL_NOTICE_MAX). Only the first arming counts. */
+void mc_channel_arm_cancel(mc_channel *ch, uint8_t type, const void *payload, size_t len);
+/* 1 once the peer's CANCEL came: a receive returned MC_ERR_CANCELLED for it, or a failed
+ * send found it waiting unread. */
+int mc_channel_peer_cancelled(const mc_channel *ch);
 
 /* 1 if a message has started to arrive, or the other side has gone: a recv won't wait. */
 int mc_channel_readable(mc_channel *ch);
@@ -88,7 +102,10 @@ const unsigned char *mc_channel_peer_key(const mc_channel *ch);
 
 /* Encrypted messages, after a handshake. len <= MC_CHANNEL_MAX_PAYLOAD. A received payload
  * points into the channel and stays valid until the next receive. MC_ERR_FORMAT if a
- * message fails to decrypt; the channel is then unusable. */
+ * message fails to decrypt; the channel is then unusable. The peer's CANCEL (sent by its
+ * mc_channel_cancel()) is never returned: a receive that gets it fails with
+ * MC_ERR_CANCELLED, as does a send that fails on a closed connection and finds it waiting
+ * unread (which reads, and drops, what came before it). */
 mc_status mc_channel_send(mc_channel *ch, uint8_t type, const void *payload, size_t len);
 mc_status mc_channel_recv(mc_channel *ch, uint8_t *type, const unsigned char **payload,
                           size_t *len);

@@ -15,6 +15,8 @@
 #define MC_MSG_HELLO 0x01
 #define MC_MSG_BYE 0x02
 #define MC_MSG_ERROR 0x03
+#define MC_MSG_CANCEL 0x04 /* the sender's user cancelled the session; only to a peer whose
+                            * HELLO has "cancel": true */
 
 /* Changelog exchange */
 #define MC_MSG_VV 0x10

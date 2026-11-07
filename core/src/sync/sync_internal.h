@@ -31,7 +31,8 @@ typedef enum mc_sync_trigger {
   MC_TRIGGER_PERIODIC, /* every few minutes, and at start */
   MC_TRIGGER_ONLINE,   /* discovery just saw it */
   MC_TRIGGER_CHANGED,  /* something changed here that it should hear about */
-  MC_TRIGGER_NOW,      /* mc_sync_now(): the only one MC_SYNC_AUTO_INTERVAL_MS doesn't hold back */
+  MC_TRIGGER_NOW,      /* mc_sync_now(): the only one MC_SYNC_AUTO_INTERVAL_MS and peer_held_ms
+                        * don't hold back */
   MC_TRIGGER_AUTO      /* mc_sync_background() */
 } mc_sync_trigger;
 
@@ -70,8 +71,15 @@ typedef struct mc_sync_peer {
   int abort;      /* a session the lower uid started wants this one gone */
   int cancel;     /* mc_sync_cancel() cut it short */
   mc_channel *busy_ch;
+  /* mono: when mc_channel_cancel() left busy_ch's shutdown to a send under way, which the
+   * scheduler aborts if it's still open a moment later; 0 = none. */
+  uint64_t cancel_ms;
   /* mono: mc_sync_cancel() holds sessions with it back until this; 0 = none. */
   uint64_t held_ms;
+  /* mono: its user cancelled a session with us (its CANCEL), so no automatic session with it
+   * starts here before this (MC_SYNC_PEER_CANCEL_HOLD_MS); mc_sync_now() and a session that
+   * succeeds clear it, and its own sessions are served as ever. 0 = none. */
+  uint64_t peer_held_ms;
   /* The file phase: a signature of the transcodes last asked for on its behalf while it
    * was offline (PREPARE_REQ), so they're asked for once per change. */
   uint64_t prepared_sig;
@@ -175,6 +183,7 @@ struct mc_sync {
   int in_merge_wait, in_merge_answer;
   int no_merge; /* test hook: offer no merging, as a watch */
   int no_files_plan; /* test hook: no FILES_PLAN either way, as an older version */
+  int no_cancel;     /* test hook: no CANCEL either way, as an older version */
   /* The merge that runs after a session syncs the library (sync.c), with what the pairing
    * learnt: the kept device's originals (sorted; owned) and the account signed out. */
   int merge_running;
@@ -208,6 +217,7 @@ struct mc_sync {
   int no_auto;     /* mc_sync_set_automatic(0): only mc_sync_now() starts sessions; under lock */
   int listen_port; /* -1: the default with fallback */
   uint32_t auto_interval_ms; /* MC_SYNC_AUTO_INTERVAL_MS, but in tests; under lock */
+  uint32_t peer_cancel_hold_ms; /* MC_SYNC_PEER_CANCEL_HOLD_MS, but in tests; under lock */
   char hint_override[MC_SYNC_HINTS_MAX];
   uint16_t reach_port_override; /* under lock */
   uint32_t send_delay_ms; /* under lock */
@@ -398,6 +408,12 @@ void mc_sync_set_test_no_merge(mc_sync *sync, int no_merge);
  * "files_plan" in HELLO, and one sent all the same ends the session). Any time; takes
  * effect at the next session. */
 void mc_sync_set_test_no_files_plan(mc_sync *sync, int no_files_plan);
+/* no_cancel = 1: this device syncs as a version without CANCEL would (no "cancel" in HELLO,
+ * and its mc_sync_cancel() sends none). Any time; takes effect at the next session. */
+void mc_sync_set_test_no_cancel(mc_sync *sync, int no_cancel);
+/* Shortens (or lengthens) MC_SYNC_PEER_CANCEL_HOLD_MS for CANCELs received from now on.
+ * Any time. */
+void mc_sync_set_test_peer_cancel_hold(mc_sync *sync, uint32_t ms);
 /* As if discovery had reported a peer online (online = 1) or gone (0). */
 void mc_sync_test_peer(mc_sync *sync, const char *device_uid, const char *name, const char *kind,
                        const char *group_hash, const char *address, uint16_t port, int online);

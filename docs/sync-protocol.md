@@ -493,9 +493,10 @@ Message types:
 
 | Type | Name          | Payload |
 |------|---------------|---------|
-| 0x01 | `HELLO`       | `{"v", "dev", "library_uid", "node_uid", "user": true, "covers": true, "files_plan": true, "archive": bool, "caps": {...}}` (`user` only when pressed for; `covers`: it serves `COVER_REQ`; `files_plan`: it takes `FILES_PLAN`; `archive`: the sender counts itself an archive, see step 6) |
+| 0x01 | `HELLO`       | `{"v", "dev", "library_uid", "node_uid", "user": true, "covers": true, "files_plan": true, "cancel": true, "archive": bool, "caps": {...}}` (`user` only when pressed for; `covers`: it serves `COVER_REQ`; `files_plan`: it takes `FILES_PLAN`; `cancel`: it takes `CANCEL`; `archive`: the sender counts itself an archive, see step 6) |
 | 0x02 | `BYE`         | `{}` |
 | 0x03 | `ERROR`       | `{"reason", "msg"}` |
+| 0x04 | `CANCEL`      | `{}`: the sender's user cancelled the session, and the sender closes; only to a peer whose `HELLO` has `"cancel": true` (see [Scheduling](#scheduling)) |
 | 0x10 | `VV`          | `{"db": "group" \| "library", "vv": {"<origin>": <hlc>}, "resend": true}` (`resend` only in the re-send round) |
 | 0x11 | `ROWS`        | binary, below |
 | 0x12 | `ROWS_END`    | `{"db", "digest"}` |
@@ -728,10 +729,21 @@ way, without logging anything.
   automatic or not, and one it starts is refused with
   `ERROR {"reason": "busy"}`, so it keeps its usual schedule rather than backing off. A
   press of Sync (`mc_sync_now()`, `mc_sync_confirm_now()`) lifts the hold; background work
-  doesn't. Nothing goes over the wire: the member sees a broken connection, then busy. A
-  file being fetched when the connection goes is abandoned and its `.part` deleted, as for
-  any failed transfer (see [Files](#files)); files that arrived whole stay. The hold is kept
-  in memory only, so a restart of the app ends it.
+  doesn't. Once both `HELLO`s are in, and if the member's has `"cancel": true` (older
+  versions end the session on an unknown message, and send no such flag), the device first
+  sends `CANCEL`, best effort: at once, or after the frame being sent, and only if it fits in
+  the socket's buffer without waiting; a send stuck on a peer that isn't reading is cut off
+  after a second. The member reports the session as cancelled by its peer
+  (`mc_sync_result.peer_cancelled`), not as a failure, and starts no automatic session with
+  the device for 10 minutes (`MC_SYNC_PEER_CANCEL_HOLD_MS`; shown in
+  `mc_sync_device.auto_after_ms`): online, periodic, change and background triggers wait. A
+  press of Sync there still starts one and lifts that hold, as does any session between the
+  two that succeeds, and sessions the device starts are served. A member that finds its send
+  failing on the closed connection reads what is left to read for a `CANCEL`. Otherwise (an
+  older member, or a cancel before the `HELLO`s) the member sees a broken connection, then
+  busy. A file being fetched when the connection goes is abandoned and its `.part` deleted,
+  as for any failed transfer (see [Files](#files)); files that arrived whole stay. Both
+  holds are kept in memory only, so a restart of the app ends them.
 - **Automatic sync off.** `mc_sync_set_automatic(0)` stops a device starting sessions and
   reach checks by itself; sessions under way go on, the ones members start are served, and a
   press of Sync still starts one. Triggers that fall due meanwhile wait and go ahead once it's

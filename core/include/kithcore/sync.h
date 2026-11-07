@@ -290,6 +290,8 @@ typedef struct mc_sync_result {
                           * confirmed (see mc_sync_confirm_now()) */
   int covers_received;   /* album covers fetched for folders here that had none */
   int cancelled;         /* mc_sync_cancel() here cut the session short; status is not MC_OK */
+  int peer_cancelled;    /* the other device's user cancelled it (its mc_sync_cancel()): not a
+                          * failure to show; status is not MC_OK */
   int user;              /* as in mc_sync_progress */
   int connected;         /* as in mc_sync_progress: 0 if it failed before the handshake ended */
 } mc_sync_result;
@@ -425,8 +427,9 @@ mc_status mc_sync_remove_device(mc_sync *sync, const char *device_uid);
  * Sync button calls mc_sync_confirm_now(); background work calls mc_sync_background(). */
 mc_status mc_sync_now(mc_sync *sync, const char *device_uid);
 /* As mc_sync_now(), for background work (a periodic job, say): an automatic sync, so a member
- * this device had a complete session with less than MC_SYNC_AUTO_INTERVAL_MS ago gets none
- * until that runs out (see mc_sync_device.auto_after_ms), and only if sync still runs then. */
+ * this device had a complete session with less than MC_SYNC_AUTO_INTERVAL_MS ago, or whose
+ * user cancelled one lately (see mc_sync_cancel()), gets none until that runs out (see
+ * mc_sync_device.auto_after_ms), and only if sync still runs then. */
 mc_status mc_sync_background(mc_sync *sync, const char *device_uid);
 /* The Cancel button: ends the session with device_uid (with every member for NULL) if one is
  * running, whichever side started it, and holds sessions with it back for
@@ -436,8 +439,15 @@ mc_status mc_sync_background(mc_sync *sync, const char *device_uid);
  * doesn't. A Sync press not yet acted on is dropped. A file being fetched is abandoned and
  * its partial copy deleted; files that arrived whole are kept. The session's on_sync_done
  * reports it with cancelled set. Returns at once; the hold lasts across mc_sync_stop() and
- * mc_sync_start(), but not mc_sync_free(). */
+ * mc_sync_start(), but not mc_sync_free().
+ * The other device is told, best effort, once the session is past its HELLOs and if it runs
+ * a version that understands (else it just sees the session fail): its on_sync_done reports
+ * the session with peer_cancelled set, and it starts no automatic session with this one
+ * (background included) for MC_SYNC_PEER_CANCEL_HOLD_MS. Its mc_sync_now() and
+ * mc_sync_confirm_now() still do, and lift that hold, as does any session with it that
+ * succeeds; it still serves the sessions this device starts. */
 #define MC_SYNC_CANCEL_HOLD_MS MC_SYNC_AUTO_INTERVAL_MS
+#define MC_SYNC_PEER_CANCEL_HOLD_MS (10 * 60 * 1000)
 mc_status mc_sync_cancel(mc_sync *sync, const char *device_uid);
 /* on = 0 stops this device starting sessions or reach checks by itself, for an app that may
  * only start them while it's on screen but lets what's under way finish when it leaves:
@@ -550,7 +560,9 @@ typedef struct mc_sync_device {
   uint16_t port;
   int64_t last_sync_ms;  /* last session with it (Unix ms), 0 if never */
   int64_t auto_after_ms; /* Unix ms before which this device starts no automatic session
-                          * with it (see MC_SYNC_AUTO_INTERVAL_MS); 0 if it may now */
+                          * with it (see MC_SYNC_AUTO_INTERVAL_MS, and
+                          * MC_SYNC_PEER_CANCEL_HOLD_MS after it cancelled one); 0 if it may
+                          * now */
   /* Its own report of its files (sync_status); has_status = 0 if it hasn't written one. */
   int has_status;
   int64_t verified_ms, expected, ok, missing, corrupt, bytes;

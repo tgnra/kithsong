@@ -22,7 +22,8 @@ data class SyncDevice(
     val lastSyncMs: Long,
     /**
      * Unix ms before which this device starts no automatic session with it (an hour after the
-     * last complete one, MC_SYNC_AUTO_INTERVAL_MS); 0 if it may now. See [CoreSync.syncBackground].
+     * last complete one, MC_SYNC_AUTO_INTERVAL_MS, or 10 minutes after its user cancelled one,
+     * MC_SYNC_PEER_CANCEL_HOLD_MS); 0 if it may now. See [CoreSync.syncBackground].
      */
     val autoSyncAfterMs: Long,
     /**
@@ -431,9 +432,10 @@ class CoreSync(
          * deleted (no longer wanted, or failed the check after the session), and unknown to
          * the library (deleted, except on an archive). [filesSent] were served to the peer.
          * [coversReceived]: album covers fetched for folders here that had none. [cancelled]:
-         * [CoreSync.cancel] here cut it short ([status] isn't 0 then). [user] and [connected]
-         * as in [Progress]: a failure with neither is an automatic attempt that got no proper
-         * answer, which needs no telling.
+         * [CoreSync.cancel] here cut it short ([status] isn't 0 then). [peerCancelled]: the other
+         * device's user cancelled it there, which is no failure to show ([status] isn't 0
+         * either). [user] and [connected] as in [Progress]: a failure with neither is an
+         * automatic attempt that got no proper answer, which needs no telling.
          */
         data class SyncDone(
             val uid: String,
@@ -452,6 +454,7 @@ class CoreSync(
             val bytesSent: Long,
             val coversReceived: Int = 0,
             val cancelled: Boolean = false,
+            val peerCancelled: Boolean = false,
             val user: Boolean = false,
             val connected: Boolean = true,
         ) : Event
@@ -529,8 +532,9 @@ class CoreSync(
     fun confirmSyncNow(uid: String? = null) = nativeWithDevice(handle, CALL_CONFIRM_SYNC_NOW, uid)
 
     /**
-     * As [syncNow], for background work: a member synced completely within the last hour gets
-     * no session until [SyncDevice.autoSyncAfterMs], and then only if sync still runs.
+     * As [syncNow], for background work: a member synced completely within the last hour, or
+     * whose user cancelled a session lately, gets no session until
+     * [SyncDevice.autoSyncAfterMs], and then only if sync still runs.
      */
     fun syncBackground(uid: String? = null) = nativeWithDevice(handle, CALL_SYNC_BACKGROUND, uid)
 
@@ -538,7 +542,10 @@ class CoreSync(
      * The Cancel button: ends the session with [uid] (every member's for null), whichever side
      * started it, deleting a file it had half fetched, and holds sessions with it back for an
      * hour (MC_SYNC_CANCEL_HOLD_MS) or until [syncNow] or [confirmSyncNow]. Its [Event.SyncDone]
-     * has [Event.SyncDone.cancelled] set.
+     * has [Event.SyncDone.cancelled] set. The other device, if its version knows how, is told:
+     * its [Event.SyncDone] has [Event.SyncDone.peerCancelled] set, and it starts no automatic
+     * session with this one for 10 minutes (MC_SYNC_PEER_CANCEL_HOLD_MS) unless its user
+     * presses Sync; it still serves the sessions this one starts.
      */
     fun cancel(uid: String? = null) = nativeWithDevice(handle, CALL_CANCEL, uid)
 
@@ -781,13 +788,14 @@ class CoreSync(
         bytesSent: Long,
         coversReceived: Int,
         cancelled: Boolean,
+        peerCancelled: Boolean,
         user: Boolean,
         connected: Boolean,
     ) = listener(
         Event.SyncDone(
             uid, status, librarySynced, converged, rowsSent, rowsReceived, filesReceived, filesMissing,
             filesCorrupt, filesDeleted, filesUnknown, filesSent, bytesReceived, bytesSent, coversReceived,
-            cancelled, user, connected,
+            cancelled, peerCancelled, user, connected,
         ),
     )
 

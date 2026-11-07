@@ -177,6 +177,7 @@ static void on_sync_done(void *user, const mc_sync_result *result) {
   p->ev.bytes_received = result->bytes_received;
   p->ev.bytes_sent = result->bytes_sent;
   p->ev.cancelled = result->cancelled;
+  p->ev.peer_cancelled = result->peer_cancelled;
   post(p);
 }
 

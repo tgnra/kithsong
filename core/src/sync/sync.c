@@ -19,6 +19,11 @@
  * follow-ups keep their schedule. mc_sync_new() seeds it from peer_contact.last_sync_ms, so
  * a restart doesn't reset it.
  *
+ * Cancel (mc_sync_cancel() in sync.h). Besides held_ms here, the session's channel sends the
+ * peer CANCEL once both HELLOs say "cancel" (mc_channel_cancel(); best effort, never waiting
+ * on the network). The peer's session then ends with peer_cancelled, which sets its
+ * peer_held_ms: every trigger but MC_TRIGGER_NOW waits it out, without moving due_ms.
+ *
  * Reachability (mc_sync_reach in sync.h). Every connection made to a peer, or failed while
  * it is online, and every session it starts here, is evidence of which way connections get
  * through; so is a reach check (reach.c), which the scheduler runs with each online peer
@@ -62,6 +67,9 @@
 #define CONNECT_MS 3000
 #define ACCEPT_WAIT_MS 1000
 #define CLAIM_WAIT_MS 5000
+/* How long a cancel left to a send under way (mc_channel_cancel()) waits for it before the
+ * connection is aborted. */
+#define CANCEL_GRACE_MS 1000
 #define MAX_ADDRS 8
 /* A pairing undone before its merge ran: how often to try telling the kept group again that
  * this device left it, while none of its members can be reached, and for how long. */
@@ -667,6 +675,7 @@ int mc_sync_claim(mc_sync *sync, const char *peer_uid, int lower, mc_channel *ch
     p->busy_ch = ch;
     p->abort = 0;
     p->cancel = 0;
+    p->cancel_ms = 0;
     ok = 1;
   }
   mc_mutex_unlock(&sync->lock);
@@ -682,6 +691,7 @@ int mc_sync_release(mc_sync *sync, const char *peer_uid) {
     p->busy = 0;
     p->busy_ch = NULL;
     p->cancel = 0;
+    p->cancel_ms = 0;
   }
   mc_cond_broadcast(&sync->cond);
   mc_mutex_unlock(&sync->lock);
@@ -934,10 +944,16 @@ void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
       /* Complete: nothing left that the next automatic session would carry at once. */
       int complete = result->converged && !follow_up;
       p->auto_after_ms = complete && sync->auto_interval_ms ? now + sync->auto_interval_ms : 0;
+      p->peer_held_ms = 0; /* whoever cancelled has synced since */
       if (address && !p->discovered) {
         snprintf(p->address, sizeof p->address, "%s", address);
         p->port = port;
       }
+    } else if (result->peer_cancelled) {
+      /* Its user cancelled: no automatic session with it for a while, and no retry. Its
+       * own sessions are still served. */
+      p->peer_held_ms = now + sync->peer_cancel_hold_ms;
+      fprintf(stderr, "kithcore: sync: %s cancelled the session\n", peer_uid);
     } else if (result->status != MC_ERR_LOCKED && !result->cancelled) {
       p->reached = 0;
       /* For the waiting tracks: one that never got past connecting (its handshake included)
@@ -1153,7 +1169,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   memcpy(s.peer_uid, j->uid, MC_UID_STRLEN);
   s.asked = j->user;
   s.pressed = j->now;
-  int claimed = 0, cancelled = 0;
+  int claimed = 0, cancelled = 0, peer_cancelled = 0;
   if (ch) {
     answered = 1;
     mc_sync_track(sync, ch);
@@ -1165,6 +1181,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
     mc_sync_trace("initiate %.8s: handshake +%llu ms", j->uid, (unsigned long long)(mc_mono_ms() - t0));
     if (st == MC_OK) st = mc_session_run(&s);
     if (claimed) cancelled = mc_sync_release(sync, j->uid) && st != MC_OK;
+    peer_cancelled = handshook && !cancelled && st != MC_OK && mc_channel_peer_cancelled(ch);
     mc_sync_untrack(sync, ch);
     mc_channel_close(ch);
   }
@@ -1179,7 +1196,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
   mc_sync_result r = {.device_uid = j->uid, .status = st, .library_synced = s.library_synced,
                       .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
                       .rows_received = s.rows_received, .cancelled = cancelled,
-                      .user = j->user, .connected = handshook};
+                      .peer_cancelled = peer_cancelled, .user = j->user, .connected = handshook};
   mc_transfer_fill_result(&s, &r);
   mc_sync_session_ended(sync, c, j->uid, &r, s.rows_new, s.follow_up, at >= 0 ? j->host[at] : NULL,
                         at >= 0 ? j->port[at] : 0);
@@ -1316,12 +1333,13 @@ static void serve_worker(void *arg) {
       s.asked = s.user; /* pressed here, and the other device called back */
       st = mc_session_run(&s);
       int cancelled = mc_sync_release(sync, s.peer_uid) && st != MC_OK;
+      int peer_cancelled = !cancelled && st != MC_OK && mc_channel_peer_cancelled(ch);
       if (s.we_removed) mc_sync_forget_group(sync, &c);
       mc_sync_result r = {.device_uid = s.peer_uid, .status = st,
                           .library_synced = s.library_synced,
                           .converged = st == MC_OK && s.converged, .rows_sent = s.rows_sent,
                           .rows_received = s.rows_received, .cancelled = cancelled,
-                          .user = s.asked, .connected = 1};
+                          .peer_cancelled = peer_cancelled, .user = s.asked, .connected = 1};
       mc_transfer_fill_result(&s, &r);
       mc_sync_session_ended(sync, &c, s.peer_uid, &r, s.rows_new, s.follow_up, NULL, 0);
     } else {
@@ -1749,6 +1767,18 @@ static void sched_main(void *arg) {
       free(ms);
       break;
     }
+    /* A cancel left to a send under way that hasn't ended the session yet: cut it off. */
+    uint64_t cut = mc_mono_ms();
+    for (int i = 0; i < sync->npeers; i++) {
+      mc_sync_peer *p = &sync->peers[i];
+      if (!p->cancel_ms) continue;
+      if (p->busy && cut < p->cancel_ms + CANCEL_GRACE_MS) {
+        if (p->cancel_ms + CANCEL_GRACE_MS < wake) wake = p->cancel_ms + CANCEL_GRACE_MS;
+        continue;
+      }
+      if (p->busy && p->busy_ch) mc_channel_abort(p->busy_ch);
+      p->cancel_ms = 0;
+    }
     for (int i = 0; i < sync->npeers; i++) sync->peers[i].member = 0;
     for (int i = 0; i < n; i++) {
       mc_sync_peer *p = find_peer(sync, ms[i].uid, 1);
@@ -1795,6 +1825,11 @@ static void sched_main(void *arg) {
       }
       if (now < p->due_ms) {
         if (p->due_ms < wake) wake = p->due_ms;
+        continue;
+      }
+      if (p->trigger != MC_TRIGGER_NOW && now < p->peer_held_ms) {
+        /* Its user cancelled a session lately: only a press of Sync goes ahead. */
+        if (p->peer_held_ms < wake) wake = p->peer_held_ms;
         continue;
       }
       if (p->trigger != MC_TRIGGER_NOW && now < p->auto_after_ms) {
@@ -1986,6 +2021,7 @@ mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *devic
   sync->use_discovery = 1;
   sync->listen_port = -1;
   sync->auto_interval_ms = MC_SYNC_AUTO_INTERVAL_MS;
+  sync->peer_cancel_hold_ms = MC_SYNC_PEER_CANCEL_HOLD_MS;
   if (mc_hostname(sync->host, sizeof sync->host) != MC_OK) sync->host[0] = '\0';
   clean_name(device_name, sync->name);
   if (!sync->name[0]) clean_name(sync->host[0] ? sync->host : "Kithsong", sync->name);
@@ -2363,7 +2399,7 @@ mc_status mc_sync_leave_group(mc_sync *sync) {
         memcpy(host, p->address, sizeof host);
         port = p->port;
       }
-      if (p) p->held_ms = 0; /* leaving outweighs a cancel */
+      if (p) p->held_ms = p->peer_held_ms = 0; /* leaving outweighs a cancel */
       mc_mutex_unlock(&sync->lock);
       job_addresses(&c, &j, host, port);
       if (initiate(sync, &c, &j, 0) == MC_OK) break;
@@ -2418,7 +2454,7 @@ static mc_status sync_soon(mc_sync *sync, const char *device_uid, mc_sync_trigge
   mc_status st = sync->started ? MC_OK : MC_ERR_INVALID_ARG;
   if (st == MC_OK && device_uid) {
     mc_sync_peer *p = find_peer(sync, device_uid, 1);
-    if (p && why == MC_TRIGGER_NOW) p->held_ms = 0;
+    if (p && why == MC_TRIGGER_NOW) p->held_ms = p->peer_held_ms = 0;
     if (p && (why == MC_TRIGGER_NOW || p->trigger != MC_TRIGGER_NOW)) {
       p->trigger = why;
       p->trigger_ms = mc_mono_ms();
@@ -2427,14 +2463,15 @@ static mc_status sync_soon(mc_sync *sync, const char *device_uid, mc_sync_trigge
     mc_cond_broadcast(&sync->cond);
   } else if (st == MC_OK) {
     if (why == MC_TRIGGER_NOW)
-      for (int i = 0; i < sync->npeers; i++) sync->peers[i].held_ms = 0;
+      for (int i = 0; i < sync->npeers; i++) sync->peers[i].held_ms = sync->peers[i].peer_held_ms = 0;
     trigger_members(sync, NULL, why, mc_mono_ms());
   }
   mc_mutex_unlock(&sync->lock);
   return st;
 }
 
-/* Under lock. */
+/* Under lock. The session's channel tells the peer (CANCEL) if it's armed: see
+ * mc_channel_cancel(), which never waits on the network. */
 static void cancel_peer(mc_sync_peer *p, uint64_t until) {
   p->held_ms = until;
   p->user_ms = 0; /* a press no session has carried yet is withdrawn */
@@ -2442,7 +2479,8 @@ static void cancel_peer(mc_sync_peer *p, uint64_t until) {
   if (p->trigger == MC_TRIGGER_NOW) p->trigger = MC_TRIGGER_PERIODIC;
   if (p->busy) {
     p->cancel = 1;
-    if (p->busy_ch) mc_channel_abort(p->busy_ch);
+    if (p->busy_ch && !mc_channel_cancel(p->busy_ch) && !p->cancel_ms)
+      p->cancel_ms = mc_mono_ms(); /* the scheduler aborts it if the send doesn't end soon */
   }
 }
 
@@ -2656,8 +2694,8 @@ mc_status mc_sync_list_devices(mc_sync *sync, mc_sync_device_list **out) {
     d->online = p->discovered || p->reached;
     d->reach = verdict(p->out_ok_ms, p->out_fail_ms);
     d->reach_us = verdict(p->in_ok_ms, p->in_fail_ms);
-    if (p->auto_after_ms > mono_now)
-      d->auto_after_ms = wall_now + (int64_t)(p->auto_after_ms - mono_now);
+    uint64_t after = p->auto_after_ms > p->peer_held_ms ? p->auto_after_ms : p->peer_held_ms;
+    if (after > mono_now) d->auto_after_ms = wall_now + (int64_t)(after - mono_now);
     if (p->address[0] && (p->discovered || !d->address)) {
       free(d->address);
       d->address = mc_strdup(p->address);
@@ -2855,6 +2893,18 @@ void mc_sync_set_test_no_merge(mc_sync *sync, int no_merge) {
 void mc_sync_set_test_no_files_plan(mc_sync *sync, int no_files_plan) {
   mc_mutex_lock(&sync->lock);
   sync->no_files_plan = no_files_plan;
+  mc_mutex_unlock(&sync->lock);
+}
+
+void mc_sync_set_test_no_cancel(mc_sync *sync, int no_cancel) {
+  mc_mutex_lock(&sync->lock);
+  sync->no_cancel = no_cancel;
+  mc_mutex_unlock(&sync->lock);
+}
+
+void mc_sync_set_test_peer_cancel_hold(mc_sync *sync, uint32_t ms) {
+  mc_mutex_lock(&sync->lock);
+  sync->peer_cancel_hold_ms = ms;
   mc_mutex_unlock(&sync->lock);
 }
 

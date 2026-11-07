@@ -290,6 +290,7 @@ typedef struct hello {
   char library_uid[MC_UID_STRLEN];
   char node_uid[MC_UID_STRLEN];
   int archive; /* -1: the HELLO doesn't say (an older version) */
+  int cancel;  /* it takes CANCEL (older versions end the session on it, as on any unknown) */
 } hello;
 
 /* The library's uid as stored, in case another connection adopted a new one. */
@@ -324,8 +325,10 @@ static mc_status send_hello(mc_session *s, int archive) {
   yyjson_mut_obj_add_bool(doc, root, "covers", true);
   mc_mutex_lock(&s->sync->lock);
   s->files_plan = !s->sync->no_files_plan;
+  int cancel = !s->sync->no_cancel;
   mc_mutex_unlock(&s->sync->lock);
   if (s->files_plan) yyjson_mut_obj_add_bool(doc, root, "files_plan", true);
+  if (cancel) yyjson_mut_obj_add_bool(doc, root, "cancel", true);
   yyjson_mut_obj_add_bool(doc, root, "archive", archive);
   yyjson_mut_val *caps = yyjson_mut_obj(doc);
   yyjson_mut_obj_add_val(doc, root, "caps", caps);
@@ -366,6 +369,7 @@ static mc_status recv_hello(mc_session *s, hello *h) {
     if (yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "user"))) s->user = 1;
     s->peer_covers = yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "covers"));
     if (!yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "files_plan"))) s->files_plan = 0;
+    h->cancel = yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(doc), "cancel"));
     yyjson_val *archive = yyjson_obj_get(yyjson_doc_get_root(doc), "archive");
     h->archive = yyjson_is_bool(archive) ? yyjson_get_bool(archive) : -1;
     st = MC_OK;
@@ -749,6 +753,14 @@ static mc_status session_run(mc_session *s) {
   mc_sync_trace("session %.8s: start, initiator %d", s->peer_uid, mc_channel_is_initiator(s->ch));
   mc_status st = send_hello(s, archive);
   if (st == MC_OK) st = recv_hello(s, &peer);
+  /* From here, a Cancel here (mc_sync_cancel()) tells the peer, if it takes CANCEL and this
+   * device sends it (an older version, or the test hook, doesn't). */
+  if (st == MC_OK && peer.cancel) {
+    mc_mutex_lock(&s->sync->lock);
+    int cancel = !s->sync->no_cancel;
+    mc_mutex_unlock(&s->sync->lock);
+    if (cancel) mc_channel_arm_cancel(s->ch, MC_MSG_CANCEL, "{}", 2);
+  }
   mc_sync_trace("session %.8s: hellos +%llu ms", s->peer_uid, (unsigned long long)(mc_mono_ms() - t0));
   if (st == MC_OK) st = exchange_db(s, MC_ROWS_GROUP, NULL, 0);
   mc_sync_trace("session %.8s: group data +%llu ms, rows sent %lld received %lld", s->peer_uid,

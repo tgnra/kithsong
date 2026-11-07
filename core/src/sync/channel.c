@@ -14,7 +14,14 @@ struct mc_channel {
   int mode;
   int timeout_ms;
   int encrypted;
-  int broken; /* a failed handshake or decrypt: refuse everything after */
+  int broken; /* a failed handshake, receive or decrypt: refuse everything after */
+  int peer_cancelled; /* the peer's CANCEL came */
+  /* mc_channel_cancel(): CANCEL_* bits, changed atomically, as the canceller's thread and
+   * the channel's own meet here; the notice is armed before CANCEL_ARMED is set. */
+  int cancel_state;
+  uint8_t notice_type;
+  unsigned char notice[MC_CHANNEL_NOTICE_MAX];
+  size_t notice_len;
   void (*idle)(void *user);
   void *idle_user;
   unsigned char preamble[MC_PREAMBLE_LEN];
@@ -27,6 +34,10 @@ struct mc_channel {
   unsigned char *sbuf;
   unsigned char rbuf[MC_FRAME_MAX];
 };
+
+#define CANCEL_ARMED 1   /* a notice to send */
+#define CANCEL_SENDING 2 /* the channel's thread is in a send */
+#define CANCEL_ASKED 4   /* mc_channel_cancel() was called */
 
 static int g_default_timeout_ms = MC_CHANNEL_TIMEOUT_MS;
 
@@ -127,6 +138,42 @@ void mc_channel_close(mc_channel *ch) {
 
 void mc_channel_abort(mc_channel *ch) {
   if (ch) mc_socket_shutdown(ch->sock);
+}
+
+/* Sends the armed notice if it fits in the socket's buffer now, then shuts down. By
+ * whichever thread mc_channel_cancel()'s bits leave it to, the only one using the send side. */
+static void send_notice(mc_channel *ch, int frame_whole) {
+  size_t len = ch->notice_len;
+  if (frame_whole && ch->encrypted && !ch->broken) {
+    ch->sbuf[0] = ch->notice_type;
+    memcpy(ch->sbuf + 1, ch->notice, len);
+    if (mc_noise_encrypt(&ch->send, NULL, 0, ch->sbuf, len + 1, ch->sbuf) == MC_OK)
+      mc_frame_send_in_place(ch->sock, ch->sbuf, len + 1 + MC_NOISE_TAG_LEN, 0);
+    mbedtls_platform_zeroize(ch->sbuf, len + 1 + MC_NOISE_TAG_LEN);
+  }
+  mc_socket_shutdown(ch->sock);
+}
+
+void mc_channel_arm_cancel(mc_channel *ch, uint8_t type, const void *payload, size_t len) {
+  if (!ch || len > MC_CHANNEL_NOTICE_MAX || (!payload && len)) return;
+  if (__atomic_load_n(&ch->cancel_state, __ATOMIC_SEQ_CST) & CANCEL_ARMED) return;
+  ch->notice_type = type;
+  if (len) memcpy(ch->notice, payload, len);
+  ch->notice_len = len;
+  __atomic_fetch_or(&ch->cancel_state, CANCEL_ARMED, __ATOMIC_SEQ_CST);
+}
+
+int mc_channel_cancel(mc_channel *ch) {
+  if (!ch) return 1;
+  int was = __atomic_fetch_or(&ch->cancel_state, CANCEL_ASKED, __ATOMIC_SEQ_CST);
+  if (was & CANCEL_ASKED) return 1; /* the first call did it, or left it to the send */
+  if (!(was & CANCEL_ARMED)) {
+    mc_socket_shutdown(ch->sock);
+    return 1;
+  }
+  if (was & CANCEL_SENDING) return 0; /* the send under way sends it once its frame is out */
+  send_notice(ch, 1);
+  return 1;
 }
 
 int mc_channel_readable(mc_channel *ch) {
@@ -261,15 +308,43 @@ mc_status mc_channel_handshake_xxpsk3(mc_channel *ch, const unsigned char s_priv
 
 /* --- Messages --- */
 
+static mc_status recv_frame(mc_channel *ch, uint8_t *type, const unsigned char **payload,
+                           size_t *len, int timeout_ms);
+
+/* After a send failed: a CANCEL the peer sent before closing may be waiting unread, with
+ * whatever it sent before it. Read without waiting; what was read is dropped, so nothing
+ * more is received. */
+static mc_status check_cancelled(mc_channel *ch, mc_status st) {
+  uint8_t type;
+  const unsigned char *payload;
+  size_t len;
+  for (int i = 0; i < 16 && !ch->broken && mc_channel_readable(ch); i++)
+    if (recv_frame(ch, &type, &payload, &len, 0) == MC_ERR_CANCELLED) return MC_ERR_CANCELLED;
+  ch->broken = 1;
+  return st;
+}
+
 mc_status mc_channel_send(mc_channel *ch, uint8_t type, const void *payload, size_t len) {
   if (!ch || !ch->encrypted || ch->broken || len > MC_CHANNEL_MAX_PAYLOAD || (!payload && len))
     return MC_ERR_INVALID_ARG;
+  if (__atomic_fetch_or(&ch->cancel_state, CANCEL_SENDING, __ATOMIC_SEQ_CST) & CANCEL_ASKED) {
+    /* mc_channel_cancel() has the send side: it sends the notice and shuts down. */
+    __atomic_fetch_and(&ch->cancel_state, ~CANCEL_SENDING, __ATOMIC_SEQ_CST);
+    return MC_ERR_NET;
+  }
   ch->sbuf[0] = type;
   if (len) memcpy(ch->sbuf + 1, payload, len);
   mc_status st = mc_noise_encrypt(&ch->send, NULL, 0, ch->sbuf, len + 1, ch->sbuf);
   if (st == MC_OK)
     st = mc_frame_send_in_place(ch->sock, ch->sbuf, len + 1 + MC_NOISE_TAG_LEN, ch->timeout_ms);
   mbedtls_platform_zeroize(ch->sbuf, len + 1 + MC_NOISE_TAG_LEN);
+  int was = __atomic_fetch_and(&ch->cancel_state, ~CANCEL_SENDING, __ATOMIC_SEQ_CST);
+  if ((was & CANCEL_ASKED) && (was & CANCEL_ARMED)) {
+    /* mc_channel_cancel() came while this send held the send side, and left it to us. */
+    send_notice(ch, st == MC_OK);
+    return MC_ERR_NET;
+  }
+  if (st == MC_ERR_NET) st = check_cancelled(ch, st);
   return st;
 }
 
@@ -283,12 +358,10 @@ static mc_status wait_idling(mc_channel *ch) {
   return MC_OK;
 }
 
-mc_status mc_channel_recv(mc_channel *ch, uint8_t *type, const unsigned char **payload,
-                          size_t *len) {
-  if (!ch || !type || !payload || !len || !ch->encrypted || ch->broken) return MC_ERR_INVALID_ARG;
+static mc_status recv_frame(mc_channel *ch, uint8_t *type, const unsigned char **payload,
+                           size_t *len, int timeout_ms) {
   size_t n = 0;
-  mc_status st = ch->idle ? wait_idling(ch) : MC_OK;
-  if (st == MC_OK) st = mc_frame_recv(ch->sock, ch->rbuf, sizeof ch->rbuf, &n, ch->timeout_ms);
+  mc_status st = mc_frame_recv(ch->sock, ch->rbuf, sizeof ch->rbuf, &n, timeout_ms);
   if (st == MC_OK && n < 1 + MC_NOISE_TAG_LEN) st = MC_ERR_FORMAT; /* not even a type byte */
   if (st == MC_OK) st = mc_noise_decrypt(&ch->recv, NULL, 0, ch->rbuf, n, ch->rbuf);
   if (st != MC_OK) {
@@ -298,7 +371,27 @@ mc_status mc_channel_recv(mc_channel *ch, uint8_t *type, const unsigned char **p
   *type = ch->rbuf[0];
   *payload = ch->rbuf + 1;
   *len = n - 1 - MC_NOISE_TAG_LEN;
+  if (*type == MC_MSG_CANCEL) {
+    ch->peer_cancelled = 1;
+    ch->broken = 1; /* the peer is gone */
+    return MC_ERR_CANCELLED;
+  }
   return MC_OK;
+}
+
+mc_status mc_channel_recv(mc_channel *ch, uint8_t *type, const unsigned char **payload,
+                          size_t *len) {
+  if (!ch || !type || !payload || !len || !ch->encrypted || ch->broken) return MC_ERR_INVALID_ARG;
+  mc_status st = ch->idle ? wait_idling(ch) : MC_OK;
+  if (st != MC_OK) {
+    ch->broken = 1;
+    return st;
+  }
+  return recv_frame(ch, type, payload, len, ch->timeout_ms);
+}
+
+int mc_channel_peer_cancelled(const mc_channel *ch) {
+  return ch && ch->peer_cancelled;
 }
 
 mc_status mc_channel_recv_after_pair(mc_channel *ch, uint8_t *type, const unsigned char **payload,

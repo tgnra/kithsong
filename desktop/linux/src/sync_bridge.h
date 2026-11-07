@@ -27,7 +27,7 @@ typedef enum {
   SYNC_EV_PROGRESS,    /* on_progress: uid, phase, rows_*, files_done, files_total, sends_*,
                         * bytes_*, pace, library_changed */
   SYNC_EV_DONE,        /* on_sync_done: uid, status, library_synced, converged, rows_*,
-                        * files_received, files_sent, bytes_*, cancelled */
+                        * files_received, files_sent, bytes_*, cancelled, peer_cancelled */
   SYNC_EV_REACH,       /* on_reach: uid ("" when much changed at once) */
   SYNC_EV_PAIR_MERGE,  /* on_pair_merge: uid, name, initiator, kept_here, needs_confirm,
                         * tracks_*, scrobble_sign_out, scrobble_user, forget_* */
@@ -60,6 +60,7 @@ typedef struct sync_event {
   char pace[96]; /* progress: mc_sync_pace_text(), in UTF-8 */
   int library_synced, converged;
   int cancelled; /* mc_sync_cancel() here cut the session short */
+  int peer_cancelled; /* the other device's user cancelled it: not a failure to show */
   /* Progress: library rows or a file arrived since the last event delivered for the
    * device, so the library views should reload. */
   int library_changed;

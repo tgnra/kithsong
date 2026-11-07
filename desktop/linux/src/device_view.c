@@ -1842,7 +1842,7 @@ void device_view_on_sync_event(const sync_event *ev) {
     case SYNC_EV_DONE: {
       busy_remove(i);
       char text[256] = "";
-      if (ev->cancelled) {
+      if (ev->cancelled || ev->peer_cancelled) {
         g_strlcpy(text, mc_str(MC_STR_SYNC_CANCELLED), sizeof text);
       } else if (ev->status != MC_OK) {
         if (g_dv.is_self && ev->name[0])

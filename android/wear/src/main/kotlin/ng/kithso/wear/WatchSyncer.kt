@@ -399,7 +399,7 @@ class WatchSyncer(
                 // An automatic attempt the member never properly answered: nothing was shown
                 // for it, so its failure isn't either.
                 if (!event.user && !event.connected) return
-                val failure = if (event.status != 0 && !event.cancelled) SyncFailure(memberName(event.uid), event.status) else null
+                val failure = if (event.status != 0 && !event.cancelled && !event.peerCancelled) SyncFailure(memberName(event.uid), event.status) else null
                 update { copy(sessions = sessions - event.uid, failure = failure) }
                 // Albums and playlists from the other devices, and the files and covers that
                 // arrived or went. Files that arrived before a session failed are kept, so they
