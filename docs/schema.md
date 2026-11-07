@@ -77,9 +77,11 @@ a separate `sync.db` in the per-device config dir. See
 (`scrobble_account`, and the local-only `scrobble_queue`), v5
 (`devices.confirmed_profile`), v6 (`scrobble_queue.track_uid`), v7 (index `changelog_origin`)
 v8 (the local-only `peer_lacks`, see
-[Waiting for a device](sync-protocol.md#waiting-for-a-device)) and v9 (`peer_lacks.has_copy` and
+[Waiting for a device](sync-protocol.md#waiting-for-a-device)), v9 (`peer_lacks.has_copy` and
 `said_ms`, `local.deep_check_ms`, `deep_check_at` and `unknown_files`, see
-[Verification](sync-protocol.md#verification)). Removing an album or artist from one device needed no
+[Verification](sync-protocol.md#verification)) and v10 (the local-only `tethered_devices`,
+`tethered_profile_items` and `tethered_imports`, see
+[Where a target's profile lives](plugins.md#where-a-targets-profile-lives)). Removing an album or artist from one device needed no
 migration: it's a `profile_items` row of a new kind, `exclude_album` or `exclude_artist`
 (see [Removing from one device](sync-protocol.md#removing-from-one-device)), which older
 versions keep and ignore. A track's delete taken back out of the recycle bin is the same
@@ -275,8 +277,8 @@ a reader decides what a two-second skip means. Nothing here leaves the user's ow
 | `started_ms` | wall clock, when it was first heard, or if it never was, when it was started |
 | `listened_ms` | time actually heard. Pauses add nothing, a seek forward adds nothing for what it jumped, and a seek back adds what's heard again, so it can pass the track's length. A track started and left at once has 0 or nearly |
 | `ended` | `finished`, `skipped` (next, previous, another queue item, or started again), `stopped` (stopped, or the app or library closed), `replaced` (a new queue took over) or `failed` (the file couldn't be played: `listened_ms` is 0) |
-| `context` | how the queue was started: `album`, `playlist` (smart lists too), `album_group`, `artist`, `manual` (one track by itself), `shuffle` (any of those started shuffled with no track picked), `radio` (a station) or `unknown` |
-| `context_uid` | the album, playlist, group or artist, also under `shuffle`, or a station's seed track; NULL if there's none. Not a reference: the history stays when the album or playlist goes, and a merged-away album's uid can be looked up in `aliases` |
+| `context` | how the queue was started: `album`, `playlist` (smart lists too), `album_group`, `artist`, `manual` (one track by itself), `shuffle` (any of those started shuffled with no track picked), `radio` (a station), `device` (played on a tethered device, such as an iPod, and taken in when it synced; see [docs/plugins.md](plugins.md#plays-from-the-device)) or `unknown` |
+| `context_uid` | the album, playlist, group or artist, also under `shuffle`, a station's seed track, or the tethered device (`tethered_devices.uid` in `sync.db`); NULL if there's none. Not a reference: the history stays when the album or playlist goes, and a merged-away album's uid can be looked up in `aliases` |
 
 The player keeps the rows, so all frontends log alike. A frontend gives it the queue's track
 uids and context (`mc_play_origin`), takes each row as it ends (`MC_PLAYER_EVENT_ENDED`,

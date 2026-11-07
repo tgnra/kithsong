@@ -83,6 +83,45 @@ static const char *const k_migrations[] = {
   "ALTER TABLE local ADD COLUMN deep_check_ms INTEGER;"
   "ALTER TABLE local ADD COLUMN deep_check_at TEXT;"
   "ALTER TABLE local ADD COLUMN unknown_files INTEGER NOT NULL DEFAULT 0;",
+  /* v10: tethered devices (sync/tethered.h, docs/plugins.md), this computer's alone and never
+   * synced. tethered_devices is one per device a plugin's target recognised: uid is made
+   * here when it's first seen, and stands for it in the play log; device_id is the plugin's
+   * stable id for it. Its profile is mode, the budget and the format policy here, and its
+   * selection tethered_profile_items (kinds as profile_items'). tethered_imports keeps the
+   * token of each set of plays or playlists taken in from it, so none is taken in twice. */
+  "CREATE TABLE tethered_devices ("
+  "  uid              TEXT PRIMARY KEY,"
+  "  plugin_id        TEXT NOT NULL,"
+  "  target_id        TEXT NOT NULL,"
+  "  device_id        TEXT NOT NULL,"
+  "  name             TEXT,"
+  "  model            TEXT,"
+  "  mode             TEXT NOT NULL DEFAULT 'all',"
+  "  budget_bytes     INTEGER,"
+  "  budget_enabled   INTEGER NOT NULL DEFAULT 0,"
+  "  lossless_format  TEXT,"
+  "  lossless_setting TEXT,"
+  "  lossy_format     TEXT,"
+  "  lossy_setting    TEXT,"
+  "  lossy_cap_kbps   INTEGER NOT NULL DEFAULT 0,"
+  "  capacity_bytes   INTEGER,"
+  "  free_bytes       INTEGER,"
+  "  last_sync_ms     INTEGER,"
+  "  UNIQUE (plugin_id, target_id, device_id)"
+  ") WITHOUT ROWID;"
+  "CREATE TABLE tethered_profile_items ("
+  "  device_uid TEXT NOT NULL,"
+  "  kind       TEXT NOT NULL,"
+  "  ref_uid    TEXT NOT NULL,"
+  "  PRIMARY KEY (device_uid, kind, ref_uid)"
+  ") WITHOUT ROWID;"
+  "CREATE TABLE tethered_imports ("
+  "  device_uid  TEXT NOT NULL,"
+  "  what        TEXT NOT NULL,"
+  "  token       TEXT NOT NULL,"
+  "  imported_ms INTEGER NOT NULL,"
+  "  PRIMARY KEY (device_uid, what, token)"
+  ") WITHOUT ROWID;",
 };
 #define MC_SYNC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 

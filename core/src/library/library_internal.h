@@ -184,6 +184,12 @@ const mc_changelog_table *mc_library_tracked(size_t *count);
 mc_status mc_library_meta_get(mc_library *lib, const char *key, char *out, size_t cap);
 mc_status mc_library_meta_set(mc_library *lib, const char *key, const char *value);
 
+/* Counts count plays of track_uid on this device, the last at last_played_ms (which only moves
+ * the track's last play forward): plays made elsewhere and taken in later, such as a tethered
+ * device's (sync/tethered.c). MC_ERR_NOT_FOUND if there's no such track. */
+mc_status mc_library_add_plays(mc_library *lib, const char *track_uid, int count,
+                               int64_t last_played_ms);
+
 /* For merging libraries (sync/libmerge.c): empties the library in place without logging
  * anything. Every library row, files, aliases, merge_keys and the changelog go, the example
  * smart lists are seeded again as migration v10 does, and the library gets a new node uid.
