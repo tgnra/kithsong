@@ -1981,7 +1981,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
   adw_toolbar_view_set_top_bar_style(ADW_TOOLBAR_VIEW(toolbar), ADW_TOOLBAR_RAISED_BORDER);
   adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), nav_split);
-  import_view_add_drop_target(a->import, toolbar); /* folders dropped anywhere are imported */
+  import_view_add_drop_target(a->import, toolbar); /* folders and zips dropped anywhere are imported */
 
   GtkWidget *win = adw_application_window_new(gapp);
   a->win = GTK_WINDOW(win);

@@ -25,7 +25,7 @@ typedef struct session_tag {
 
 /* One item's row in the list. */
 typedef struct item_row {
-  GtkWidget *row, *state, *spinner, *confidence;
+  GtkWidget *row, *state, *spinner, *confidence, *arrow;
   int group;
 } item_row;
 
@@ -369,9 +369,12 @@ static void refresh_row(import_view *v, int idx) {
   if (it->outcome == MC_IMPORT_OUTCOME_MOVED) m = NULL; /* none of it is imported with a match */
   gboolean as_is = it->state == MC_IMPORT_DONE && it->chosen < 0;
 
-  char files[64], match[512] = "", subtitle[1024] = "";
+  /* A zip that couldn't be extracted (or a file whose path is too long) is an item with no
+   * files: its name and why, with nothing to review. */
+  gboolean empty = it->file_count == 0;
+  char files[64] = "", match[512] = "", subtitle[1024] = "";
   if (it->kind == MC_IMPORT_SINGLE) g_strlcpy(files, mc_str(MC_STR_IMPORT_SINGLE), sizeof files);
-  else count_text(MC_STR_LINUX_IMPORT_FILE_COUNT, it->file_count, files, sizeof files);
+  else if (!empty) count_text(MC_STR_LINUX_IMPORT_FILE_COUNT, it->file_count, files, sizeof files);
   if (it->error) g_strlcpy(match, it->error, sizeof match);
   else if (as_is) g_strlcpy(match, mc_str(MC_STR_IMPORT_EXISTING_TAGS), sizeof match);
   else if (m) match_summary(m, match, sizeof match);
@@ -396,7 +399,8 @@ static void refresh_row(import_view *v, int idx) {
   gtk_widget_set_visible(r->state, busy || outcome);
   gtk_widget_set_visible(r->spinner, it->state == MC_IMPORT_MATCHING || it->state == MC_IMPORT_WRITING);
   gtk_spinner_set_spinning(GTK_SPINNER(r->spinner), gtk_widget_get_visible(r->spinner));
-  gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(r->row), !busy);
+  gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(r->row), !busy && !empty);
+  gtk_widget_set_visible(r->arrow, !empty);
 
   set_group(v, idx, state_group(it->state));
   mc_import_item_free(it);
@@ -415,7 +419,8 @@ static GtkWidget *new_item_row(import_view *v, int idx) {
   adw_action_row_add_suffix(ADW_ACTION_ROW(r->row), r->spinner);
   adw_action_row_add_suffix(ADW_ACTION_ROW(r->row), r->state);
   adw_action_row_add_suffix(ADW_ACTION_ROW(r->row), r->confidence);
-  adw_action_row_add_suffix(ADW_ACTION_ROW(r->row), gtk_image_new_from_icon_name("go-next-symbolic"));
+  r->arrow = gtk_image_new_from_icon_name("go-next-symbolic");
+  adw_action_row_add_suffix(ADW_ACTION_ROW(r->row), r->arrow);
   return r->row;
 }
 
@@ -477,8 +482,17 @@ gboolean import_view_start(GtkWidget *view, const char *const *paths, int count)
   session_tag *tag = g_new(session_tag, 1);
   tag->v = v;
   tag->gen = v->generation;
-  mc_import_options opts = {.threshold = 0, .fetch_art = 1};
+  /* Zips are extracted under ~/.cache/kithsong (the app's own cache under Flatpak) rather than
+   * /tmp, which is often a tmpfs in RAM, too small for an album's zip, let alone a library
+   * export. Not if that's inside the library folder, which the core doesn't allow. */
+  char *staging = g_build_filename(g_get_user_cache_dir(), "kithsong", NULL);
+  const char *lib_dir = mc_library_dir(v->lib);
+  size_t lib_len = lib_dir ? strlen(lib_dir) : 0;
+  if (lib_len && strncmp(staging, lib_dir, lib_len) == 0 && (staging[lib_len] == '/' || !staging[lib_len]))
+    g_clear_pointer(&staging, g_free);
+  mc_import_options opts = {.threshold = 0, .fetch_art = 1, .staging_dir = staging};
   mc_status st = mc_import_start(v->lib, paths, count, &opts, on_import_event, tag, &v->imp);
+  g_free(staging);
   if (st != MC_OK) {
     g_free(tag);
     v->imp = NULL;
@@ -494,9 +508,12 @@ gboolean import_view_start(GtkWidget *view, const char *const *paths, int count)
   return TRUE;
 }
 
-/* --- Picking and dropping folders --- */
+/* --- Picking and dropping folders and zips --- */
 
-/* Imports the native paths of a list of GFiles. */
+/* Imports the native paths of a list of GFiles: folders, zips or loose files, as the core
+ * takes them. Picked and dropped files from outside a Flatpak's sandbox come through the
+ * document portal as paths under /run/user/<uid>/doc, which read like any other. Files with
+ * no path (not mounted locally) are left out. */
 static gboolean start_files(import_view *v, GListModel *files) {
   guint n = files ? g_list_model_get_n_items(files) : 0;
   GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
@@ -529,6 +546,37 @@ void import_view_choose_folders(GtkWidget *view) {
   GtkRoot *root = gtk_widget_get_root(view);
   gtk_file_dialog_select_multiple_folders(dlg, GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL, NULL,
                                           on_folders_chosen, g_atomic_rc_box_acquire(v));
+  g_object_unref(dlg);
+}
+
+static void on_zips_chosen(GObject *source, GAsyncResult *result, gpointer data) {
+  import_view *v = data;
+  GListModel *files = gtk_file_dialog_open_multiple_finish(GTK_FILE_DIALOG(source), result, NULL);
+  if (files && v->root) start_files(v, files);
+  if (files) g_object_unref(files);
+  g_atomic_rc_box_release(v);
+}
+
+void import_view_choose_zips(GtkWidget *view) {
+  import_view *v = get_view(view);
+  if (!v) return;
+  GtkFileDialog *dlg = gtk_file_dialog_new();
+  gtk_file_dialog_set_title(dlg, mc_str(MC_STR_LINUX_IMPORT_CHOOSE_ZIPS_TITLE));
+  gtk_file_dialog_set_accept_label(dlg, mc_str_mnemonic(MC_STR_IMPORT_BUTTON));
+  /* By type and by name: a zip may be saved without one or the other being known. */
+  GtkFileFilter *zips = gtk_file_filter_new();
+  gtk_file_filter_set_name(zips, mc_str(MC_STR_LINUX_IMPORT_ZIP_FILES));
+  gtk_file_filter_add_mime_type(zips, "application/zip");
+  gtk_file_filter_add_suffix(zips, "zip");
+  GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+  g_list_store_append(filters, zips);
+  gtk_file_dialog_set_filters(dlg, G_LIST_MODEL(filters));
+  gtk_file_dialog_set_default_filter(dlg, zips);
+  g_object_unref(filters);
+  g_object_unref(zips);
+  GtkRoot *root = gtk_widget_get_root(view);
+  gtk_file_dialog_open_multiple(dlg, GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL, NULL, on_zips_chosen,
+                                g_atomic_rc_box_acquire(v));
   g_object_unref(dlg);
 }
 
@@ -1355,6 +1403,12 @@ static void on_choose_clicked(GtkButton *button, gpointer data) {
   import_view_choose_folders(v->root);
 }
 
+static void on_choose_zips_clicked(GtkButton *button, gpointer data) {
+  (void)button;
+  import_view *v = data;
+  import_view_choose_zips(v->root);
+}
+
 static void on_root_destroy(GtkWidget *root, gpointer data) {
   (void)root;
   import_view *v = data;
@@ -1391,17 +1445,25 @@ GtkWidget *import_view_new(mc_library *lib, const import_view_callbacks *cb) {
   v->lib = lib;
   if (cb) v->cb = *cb;
 
-  /* Before an import: a drop zone with a button. */
+  /* Before an import: a drop zone with a button for folders and, under it, one for zips (a
+   * file dialog picks folders or files, not both). */
   GtkWidget *choose = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_IMPORT_CHOOSE_FOLDERS));
-  gtk_widget_set_halign(choose, GTK_ALIGN_CENTER);
   gtk_widget_add_css_class(choose, "pill");
   gtk_widget_add_css_class(choose, "suggested-action");
   g_signal_connect(choose, "clicked", G_CALLBACK(on_choose_clicked), v);
+  GtkWidget *choose_zips = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_LINUX_IMPORT_CHOOSE_ZIPS));
+  gtk_widget_add_css_class(choose_zips, "pill");
+  g_signal_connect(choose_zips, "clicked", G_CALLBACK(on_choose_zips_clicked), v);
+  GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+  gtk_box_set_homogeneous(GTK_BOX(buttons), TRUE);
+  gtk_widget_set_halign(buttons, GTK_ALIGN_CENTER);
+  gtk_box_append(GTK_BOX(buttons), choose);
+  gtk_box_append(GTK_BOX(buttons), choose_zips);
   GtkWidget *start = adw_status_page_new();
   adw_status_page_set_icon_name(ADW_STATUS_PAGE(start), "folder-music-symbolic");
   adw_status_page_set_title(ADW_STATUS_PAGE(start), mc_str(MC_STR_IMPORT_SHEET_TITLE));
   adw_status_page_set_description(ADW_STATUS_PAGE(start), mc_str(MC_STR_LINUX_IMPORT_START_TEXT));
-  adw_status_page_set_child(ADW_STATUS_PAGE(start), choose);
+  adw_status_page_set_child(ADW_STATUS_PAGE(start), buttons);
   gtk_widget_add_css_class(start, "import-drop");
   gtk_widget_set_margin_start(start, 24);
   gtk_widget_set_margin_end(start, 24);

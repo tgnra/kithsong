@@ -6,13 +6,14 @@
  *   |  .- - - - - - - - - -.  |    | Importing 12 of 40                  [Done] |
  *   |  :   Import music    :  |    | ==========-------------------------------- |
  *   |  :  [Choose folders] :  |    |  Needs a decision                          |
- *   |  '- - - - - - - - - -'  |    |  | Things We Lost  Low - ... 70%       > | |
- *   +------------------------+    |  Imported                                  |
- *                                 |  | OK Computer  Radiohead - ...  100%   > | |
+ *   |  :[Choose zip files] :  |    |  | Things We Lost  Low - ... 70%       > | |
+ *   |  '- - - - - - - - - -'  |    |  Imported                                  |
+ *   +------------------------+    |  | OK Computer  Radiohead - ...  100%   > | |
  *                                 +--------------------------------------------+
  *
- * Folders dropped on the page (or on any widget given to import_view_add_drop_target) or
- * picked with Choose Folders start an import. The core runs it on its own thread; its events
+ * Folders and zips dropped on the page (or on any widget given to import_view_add_drop_target),
+ * or picked with Choose Folders or Choose Zip Files, start an import; the core extracts zips
+ * (under ~/.cache/kithsong), and one it can't extract is listed as failed, saying why. The core runs it on its own thread; its events
  * are marshalled to the main loop. Matches at or above the confidence threshold are imported
  * straight away; the rest wait under "Needs a decision". Activating an item opens the
  * review dialog, where the user picks a candidate, searches again, keeps the existing tags or
@@ -34,10 +35,11 @@
  *   import_view_callbacks cb = {on_library_changed, on_session, on_import_done, on_present, a};
  *   a->import = import_view_new(a->lib, &cb);
  *   gtk_stack_add_named(GTK_STACK(content), a->import, "import");
- *   import_view_add_drop_target(a->import, toolbar);  // folders dropped anywhere import
+ *   import_view_add_drop_target(a->import, toolbar);  // folders, zips dropped anywhere import
  *
- *   The header bar's Import button shows the "import" page; Choose Folders is on the page.
- *   import_view_choose_folders() can be bound to an action as well.
+ *   The header bar's Import button shows the "import" page; Choose Folders and Choose Zip
+ *   Files are on the page. import_view_choose_folders() and import_view_choose_zips() can be
+ *   bound to actions as well.
  *
  *   Closing the window while an import runs should ask first: connect the window's
  *   "close-request", return TRUE if import_view_is_running(), and call
@@ -65,7 +67,7 @@ typedef struct import_view_callbacks {
   void (*session_changed)(void *user, gboolean active);
   /* Done was clicked and the session ended: go back to the albums. */
   void (*done)(void *user);
-  /* Folders were dropped on a widget from import_view_add_drop_target: show the import page.
+  /* Folders or files were dropped on a widget from import_view_add_drop_target: show the import page.
    * Called before the import starts. */
   void (*present)(void *user);
   void *user;
@@ -85,7 +87,11 @@ gboolean import_view_start(GtkWidget *view, const char *const *paths, int count)
 /* Opens the folder chooser (several folders may be picked) and imports them. */
 void import_view_choose_folders(GtkWidget *view);
 
-/* Makes folders dropped on widget start an import too (calling the present callback first). */
+/* Opens a file chooser for zips (several may be picked) and imports them. */
+void import_view_choose_zips(GtkWidget *view);
+
+/* Makes folders and files (zips, audio) dropped on widget start an import too (calling the
+ * present callback first). Files that are neither are passed over by the core. */
 void import_view_add_drop_target(GtkWidget *view, GtkWidget *widget);
 
 /* TRUE while a session is open. */
