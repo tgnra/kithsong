@@ -105,6 +105,7 @@
 #include "import_view.h"
 #include "move_library.h"
 #include "kithcore/kithcore.h"
+#include "kithcore/plugins.h"
 #include "kithcore/source_run.h"
 #include "now_playing.h"
 #include "pair_dialog.h"
@@ -119,6 +120,7 @@
 #include "smart_editor.h"
 #include "stats_dialog.h"
 #include "sync_bridge.h"
+#include "tethered_bridge.h"
 #include "theme.h"
 #include "track_list.h"
 #include "track_menu.h"
@@ -222,6 +224,8 @@ static app g_app;
 static BOOL change_library(BOOL new_empty);
 static void move_library(void);
 static void schedule_refresh(void);
+static void plugins_changed(void);
+static void update_tethered_scrobbler(void);
 static void rename_self(const char *name);
 static void import_forwarded(wchar_t *list);
 
@@ -482,6 +486,13 @@ static void perf_view_shown(void) {
   mc_perf_view_end();
 }
 
+/* The page of the device selected in the sidebar: a group member's, or a tethered device's. */
+static void open_device_page(void) {
+  const char *uid = sidebar_selected_device();
+  if (uid && tethered_bridge_has(uid)) device_view_open_tethered(tethered_bridge_get(), g_app.lib, uid);
+  else device_view_open(sync_bridge_get(), g_app.lib, uid);
+}
+
 /* For PAGE_DEVICE, the device selected in the sidebar (sidebar_select_device()) is shown. */
 static void show_page(sidebar_page page) {
   mc_perf_view_begin(page_name(page));
@@ -490,7 +501,7 @@ static void show_page(sidebar_page page) {
   if (library_page())
     album_grid_show(page == PAGE_PLAYLISTS ? AGV_PLAYLISTS : page == PAGE_ALBUM_GROUPS ? AGV_GROUPS : AGV_ALBUMS);
   if (library_page() || page == PAGE_ARTISTS) show_album(); /* the track list is the page's */
-  if (page == PAGE_DEVICE) device_view_open(sync_bridge_get(), g_app.lib, sidebar_selected_device());
+  if (page == PAGE_DEVICE) open_device_page();
   if (page == PAGE_HOME) home_view_refresh(); /* plays since it last showed */
   import_view_show(page == PAGE_IMPORT);
   settings_view_show(page == PAGE_SETTINGS);
@@ -852,6 +863,7 @@ static void create_controls(void) {
   settings_view_set_source_run(g_app.from_source ? g_app.config_dir : NULL);
   settings_view_set_library_dir(mc_settings_library_dir(g_app.settings));
   settings_view_init_sync(g_app.settings, schedule_refresh);
+  settings_view_init_plugins(plugins_changed, update_tethered_scrobbler);
   static const testing_host testing = {open_stress, back_to_library, scroll_test_start, current_library};
   testing_view_init(g_app.settings, g_app.config_dir, &testing);
   static const device_view_host host = {rename_self, schedule_refresh};
@@ -1379,9 +1391,12 @@ static void refresh_devices(void) {
   mc_sync_nearby_list *nearby = NULL;
   if (sync && mc_sync_list_devices(sync, &paired) != MC_OK) paired = NULL;
   if (sync && mc_sync_list_nearby(sync, &nearby) != MC_OK) nearby = NULL;
-  int np = paired ? paired->count : 0, nn = nearby ? nearby->count : 0;
-  sidebar_device *devs = np + nn ? calloc((size_t)(np + nn), sizeof *devs) : NULL;
-  wchar_t **names = np + nn ? calloc((size_t)(np + nn), sizeof *names) : NULL;
+  /* Tethered devices (an iPod, say) go after the group's, in or out of a group. */
+  mc_tethered_device_list *tethered = NULL;
+  if (tethered_bridge_get() && mc_tethered_list(tethered_bridge_get(), &tethered) != MC_OK) tethered = NULL;
+  int np = paired ? paired->count : 0, nn = nearby ? nearby->count : 0, nt = tethered ? tethered->count : 0;
+  sidebar_device *devs = np + nn + nt ? calloc((size_t)(np + nn + nt), sizeof *devs) : NULL;
+  wchar_t **names = np + nn + nt ? calloc((size_t)(np + nn + nt), sizeof *names) : NULL;
   int npaired = 0, nnearby = 0;
   if (devs && names) {
     /* This PC first, then the online devices, then the offline ones, each in the order
@@ -1399,6 +1414,15 @@ static void refresh_devices(void) {
                    (d->archive ? SB_DEV_ARCHIVE : 0) | (syncing_slot(d->uid) >= 0 ? SB_DEV_SYNCING : 0);
         npaired++;
       }
+    for (int i = 0; i < nt; i++) { /* plugged in first, then by name, as listed */
+      const mc_tethered_device *d = &tethered->items[i];
+      sidebar_device *s = &devs[npaired];
+      snprintf(s->uid, sizeof s->uid, "%s", d->uid);
+      s->name = names[npaired] = wstr_dup_from_utf8(d->name && *d->name ? d->name : d->kind ? d->kind : "");
+      s->kind = SB_KIND_TETHERED;
+      s->flags = SB_DEV_TETHERED | (d->connected ? SB_DEV_ONLINE : 0) | (d->syncing ? SB_DEV_SYNCING : 0);
+      npaired++;
+    }
     for (int i = 0; i < nn; i++) {
       const mc_sync_nearby *d = &nearby->items[i];
       sidebar_device *s = &devs[npaired + nnearby];
@@ -1419,6 +1443,7 @@ static void refresh_devices(void) {
   free(devs);
   mc_sync_device_list_free(paired);
   mc_sync_nearby_list_free(nearby);
+  mc_tethered_device_list_free(tethered);
 
   /* The shown device may have left the group (the sidebar then selects Albums). */
   if (g_app.page == PAGE_DEVICE) {
@@ -1595,15 +1620,49 @@ static void analysis_present(void) {
   analysis_dialog_update(st.done, st.total);
 }
 
+/* Plays taken in from tethered devices are scrobbled while this PC scrobbles. */
+static void update_tethered_scrobbler(void) {
+  tethered_bridge_set_scrobbler(mc_settings_scrobble(g_app.settings) ? playback_scrobbler() : NULL);
+}
+
+/* Plugins were turned on or off in Settings: a device target may know a volume now. */
+static void plugins_changed(void) {
+  tethered_bridge_scan();
+  refresh_devices();
+}
+
+static void on_tethered_event(WPARAM wp, LPARAM lp) {
+  tethered_event *ev = tethered_bridge_receive(wp, lp);
+  if (!ev) return;
+  switch (ev->kind) {
+    case TETHERED_EV_DEVICES:
+      schedule_refresh();
+      break;
+    case TETHERED_EV_PROGRESS:
+      if (ev->phase == MC_TETHERED_PHASE_READING) schedule_refresh(); /* the sidebar's badge */
+      device_view_on_tethered_event(ev);
+      break;
+    case TETHERED_EV_DONE:
+      device_view_on_tethered_event(ev);
+      /* Plays and On-The-Go playlists came into the library, and the sidebar's badge goes. */
+      if (ev->result.plays_imported > 0 || ev->result.playlists_imported > 0) schedule_library_refresh();
+      schedule_refresh();
+      break;
+  }
+  free(ev);
+}
+
 static void start_sync(void) {
   restore_deleted(); /* the library just opened */
   library_opened();
   memset(g_app.syncing, 0, sizeof g_app.syncing);
   sync_bridge_start(g_app.wnd, g_app.lib, g_app.config_dir, mc_settings_device_name(g_app.settings));
   playback_set_library(g_app.lib, g_app.config_dir);
+  tethered_bridge_start(g_app.wnd, g_app.lib, g_app.config_dir); /* after playback: its scrobbler */
+  update_tethered_scrobbler();
   /* After a library switch on a device's page, it shows again on the new sync (or Albums, if
    * the refresh finds the device gone). */
-  if (g_app.page == PAGE_DEVICE) device_view_open(sync_bridge_get(), g_app.lib, sidebar_selected_device());
+  if (g_app.page == PAGE_DEVICE) open_device_page();
   refresh_devices();
   if (waiting_banner_update(sync_bridge_get())) layout(); /* nothing yet: it comes with SYNC_EV_WAITING */
   g_analysis_left = -1;
@@ -1623,6 +1682,7 @@ static void stop_sync(void) {
   g_analysis = NULL;
   pair_dialog_close_all();
   device_view_open(NULL, NULL, NULL);
+  tethered_bridge_stop(); /* before playback's scrobbler goes */
   sync_bridge_stop();
   playback_set_library(NULL, NULL);
   if (waiting_banner_update(NULL)) layout();
@@ -2144,6 +2204,12 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
 #endif
       break;
+    case WM_APP_TETHERED:
+      on_tethered_event(wp, lp);
+      return 0;
+    case WM_DEVICECHANGE:
+      tethered_bridge_device_change(wp, lp);
+      return TRUE;
     case WM_APP_SYNC:
       on_sync_event(wp, lp);
       return 0;
@@ -2916,6 +2982,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   mc_perf_set_enabled(mc_settings_bool(g_app.settings, MC_PERF_SETTING, 0) || mc_perf_env_enabled());
   mc_perf_mark_at("main_entered", main_us);
   mc_perf_mark("settings_loaded");
+  /* Plugins the settings have on: before any library or tethered device needs them. */
+  mc_plugins_load(g_app.settings, NULL, 0);
   /* From a checkout there's no asking: a library in the temp folder, unless a test wants the
    * first run itself. If that fails, the first run asks, with no Music folder to offer. */
   if (g_app.from_source && !first_run_test_music()) mc_source_library_prepare(g_app.config_dir, g_app.settings);
@@ -2987,7 +3055,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   }
 
   edit_dialog_wait();
-  mc_library_close(g_app.lib); /* sync stopped in WM_DESTROY */
+  mc_library_close(g_app.lib); /* sync stopped in WM_DESTROY, tethered devices too */
+  if (mc_plugins_flush_settings()) mc_settings_save(g_app.settings); /* what plugins stored themselves */
+  mc_plugins_unload();
   mc_settings_free(g_app.settings);
   free(g_app.config_dir);
   free(g_app.art_dir);

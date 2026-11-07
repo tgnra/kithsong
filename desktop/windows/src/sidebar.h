@@ -80,13 +80,18 @@ enum {
   SB_DEV_OTHER_GROUP = 8, /* nearby, and we're in different groups: only a tooltip says so,
                            * as pairing itself tells why it can't */
   SB_DEV_SYNCING = 16,
+  SB_DEV_TETHERED = 32,   /* a device such as an iPod, plugged into this PC (ONLINE: plugged in now)
+                           * and listed after the group's: kind is SB_KIND_TETHERED */
 };
+
+/* sidebar_device.kind of a tethered device. */
+#define SB_KIND_TETHERED 3
 
 /* A device row. The sidebar copies what it needs. */
 typedef struct sidebar_device {
   char uid[37];
   const wchar_t *name;
-  int kind; /* an mc_device_kind */
+  int kind; /* an mc_device_kind, or SB_KIND_TETHERED */
   unsigned flags;
 } sidebar_device;
 

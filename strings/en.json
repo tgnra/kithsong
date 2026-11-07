@@ -612,7 +612,7 @@
     "plugin_refused": { "text": "Couldn't load it: {0}", "note": "A plugin's state in Settings › Plugins: turned on, but it isn't running. {0} is one of the plugin_refused_ reasons." },
     "plugin_unloading": { "text": "Restart Kithsong to finish turning it off", "note": "A plugin's state in Settings › Plugins: turned off, but still loaded until the app restarts." },
     "plugin_turn_on_title": { "text": "Turn on {0}?", "note": "Title of the question asked before a plugin is turned on. {0} is its name." },
-    "plugin_turn_on_text": { "text": "A plugin is a program that runs inside Kithsong, with Kithsong's full access to your computer and your files. Only turn it on if you trust where it came from.\n\n{0}", "note": "Asked before a plugin is turned on. {0} is the plugin's file, with its full path." },
+    "plugin_turn_on_text": { "text": "A plugin is a program that runs inside Kithsong, with Kithsong's full access to your computer and your files. Only turn it on if you trust where it came from.\n\n{0}", "note": "Asked before a plugin is turned on. {0} is the plugin's file name, such as kithsong-ipod.dll (its full path is on its row)." },
     "plugin_turn_on": { "text": "_Turn on", "note": "Button: turns a plugin on, after plugin_turn_on_text." },
     "plugin_change_failed": { "text": "Couldn't change it ({0}).", "note": "Turning a plugin on or off, or changing one of its settings, failed. {0} is the reason." },
 
@@ -626,6 +626,7 @@
     "tethered_ejected": { "text": "{0} can be unplugged now.", "note": "After Eject. {0} is the device's name." },
     "tethered_eject_failed": { "text": "Couldn't eject it ({0}).", "note": "{0} is the reason." },
     "tethered_forget": { "text": "_Forget…", "note": "Button on the page of a device such as an iPod that isn't plugged in: asks, then removes it from the device list." },
+    "tethered_forget_confirm": { "text": "_Forget", "note": "Button in the question tethered_forget asks: forgets the device." },
     "tethered_forget_title": { "text": "Forget {0}?", "note": "Title of the question Forget… asks. {0} is the device's name." },
     "tethered_forget_text": { "text": "What it syncs is forgotten on this computer. The music on it stays where it is, and if it's plugged in again it's set up afresh.", "note": "Asked by Forget… on the page of a device such as an iPod." },
     "tethered_forget_failed": { "text": "Couldn't forget it ({0}).", "note": "{0} is the reason." },

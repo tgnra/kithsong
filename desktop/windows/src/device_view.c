@@ -1469,7 +1469,7 @@ static void forget_device(void) {
   mc_wformat(title, 256, mc_str(MC_STR_TETHERED_FORGET_TITLE), MC_S(u8(g_dv.name)));
   swprintf(text, 1024, L"%ls\n\n%ls", title, mc_wstr(MC_STR_TETHERED_FORGET_TEXT));
   if (!confirm_dialog(g_dv.parent, mc_wstr(MC_STR_APP_NAME), text, MB_ICONWARNING,
-                      mc_wstr_mnemonic(MC_STR_TETHERED_FORGET), mc_wstr_mnemonic(MC_STR_CANCEL), TRUE))
+                      mc_wstr_mnemonic(MC_STR_TETHERED_FORGET_CONFIRM), mc_wstr_mnemonic(MC_STR_CANCEL), TRUE))
     return;
   flush();
   mc_status st = mc_tethered_forget(g_dv.teth, g_dv.uid);

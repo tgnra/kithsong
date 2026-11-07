@@ -37,6 +37,7 @@ add_executable(kithsong WIN32
   src/pick_folder.c
   src/playback.c
   src/playlist_dialogs.c
+  src/plugins_view.c
   src/prompt_dialog.c
   src/queue_popup.c
   src/radio_menu.c
