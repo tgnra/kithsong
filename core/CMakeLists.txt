@@ -133,6 +133,7 @@ add_library(kithcore STATIC
   src/sync/rows.c
   src/sync/session.c
   src/sync/plan.c
+  src/sync/tethered.c
   src/sync/orphans.c
   src/sync/transfer.c
   src/sync/encode.c

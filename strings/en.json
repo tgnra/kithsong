@@ -599,6 +599,8 @@
     "plugin_refused_load": { "text": "the file couldn't be loaded ({0})", "note": "Why a plugin that was turned on isn't running, after \"Couldn't load it:\" in Settings › Plugins. {0} is the system's own error." },
     "plugin_refused_entry": { "text": "it isn't a Kithsong plugin", "note": "Why a plugin isn't running: the file has no plugin entry point." },
     "plugin_refused_init": { "text": "it didn't start", "note": "Why a plugin isn't running: it said it couldn't start." },
+    "tethered_otg_playlist": { "text": "On-The-Go {0:d}", "note": "The name of a playlist made on an iPod (its On-The-Go playlist) once it's taken into the library. {0} counts them: 1, 2..." },
+    "tethered_otg_playlist_device": { "text": "On-The-Go {0:d} ({1})", "note": "The same, when the library already has a playlist by the first name: {1} is the iPod's own name." },
     "plugin_refused_abi": { "text": "it was made for another version of Kithsong", "note": "Why a plugin isn't running: it must be rebuilt for this version of the app." },
 
     "nothing_playing": "Nothing playing",
