@@ -245,21 +245,21 @@ static void test_device(const char *root) {
     CHECK_EQ(n, 2);
     if (n == 2) CHECK(otg[0].n == 2 && strcmp(otg[0].keys[0], keys[2]) == 0);
 
-    /* Taken in now: deleted at once, the nonce renewed, the waiting removal done. */
+    /* Taken in now: deleted at once, the waiting removal done once nothing waits, and the
+     * nonce renewed then too (not while the OTG files wait: their token must hold). */
     CHECK_EQ(ipod_device_remove(dev, keys[0], NULL), 0);
     CHECK_EQ(ipod_device_done(dev, IPOD_DONE_PLAYS, NULL), 0);
     CHECK(!exists_rel(mount, "iPod_Control/iTunes/Play Counts"));
     CHECK(exists_rel(mount, "iPod_Control/iTunes/OTGPlaylistInfo"));
     CHECK(ipod_device_find(dev, keys[0]) != NULL); /* the OTG files still wait */
-    CHECK(strlen(ipod_device_records_nonce(dev)) == 32);
-    CHECK(exists_rel(mount, "iPod_Control/kithsong-records"));
-    char nonce1[40];
-    snprintf(nonce1, sizeof nonce1, "%s", ipod_device_records_nonce(dev));
+    CHECK(!*ipod_device_records_nonce(dev));
+    CHECK(!exists_rel(mount, "iPod_Control/kithsong-records"));
     CHECK(ipod_device_playcounts_bytes(dev, &n) == NULL);
     CHECK_EQ(ipod_device_done(dev, IPOD_DONE_PLAYLISTS, NULL), 0);
     CHECK(!exists_rel(mount, "iPod_Control/iTunes/OTGPlaylistInfo"));
     CHECK(!exists_rel(mount, "iPod_Control/iTunes/OTGPlaylistInfo_1"));
-    CHECK(strcmp(nonce1, ipod_device_records_nonce(dev)) != 0);
+    CHECK(strlen(ipod_device_records_nonce(dev)) == 32);
+    CHECK(exists_rel(mount, "iPod_Control/kithsong-records"));
     CHECK(ipod_device_find(dev, keys[0]) == NULL);
     CHECK(ipod_device_otg_bytes(dev, &n) == NULL);
     CHECK_EQ(ipod_device_commit(dev, NULL), 0);

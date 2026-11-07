@@ -828,7 +828,9 @@ int ipod_device_done(ipod_device *dev, unsigned what, ipod_error *err) {
     }
   }
   if (r == 0) dev->done |= what;
-  if (cleared) renew_nonce(dev);
+  /* Renewed only once nothing waits: a token made this session for what still waits must
+   * come out the same if the iPod is unplugged before that is cleared too. */
+  if (cleared && !records_waiting(dev)) renew_nonce(dev);
   if (!records_waiting(dev)) remove_deferred(dev);
   return r;
 }

@@ -162,16 +162,17 @@ const ipod_otg_playlist *ipod_device_otg_playlists(const ipod_device *dev, size_
  * little-endian u32), for an "already imported" hash; NULL when there are none. */
 const uint8_t *ipod_device_otg_bytes(const ipod_device *dev, size_t *len);
 
-/* A random value that changes each time ipod_device_done() clears something, kept on the
- * iPod (iPod_Control/kithsong-records), "" before the first time. Hashed into "already
- * imported" tokens, so On-The-Go lists made again later with the same tracks (the same
- * bytes) aren't taken for ones already imported. */
+/* A random value that changes each time ipod_device_done() has cleared everything waiting,
+ * kept on the iPod (iPod_Control/kithsong-records), "" before the first time. Hashed into
+ * "already imported" tokens, so On-The-Go lists made again later with the same tracks (the
+ * same bytes) aren't taken for ones already imported. It never changes while anything
+ * still waits, so a token for that comes out the same after an unplug. */
 const char *ipod_device_records_nonce(const ipod_device *dev);
 
 enum { IPOD_DONE_PLAYS = 1, IPOD_DONE_PLAYLISTS = 2 };
 /* What the caller has taken in, safely: deletes Play Counts (IPOD_DONE_PLAYS) and the OTG
- * files (IPOD_DONE_PLAYLISTS) now, then renews the records nonce, and carries out removals
- * that were put off once neither is waiting. Plays and playlists read at open are gone
+ * files (IPOD_DONE_PLAYLISTS) now; once neither is waiting, renews the records nonce and
+ * carries out the removals that were put off. Plays and playlists read at open are gone
  * afterwards. */
 int ipod_device_done(ipod_device *dev, unsigned what, ipod_error *err);
 
