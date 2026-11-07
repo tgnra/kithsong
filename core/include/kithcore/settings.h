@@ -90,6 +90,12 @@ mc_status mc_settings_set_volume(mc_settings *s, int volume);
 int mc_settings_scrobble(const mc_settings *s);
 mc_status mc_settings_set_scrobble(mc_settings *s, int on);
 
+/* Replaces dst's plugins section (what mc_plugins_load()'s settings hold: which are on, what's
+ * known of them and their settings) with src's, the rest of dst unchanged. For a frontend that
+ * keeps the settings it gave mc_plugins_load() but loads settings.json afresh to change
+ * anything else: copy into a fresh load, then save that. */
+mc_status mc_settings_copy_plugins(mc_settings *dst, const mc_settings *src);
+
 #ifdef __cplusplus
 }
 #endif

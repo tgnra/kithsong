@@ -248,6 +248,18 @@ int mc_settings_scrobble(const mc_settings *s) { return mc_settings_bool(s, "scr
 
 mc_status mc_settings_set_scrobble(mc_settings *s, int on) { return mc_settings_set_bool(s, "scrobble", on); }
 
+mc_status mc_settings_copy_plugins(mc_settings *dst, const mc_settings *src) {
+  if (!dst || !src) return MC_ERR_INVALID_ARG;
+  if (dst == src) return MC_OK;
+  yyjson_mut_val *root = yyjson_mut_doc_get_root(dst->doc);
+  yyjson_mut_val *from = yyjson_mut_obj_get(yyjson_mut_doc_get_root(src->doc), "plugins");
+  yyjson_mut_val *copy = NULL;
+  if (from && !(copy = yyjson_mut_val_mut_copy(dst->doc, from))) return MC_ERR_NOMEM;
+  yyjson_mut_obj_remove_key(root, "plugins");
+  if (copy && !yyjson_mut_obj_add_val(dst->doc, root, "plugins", copy)) return MC_ERR_NOMEM;
+  return MC_OK;
+}
+
 /* --- Plugins (settings_internal.h) ---
  * "plugins": {"enabled": [file ids], "known": {file id: {"id", "name", "version"}},
  *             "settings": {plugin id: {key: text}}} */

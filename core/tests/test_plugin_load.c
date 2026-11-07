@@ -139,6 +139,22 @@ int main(int argc, char **argv) {
   CHECK(mc_plugins_find_encoder("wav", &enc) == MC_OK);
   CHECK(mc_plugins_flush_settings() == 0); /* init didn't run again */
   CHECK(mc_settings_save(s) == MC_OK);
+
+  /* The plugins section copied into settings loaded afresh, the rest of them kept. */
+  {
+    mc_settings *fresh = NULL;
+    CHECK(mc_settings_load(cfg, &fresh) == MC_OK);
+    CHECK(mc_settings_set_volume(fresh, 42) == MC_OK);
+    CHECK(mc_plugins_set_option("kith_test_folder", "level", "3") == MC_OK); /* in s only */
+    CHECK(!strcmp(stored(fresh, "ng.kithso.test.folder", "level", &v), "7"));
+    CHECK(mc_settings_copy_plugins(fresh, s) == MC_OK);
+    CHECK(mc_settings_volume(fresh) == 42);
+    CHECK(mc_settings_plugin_enabled(fresh, "kith_test_folder"));
+    CHECK(!strcmp(stored(fresh, "ng.kithso.test.folder", "level", &v), "3"));
+    CHECK(mc_settings_copy_plugins(NULL, s) == MC_ERR_INVALID_ARG);
+    mc_settings_free(fresh);
+    CHECK(mc_plugins_set_option("kith_test_folder", "level", "7") == MC_OK); /* as before */
+  }
   mc_plugins_unload();
   mc_settings_free(s);
 
