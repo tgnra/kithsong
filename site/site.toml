@@ -15,7 +15,7 @@ logo_dark = "/logo-dark.svg"
 platform = "windows"
 name = "Windows"
 store = "Microsoft Store"
-href = "#"
+href = "ms-windows-store://pdp/?productid=9PFD50NWXCT5"
 
 [[downloads]]
 platform = "linux"

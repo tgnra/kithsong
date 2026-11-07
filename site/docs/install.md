@@ -8,10 +8,10 @@ description: Where to get Kithsong for Windows, Linux and Android.
 
 Windows 10 version **1903** or newer is required to run this application.
 
-The recommended way to install Kithsong on Windows is using the [Microsoft Store](https://isitchristmas.com). This will give you automatic updates and the firewall is configured automatically. If you don't want to use the Microsoft Store app, you can install with Winget using the following command:
+The recommended way to install Kithsong on Windows is using the [Microsoft Store](ms-windows-store://pdp/?productid=9PFD50NWXCT5). This will give you automatic updates and the firewall is configured automatically. If you don't want to use the Microsoft Store app, you can install with Winget using the following command:
 
 ```powershell
-winget install TODO --source msstore
+winget install 9PFD50NWXCT5 --source msstore
 ```
 
 Alternatively, there are portable zips with a .exe built for each release, available [here on Github](https://github.com/tgnra/kithsong/releases)
