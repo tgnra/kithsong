@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
 import ng.kithso.android.data.Library
+import kotlin.math.abs
 
 // Home as a strip of columns, each as wide as a pane, with the window showing two at a time: the
 // left column (radio, recents, playlists, album groups), the middle one (albums, artists), and
@@ -66,14 +67,14 @@ enum class HomeColumn { All, Left, Middle }
 /** Where the strip's columns go, for [panes] that aren't exactly equal either side of a hinge. */
 @Immutable
 internal data class HomeStrip(
-    /** Where the middle column rests. It's as wide as the wider pane, so as to fill it. */
+    /** Where the middle column rests: the pages' pane. */
     val middle: PaneArea,
     /**
      * How wide its content is. The narrower pane's width, in both: re-laying it out for each pane
      * would change the grid, and move what was tapped.
      */
     val middleContent: Dp,
-    /** How far the left column goes to get out of the way; negative is left. */
+    /** How far the left column goes to stay clear of the middle one; negative is left. */
     val leftMove: Dp,
     /** How far the middle column goes, to be centred in the main pane. */
     val middleMove: Dp,
@@ -82,14 +83,15 @@ internal data class HomeStrip(
 internal fun homeStrip(panes: Panes): HomeStrip {
     val main = panes.main
     val pages = panes.pages
-    val width = maxOf(main.width, pages.width)
     val rest = pages.x + pages.width / 2
+    val moved = main.x + main.width / 2 - rest
+    val leftMove = maxOf(main.width, abs(moved.value).dp)
     return HomeStrip(
         // It clears both sides' insets, as it's at each in turn, and must not move inside itself.
-        middle = PaneArea(rest - width / 2, width, pages.height, AllSides),
+        middle = pages.copy(sides = AllSides),
         middleContent = minOf(main.width, pages.width),
-        leftMove = if (main.x < pages.x) -main.width else main.width,
-        middleMove = main.x + main.width / 2 - rest,
+        leftMove = if (main.x < pages.x) -leftMove else leftMove,
+        middleMove = moved,
     )
 }
 

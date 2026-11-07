@@ -229,7 +229,17 @@ class WindowLayoutTest {
         // Moved, centred in the left one, which it just fits.
         val centre = strip.middle.x + strip.middle.width / 2 + strip.middleMove
         assertEquals(225.dp, centre)
-        assertEquals((-450).dp, strip.leftMove)
+        // Further than its own width, so that the middle column's colour doesn't catch it up.
+        assertEquals((-500).dp, strip.leftMove)
+    }
+
+    @Test
+    fun whereThePagesPaneIsTheNarrowerTheMiddleColumnStaysOutOfTheLeftOne() {
+        val panes = panesFor(layout(1000, 800, hinge(450.dp)), rtl = true)
+        val strip = homeStrip(panes)
+        assertEquals(panes.pages.x, strip.middle.x)
+        assertEquals(panes.pages.width, strip.middle.width)
+        assertEquals(550.dp, strip.leftMove)
     }
 
     @Test
