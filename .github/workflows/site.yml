@@ -4,10 +4,10 @@ on:
   push:
     branches: [master]
     paths: ["site/**", ".github/workflows/site.yml"]
-  # Publishing a release brings its Flatpak repo to the site. Not prereleases: "released"
-  # skips them, so a release candidate never reaches flatpak update.
-  release:
-    types: [released]
+  # Publishing a release brings its Flatpak repo to the site, once the check below sees it. The
+  # release event never started a run here, so this doesn't rely on it.
+  schedule:
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -24,20 +24,30 @@ defaults:
     working-directory: site
 
 jobs:
-  # The github-pages environment only takes master, and a release event runs on its tag, so
-  # hand over to a run on master.
-  redeploy:
-    if: github.event_name == 'release'
+  # A scheduled run only goes on if the latest release isn't the one on the site. Drafts and
+  # prereleases are never the latest, so a release candidate doesn't reach flatpak update.
+  check:
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
+    outputs:
+      deploy: ${{ steps.check.outputs.deploy }}
     steps:
-      - env:
+      - id: check
+        working-directory: ${{ github.workspace }}
+        env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run site.yml --repo "$GITHUB_REPOSITORY" --ref master
+        run: |
+          deploy=true
+          if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+            latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+            live="$(curl -fsS "https://kithso.ng/flatpak-release.txt?t=$(date +%s)" || true)"
+            [[ "$latest" == "$live" ]] && deploy=false
+            echo "Latest release: $latest. On the site: ${live:-unknown}."
+          fi
+          echo "deploy=$deploy" >>"$GITHUB_OUTPUT"
 
   build:
-    if: github.event_name != 'release'
+    needs: check
+    if: needs.check.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +97,7 @@ jobs:
             exit 1
           fi
           read -r tag assets <<<"$latest"
+          echo "$tag" >static/flatpak-release.txt
           if [[ " $assets " != *" $asset "* ]]; then
             echo "::notice::$tag has no $asset, so no Flatpak repo."
             exit 0
