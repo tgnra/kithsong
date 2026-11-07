@@ -3,6 +3,8 @@ package ng.kithso.android.ui
 import android.widget.Toast
 import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -819,15 +821,17 @@ private fun MenuSheet(actions: PlaylistActions, title: String, subtitle: String,
         action()
     }
     ModalBottomSheet(onDismissRequest = { if (actions.sheet == current) actions.sheet = null }, sheetState = state) {
-        Column(Modifier.navigationBarsPadding().padding(bottom = 8.dp)) {
-            SheetTitle(title, subtitle)
-            for (item in items) {
-                ListItem(
-                    headlineContent = { Text(item.label) },
-                    leadingContent = { Icon(item.icon, contentDescription = null) },
-                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.clickable { pick(item.onClick) },
-                )
+        SheetScale {
+            Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 8.dp)) {
+                SheetTitle(title, subtitle)
+                for (item in items) {
+                    ListItem(
+                        headlineContent = { Text(item.label) },
+                        leadingContent = { Icon(item.icon, contentDescription = null) },
+                        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        modifier = Modifier.clickable { pick(item.onClick) },
+                    )
+                }
             }
         }
     }
@@ -885,29 +889,31 @@ private fun AddToSheet(
         then()
     }
     ModalBottomSheet(onDismissRequest = { if (actions.sheet == current) actions.sheet = null }, sheetState = state) {
-        SheetTitle(title, null)
-        LazyColumn(Modifier.navigationBarsPadding()) {
-            item(key = "new") {
-                ListItem(
-                    headlineContent = { Text(newLabel) },
-                    leadingContent = { Icon(Icons.Add, contentDescription = null) },
-                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.clickable { close(onNew) },
-                )
-            }
-            items(choices.orEmpty(), key = { it.uid }) { choice ->
-                val toast = stringResource(added, choice.name)
-                ListItem(
-                    headlineContent = { Text(choice.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    leadingContent = { Icon(icon, contentDescription = null) },
-                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    modifier = Modifier.clickable {
-                        close {
-                            onPick(choice)
-                            Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                )
+        SheetScale {
+            SheetTitle(title, null)
+            LazyColumn(Modifier.navigationBarsPadding()) {
+                item(key = "new") {
+                    ListItem(
+                        headlineContent = { Text(newLabel) },
+                        leadingContent = { Icon(Icons.Add, contentDescription = null) },
+                        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        modifier = Modifier.clickable { close(onNew) },
+                    )
+                }
+                items(choices.orEmpty(), key = { it.uid }) { choice ->
+                    val toast = stringResource(added, choice.name)
+                    ListItem(
+                        headlineContent = { Text(choice.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingContent = { Icon(icon, contentDescription = null) },
+                        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                        modifier = Modifier.clickable {
+                            close {
+                                onPick(choice)
+                                Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                    )
+                }
             }
         }
     }

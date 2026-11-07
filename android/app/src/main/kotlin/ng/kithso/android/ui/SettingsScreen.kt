@@ -282,7 +282,7 @@ fun ScreenHeader(title: String, onBack: () -> Unit, actions: @Composable RowScop
     val heading = @Composable { modifier: Modifier ->
         Text(
             title,
-            style = MaterialTheme.typography.headlineMedium,
+            style = if (LocalWindowLayout.current.dense) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineMedium,
             modifier = modifier.semantics { heading() },
         )
     }

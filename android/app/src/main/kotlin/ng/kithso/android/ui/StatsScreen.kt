@@ -58,7 +58,7 @@ fun StatsScreen(source: LibrarySource, bottomPadding: Dp, onBack: () -> Unit) {
             item(key = "header") { ScreenHeader(stringResource(R.string.stats_title), onBack) }
             val s = stats
             if (s != null && s.all.tracks == 0L) {
-                item(key = "empty") { EmptyStats(Modifier.fillParentMaxHeight(0.7f)) }
+                item(key = "empty") { EmptyStats(if (LocalWindowLayout.current.dense) Modifier else Modifier.fillParentMaxHeight(0.7f)) }
             } else if (s != null) {
                 item(key = "here") {
                     SettingsHeading(stringResource(R.string.stats_here))

@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -265,7 +267,7 @@ private fun ReviewSheet(progress: ImportProgress, importer: Importer, onClose: (
         if (items.isEmpty() && open == null) onClose()
     }
     ModalBottomSheet(onDismissRequest = onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.navigationBarsPadding()) {
+        Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding()) {
             val key = open
             if (key == null) {
                 Text(

@@ -238,6 +238,18 @@ fun Pane(area: PaneArea, content: @Composable BoxScope.() -> Unit) {
 }
 
 /**
+ * [content] at the window's [LayoutScale], for inside a bottom sheet: it has a view of its own,
+ * which goes back to the system's density, as a dialog's and a menu's do. Those are left at that,
+ * as they fit and what's in them is short, and sheets' lists are what get long.
+ */
+@Composable
+fun SheetScale(content: @Composable () -> Unit) {
+    val scale = LocalWindowLayout.current.scale
+    val density = LocalDensity.current
+    CompositionLocalProvider(LocalDensity provides remember(density, scale) { density.scaledBy(scale) }, content = content)
+}
+
+/**
  * Keeps a fold for as long as the window stays the size it was seen at. On folding, the system
  * stops reporting the fold more than a second before the window shrinks, and in between an open
  * foldable would look like a tablet, and go Large.

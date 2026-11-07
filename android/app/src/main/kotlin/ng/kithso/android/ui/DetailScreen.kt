@@ -576,7 +576,8 @@ private fun DetailHeader(
     onMenu: (() -> Unit)? = null,
     menuDescription: String = "",
 ) {
-    val short = isShortPane()
+    // The art beside the buttons, if they leave its title the width to be read.
+    val short = isShortPane() && LocalPane.current.width >= MinShortHeaderWidth
     val back = @Composable {
         IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp, top = 4.dp)) {
             Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back))
@@ -606,7 +607,7 @@ private fun DetailHeader(
                 Spacer(Modifier.weight(1f))
                 edit()
             }
-            if (list != null) DetailTitle(kind, list, 128.dp, Modifier.padding(start = 16.dp))
+            if (list != null) DetailTitle(kind, list, if (LocalWindowLayout.current.dense) 72.dp else 128.dp, Modifier.padding(start = 16.dp))
         }
     }
 }
@@ -629,7 +630,7 @@ private fun DetailTitle(kind: CollectionRef.Kind, list: TrackList, artSize: Dp, 
         Column(Modifier.padding(start = 16.dp).widthIn(min = 0.dp)) {
             Text(
                 list.title,
-                style = MaterialTheme.typography.headlineSmall,
+                style = if (LocalWindowLayout.current.dense) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.semantics { heading() },
@@ -742,6 +743,9 @@ private fun EditAlbumRow(album: Album, onRemove: () -> Unit, handle: Modifier, l
         modifier = modifier,
     )
 }
+
+/** A short pane narrower than this has [DetailHeader]'s buttons over its art, not either side of it. */
+private val MinShortHeaderWidth = 360.dp
 
 private const val ENTRY_KEY = "entry:"
 private const val ALBUM_KEY = "album:"
