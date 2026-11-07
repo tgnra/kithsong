@@ -50,6 +50,7 @@ add_executable(kithsong WIN32
   src/stats_dialog.c
   src/sync_bridge.c
   src/taskbar.c
+  src/tethered_bridge.c
   src/testing_view.c
   src/theme.c
   src/track_list.c
