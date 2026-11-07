@@ -64,7 +64,11 @@ import kotlin.math.abs
 /** What a [MainScreen] shows of the library: all of it in one list, or one column of [HomeLayout]. */
 enum class HomeColumn { All, Left, Middle }
 
-/** Where the strip's columns go, for [panes] that aren't exactly equal either side of a hinge. */
+/**
+ * Where the strip's columns go, for [panes] that aren't exactly equal either side of a hinge.
+ * [middle] is in the window's dp, as any [PaneArea] is, and the rest in what's drawn, whose dp are
+ * scaled in a dense window: see [LayoutScale].
+ */
 @Immutable
 internal data class HomeStrip(
     /** Where the middle column rests: the pages' pane. */
@@ -80,7 +84,7 @@ internal data class HomeStrip(
     val middleMove: Dp,
 )
 
-internal fun homeStrip(panes: Panes): HomeStrip {
+internal fun homeStrip(panes: Panes, scale: LayoutScale = LayoutScale.Regular): HomeStrip {
     val main = panes.main
     val pages = panes.pages
     val rest = pages.x + pages.width / 2
@@ -89,9 +93,9 @@ internal fun homeStrip(panes: Panes): HomeStrip {
     return HomeStrip(
         // It clears both sides' insets, as it's at each in turn, and must not move inside itself.
         middle = pages.copy(sides = AllSides),
-        middleContent = minOf(main.width, pages.width),
-        leftMove = if (main.x < pages.x) -leftMove else leftMove,
-        middleMove = moved,
+        middleContent = minOf(main.width, pages.width) / scale.size,
+        leftMove = (if (main.x < pages.x) -leftMove else leftMove) / scale.size,
+        middleMove = moved / scale.size,
     )
 }
 
@@ -134,7 +138,7 @@ internal fun HomeLayout(
         saved.SaveableStateProvider("list") { content(HomeColumn.All) }
     } else {
         saved.SaveableStateProvider("columns") {
-            val strip = homeStrip(panes)
+            val strip = homeStrip(panes, LocalWindowLayout.current.scale)
             Pane(panes.main) {
                 Box(
                     Modifier
@@ -283,7 +287,7 @@ internal fun WideHeader(
     BoxWithConstraints(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars.inPane())) {
         val room = maxWidth - BrowseGutter - 4.dp - HeaderIconSize * HEADER_ICONS
         Row(
-            Modifier.fillMaxWidth().height(HeaderHeight).padding(start = BrowseGutter, end = 4.dp),
+            Modifier.fillMaxWidth().height(headerHeight()).padding(start = BrowseGutter, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val name = stringResource(R.string.app_name)

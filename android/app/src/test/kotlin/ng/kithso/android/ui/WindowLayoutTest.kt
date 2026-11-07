@@ -243,6 +243,18 @@ class WindowLayoutTest {
     }
 
     @Test
+    fun aDenseWindowDrawsTheStripInItsScaledDp() {
+        // A phone on its side: drawn dp are 0.85 of real ones, so there are that many more of them.
+        val strip = homeStrip(panesFor(layout(850, 400)), LayoutScale.Dense)
+        assertEquals(500f, strip.middleContent.value, 0.01f)
+        assertEquals(-500f, strip.leftMove.value, 0.01f)
+        assertEquals(-500f, strip.middleMove.value, 0.01f)
+        // Its pane stays in the window's, as Pane does the scaling.
+        assertEquals(425.dp, strip.middle.x)
+        assertEquals(425.dp, strip.middle.width)
+    }
+
+    @Test
     fun rightToLeftTheStripGoesTheOtherWay() {
         val strip = homeStrip(panesFor(layout(700, 800), rtl = true))
         assertEquals(0.dp, strip.middle.x)

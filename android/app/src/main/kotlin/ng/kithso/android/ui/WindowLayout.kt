@@ -150,7 +150,7 @@ data class WindowLayout(
  * A part of the window something is drawn in. [sides] are the window's edges it touches, the
  * only ones whose insets are its to clear: see [inPane]. Its sizes are the window's dp, as
  * [WindowLayout]'s are, for comparing with the thresholds; what's drawn is in scaled dp, for which
- * see [drawnHeight].
+ * see [drawnHeight] and [drawnWidth].
  */
 @Immutable
 data class PaneArea(
@@ -238,6 +238,10 @@ fun isShortPane(): Boolean = LocalPane.current.height.whole() < ShortBelowHeight
 /** The pane's height in what's being drawn, whose dp are scaled: see [LayoutScale]. */
 @Composable
 fun drawnHeight(): Dp = LocalPane.current.height / LocalWindowLayout.current.scale.size
+
+/** The pane's width in what's being drawn, as [drawnHeight] is its height. */
+@Composable
+fun drawnWidth(): Dp = LocalPane.current.width / LocalWindowLayout.current.scale.size
 
 /** [content] in [area], which [LocalPane] then says, at the area's place in the window. */
 @Composable

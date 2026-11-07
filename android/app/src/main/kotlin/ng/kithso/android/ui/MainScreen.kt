@@ -278,7 +278,7 @@ internal val HeaderHeight = 64.dp
 private val DenseHeaderHeight = 56.dp
 
 @Composable
-private fun headerHeight() = if (LocalWindowLayout.current.dense) DenseHeaderHeight else HeaderHeight
+internal fun headerHeight() = if (LocalWindowLayout.current.dense) DenseHeaderHeight else HeaderHeight
 
 /** An album tile's or [TileRow] tile's title and artist, under its art and with the space below the row. */
 private val AlbumLabelsHeight = 58.dp
@@ -392,7 +392,7 @@ fun MainScreen(
         ArtBackdrop(
             rememberOnScreenArtColors(listState) { index -> items.getOrNull(index)?.art.orEmpty() },
             // The middle column's list can be narrower than its pane, either side of an off-centre hinge.
-            Modifier.matchParentSize().then(if (column == HomeColumn.Middle) Modifier.requiredWidth(LocalPane.current.width) else Modifier),
+            Modifier.matchParentSize().then(if (column == HomeColumn.Middle) Modifier.requiredWidth(drawnWidth()) else Modifier),
         )
 
         LazyColumn(
