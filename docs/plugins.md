@@ -86,7 +86,7 @@ The plugin provides:
 | `plays_read(target)` *(optional)* | Plays made on the device since the last sync: for each track key, how many and when the last one was (see Plays from the device). |
 | `playlists_read(target)` *(optional)* | Playlists made on the device: for the iPod, its On-The-Go playlists, each a name and a list of track keys. |
 | `playlists_write(target, playlists)` *(optional)* | Makes the device's Kithsong playlists the ones the profile selects, leaving playlists made on the device alone. |
-| `device_done(target, what)` | Clears what core has taken in (`plays`, `playlists`), once it is safely in the library: for the iPod, deletes `Play Counts` and the `OTGPlaylistInfo` files at the next `commit()`. |
+| `device_done(target, what)` | Clears what core has taken in (`plays`, `playlists`), once it is safely in the library: for the iPod, deletes `Play Counts` and the `OTGPlaylistInfo` files there and then. Nothing else ever deletes them. |
 | `commit(target)` | Writes the device's database. Core calls it every 50 tracks or 2 minutes during a sync, and at the end, so unplugging loses little. |
 | `close(target)` | Closes it. |
 | `eject(mount_path)` *(optional)* | Flushes and ejects, if the device needs more than the OS's own eject. |
@@ -180,7 +180,7 @@ writes the library's counts back:
    `sync.db` (`tethered_imports`: device uid, the token `plays_read()` gives, which for the
    iPod is a hash of the `Play Counts` file, and the time).
    A `Play Counts` file whose hash was already imported is cleared without being read again,
-   so an unplug between the import and the commit never doubles anything.
+   so an unplug between the import and the clear never doubles anything.
 5. Then every track Kithsong wrote gets the library's play count and last played time (the
    totals of `track_plays` across devices, the device's own plays included) through
    `update()` wherever they, or its title, artist or album, differ from what `list()`
@@ -238,23 +238,81 @@ them under the plugin.
 ## The iPod plugin
 
 It lives in this repository as `plugins/ipod/`, built when `KITH_BUILD_PLUGINS` is on, and
-ships as a separate download rather than inside the app.
+ships as a separate download rather than inside the app. As built:
 
+- **Layout.** `kithipod` (`plugins/ipod/src`, `include/kithipod`) is a static library that
+  knows nothing of the ABI; `plugins/ipod/plugin` wraps it as `kithsong-ipod.dll` /
+  `kithsong-ipod.so` (file id `kithsong-ipod`, plugin id `ng.kithso.ipod`), which exports
+  `kith_plugin_init` alone (on Windows with libc++ linked in, as the app has it). The build
+  puts it where the app built beside it looks first: `<build>/desktop/windows/plugins` on
+  Windows, `<build>/desktop/lib/kithsong/plugins` on Linux, with LAME's `COPYING` and ALAC's
+  `LICENSE` next to it (`kithsong-ipod.LAME-COPYING.txt`, `kithsong-ipod.ALAC-LICENSE.txt`).
+  `cmake --install <build> --component kithsong-ipod` installs the three to `<prefix>/plugins`
+  or `<prefix>/lib/kithsong/plugins`; a plain install leaves them out.
+- **The device target**, `ipod`:
+  - `probe()`: `iPod_Control/iTunes/iTunesDB` exists, SysInfo's model isn't a shuffle or one
+    that needs the hash, and the database header has no hash. A model missing from the table
+    is taken (the database is what rules a model out); a hashed or shuffle one is logged.
+  - `open()`: the id is `guid_<FirewireGuid>`, else `serial_<serial>`, else `db_<mhbd id>`
+    (SysInfo's, in the characters core takes); the name is the master playlist's, the model
+    SysInfo's in English ("iPod (4th generation)"), and capacity and free space the
+    volume's. Formats: `alac` up to 16 bits, 48 kHz, two channels; `mp3` and `aac` up to
+    48 kHz, two channels and 320 kbps. Defaults: lossless as `alac`, lossy as `mp3` `v0`.
+    It has playlists.
+  - `list()`: every track in database order; the key is the `mhit`'s 64-bit dbid in hex.
+    `track_uid`, `file_uid`, format, setting and hash come from `iPod_Control/kithsong.json`;
+    a track with no entry there (iTunes') has no `track_uid`, and its format is read from the
+    database (`mp3`, `alac` or `aac`).
+  - `put()`: copies the file into `iPod_Control/Music/Fnn/`, reads its sample rate (an MP3's
+    frame header and VBR header, an M4A's `mdhd`), and writes the `mhit` with the track's tags,
+    play count and last played time, and the cover (unless the `artwork` option is off) into
+    the ArtworkDB on models that show covers. Replacing a track keeps its dbid, place,
+    playlists and the iPod's rating. `update()` rewrites tags and counts and keeps the cover.
+  - `file_path()`: the file on the volume, with the platform's separators.
+  - `plays_read()` / `playlists_read()`: the plays and On-The-Go lists read at `open()`. The
+    tokens are SHA-256 of a tag, the iPod's records nonce (below) and the `Play Counts` file,
+    or the OTG files' bytes; "" when there's nothing to take in (no file, or one of nothing
+    but zeros). The lists have no name: core names them.
+  - `playlists_write()`: Kithsong's playlists are recorded in `kithsong.json` (library uid →
+    the iPod playlist's id and name), and only those are replaced, renamed (a new playlist)
+    or deleted. A name an iTunes playlist already has is written as "Name (Kithsong)".
+  - `device_done()` deletes `Play Counts` or the OTG files at once; `commit()` writes the
+    ArtworkDB, the iTunesDB (copying the one it first replaces in a session to
+    `iTunesDB.kithsong-backup`) and `kithsong.json`, each atomically, and only if changed.
+  - No `eject()`: every write is flushed as it's made, so the OS's own eject is enough.
+- **Plays are never lost.** `Play Counts` and the OTG files are deleted by `device_done()`
+  and nothing else, so a commit by a core that hasn't taken them in (one that failed before
+  it got there, or doesn't read plays) leaves them on the iPod byte for byte, and they stay
+  true for the new database: tracks are only added at its end or changed in place, and a
+  removal waits while either file holds something (the track stays, still in
+  `kithsong.json`, so the next sync removes it). Files that hold nothing are deleted when
+  the database is rewritten, as iTunes does. The **records nonce**
+  (`iPod_Control/kithsong-records`, random) is renewed once `device_done()` has cleared
+  everything waiting, never before: On-The-Go lists made again later with the same tracks
+  have the same bytes, and the nonce tells them from ones already imported, while an unplug
+  between an import and its clear still gives the same token.
+- **Options**: `artwork`, a switch, on by default ("Album art"). Strings are in English;
+  the plugin picks a table by `host->string("language")` and falls back to English.
+- **Encoders**: one encoder with two formats. `alac` (Apple's reference encoder, Apache-2.0,
+  in an M4A with iTunes-style tags and the cover), 16-bit, or 24-bit when the source has more
+  and nothing caps it; `mp3` (LAME, LGPL-2.0, with an ID3v2.3 tag) at `v0`, `v2`, `320`,
+  `256`, `192` or `128`, 16-bit and at most 48 kHz. Both take at most two channels. The
+  plugin's source and the means to relink it stay available, which shipping it from this
+  repository covers. Both are listed in `LICENSES.md` under the plugin, not the app.
 - **iTunesDB** is written by the plugin itself, without libgpod: libgpod drags in GLib, and
   only the pre-hash database is needed (`mhbd`, `mhsd`, `mhlt`, `mhit`, `mhod`, `mhlp`,
-  `mhyp`, `mhip`). Files go in `iPod_Control/Music/Fnn/` with short random names, as iTunes
-  writes them. Kithsong's playlists that the profile selects become iPod playlists.
+  `mhyp`, `mhip`); what it doesn't model is kept as it was. Files go in
+  `iPod_Control/Music/Fnn/` with short random names, as iTunes writes them.
 - **Artwork** (iPod photo and nano): `ArtworkDB` and `.ithmb` files at the sizes SysInfo's
-  model calls for. The grayscale 4th generation has no artwork.
-- **Encoders**: ALAC from Apple's reference encoder (Apache-2.0), MP3 from LAME (LGPL-2.0,
-  so the plugin's source and the means to relink it stay available, which shipping it from
-  this repository covers). Both are listed in `LICENSES.md` under the plugin, not the app.
+  model calls for. The grayscale 4th generation and the mini have no artwork.
 - **Play counts and On-The-Go**: the plugin reads `iPod_Control/iTunes/Play Counts` (the
   `mhdp` header and one entry per `mhit`, in the iTunesDB's track order) and
-  `OTGPlaylistInfo` plus `OTGPlaylistInfo_N` (`mhpo`: indexes into that same order), and
-  writes `play_count`, `last_played` (Mac epoch, 1904) in each `mhit`. The indexes only hold
-  for the iTunesDB they were made against, so the plugin reads plays and playlists before
-  it writes a new database.
+  `OTGPlaylistInfo` plus `OTGPlaylistInfo_N` (`mhpo`: indexes into that same order) at
+  `open()`, mapping them to keys while the order still holds, and writes `play_count`,
+  `last_played` (Mac epoch, 1904, the iPod's local time) in each `mhit` through `update()`.
+- **Tests**: `plugins/ipod/tests` has kithipod's own, against fixture databases, and
+  `test_ipod_plugin`, which loads the built plugin through `mc_plugins_load()` and syncs a
+  fake 4th-generation iPod through `mc_tethered`. Not yet tried on a real iPod.
 
 ## Later extension points
 
@@ -281,7 +339,8 @@ In rough order of usefulness. Each one is added when a plugin needs it, not befo
 4. Plays and playlists from the device: the import, `tethered_imports`, scrobbling, writing
    counts back. The folder test plugin fakes plays and a playlist to test it.
 5. The iPod plugin: iTunesDB, Play Counts and OTGPlaylistInfo reader and writer, ALAC and
-   LAME, `kithsong.json`, tested against fixture databases and then a real iPod.
+   LAME, `kithsong.json`, tested against fixture databases and through the loader and a
+   tethered sync (done), and then a real iPod (not yet).
 
 ## Open questions
 

@@ -68,6 +68,11 @@ they bundle isn't in the app's own binaries. Each plugin package carries these t
 | LAME (libmp3lame) | 3.100 | LGPL-2.0-or-later | fetched, static, without its assembly, vector code and mpglib |
 | yyjson | 0.10.0 | MIT | the app's copy, static |
 | stb_image | 2.30 (commit `f58f558`) | Public domain / MIT | the app's copy, static |
+| Mbed TLS (crypto only: SHA-256) | 3.6.2 | Apache-2.0 | the app's copy, static |
+
+The build copies LAME's `COPYING` and ALAC's `LICENSE` next to the plugin, as
+`kithsong-ipod.LAME-COPYING.txt` and `kithsong-ipod.ALAC-LICENSE.txt`, and installs them with
+it (the `kithsong-ipod` install component).
 
 - **ALAC**: every source file carries an Apache-2.0 header and the repository's LICENSE is
   Apache-2.0. The `codec` folder also holds an old `APPLE_LICENSE.txt` (APSL 2.0) from before
