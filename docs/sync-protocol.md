@@ -733,13 +733,18 @@ way, without logging anything.
   versions end the session on an unknown message, and send no such flag), the device first
   sends `CANCEL`, best effort: at once, or after the frame being sent, and only if it fits in
   the socket's buffer without waiting; a send stuck on a peer that isn't reading is cut off
-  after a second. The member reports the session as cancelled by its peer
+  after a second. After `CANCEL` the device closes only its sending side, and drops what
+  still arrives until the member closes, for up to a second, also cut off after a second if
+  its session is still waiting on the member: a connection closed with data unread is reset,
+  and on Windows a reset drops what the member hadn't read yet, `CANCEL` included. The member reports the session as cancelled by its peer
   (`mc_sync_result.peer_cancelled`), not as a failure, and starts no automatic session with
   the device for 10 minutes (`MC_SYNC_PEER_CANCEL_HOLD_MS`; shown in
   `mc_sync_device.auto_after_ms`): online, periodic, change and background triggers wait. A
   press of Sync there still starts one and lifts that hold, as does any session between the
-  two that succeeds, and sessions the device starts are served. A member that finds its send
-  failing on the closed connection reads what is left to read for a `CANCEL`. Otherwise (an
+  two that succeeds, and sessions the device starts are served. A member that sent
+  `"cancel": true` reads, before each message it sends, any message that has started to
+  arrive, so it finds a `CANCEL` while it is only sending (a file, say); one whose send
+  fails on the closed connection also reads what is left to read for a `CANCEL`. Otherwise (an
   older member, or a cancel before the `HELLO`s) the member sees a broken connection, then
   busy. A file being fetched when the connection goes is abandoned and its `.part` deleted,
   as for any failed transfer (see [Files](#files)); files that arrived whole stay. Both

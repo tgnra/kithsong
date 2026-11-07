@@ -67,8 +67,8 @@
 #define CONNECT_MS 3000
 #define ACCEPT_WAIT_MS 1000
 #define CLAIM_WAIT_MS 5000
-/* How long a cancel left to a send under way (mc_channel_cancel()) waits for it before the
- * connection is aborted. */
+/* How long a cancel that sent CANCEL, or left it to a send under way (mc_channel_cancel()),
+ * waits for the session to end before the connection is aborted. */
 #define CANCEL_GRACE_MS 1000
 #define MAX_ADDRS 8
 /* A pairing undone before its merge ran: how often to try telling the kept group again that
@@ -2480,7 +2480,7 @@ static void cancel_peer(mc_sync_peer *p, uint64_t until) {
   if (p->busy) {
     p->cancel = 1;
     if (p->busy_ch && !mc_channel_cancel(p->busy_ch) && !p->cancel_ms)
-      p->cancel_ms = mc_mono_ms(); /* the scheduler aborts it if the send doesn't end soon */
+      p->cancel_ms = mc_mono_ms(); /* the scheduler aborts it if the session doesn't end soon */
   }
 }
 

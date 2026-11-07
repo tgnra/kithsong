@@ -674,6 +674,28 @@ void mc_socket_shutdown(mc_socket *s) {
 #endif
 }
 
+void mc_socket_shutdown_send(mc_socket *s) {
+  if (!s) return;
+#ifdef _WIN32
+  shutdown(s->fd, SD_SEND);
+#else
+  shutdown(s->fd, SHUT_WR);
+#endif
+}
+
+void mc_socket_drain(mc_socket *s, int timeout_ms) {
+  if (!s) return;
+  uint64_t deadline = deadline_of(timeout_ms);
+  char buf[4096];
+  for (;;) {
+    long n = (long)recv(s->fd, buf, sizeof buf, 0);
+    if (n > 0) continue;
+    if (n == 0 || !WOULD_BLOCK(sock_error())) return;
+    int left = remaining(deadline, timeout_ms);
+    if (left == 0 || wait_ready(&s->fd, 1, 0, slice(left)) == -2) return;
+  }
+}
+
 void mc_socket_close(mc_socket *s) {
   if (!s) return;
   close_sock(s->fd);

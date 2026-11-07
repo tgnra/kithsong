@@ -62,6 +62,14 @@ const char *mc_socket_peer(const mc_socket *s);
  * fails at once. The only socket function that may be called from another thread; s must
  * stay open (not closed) until that thread is done with it. */
 void mc_socket_shutdown(mc_socket *s);
+/* Shuts down only the sending side: the peer reads what was sent, then the end. What it
+ * sends can still be received. Unlike mc_socket_shutdown(), never resets the connection
+ * (Windows resets one shut down for receiving once more arrives, and a reset drops what
+ * the peer hadn't yet read). */
+void mc_socket_shutdown_send(mc_socket *s);
+/* Receives and drops everything until the peer closes, or the connection fails, or
+ * timeout_ms passes in all: closing with nothing unread doesn't reset the connection. */
+void mc_socket_drain(mc_socket *s, int timeout_ms);
 void mc_socket_close(mc_socket *s);
 
 #endif
