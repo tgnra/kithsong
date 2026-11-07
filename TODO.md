@@ -10,7 +10,7 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 ## Needs input
 
 - Analysis version 2: judge a few stations by ear, as the weights were only checked against albums and artists. `bpm` reads about a third of one 150 BPM album as 100, a dotted beat, which only matters if it's ever shown
-- Release - architectures other than x64. Needs a list of which ones, and a way to test them
+- Release - architectures other than x64. Windows and Linux build for ARM too, but the signed Flatpak repo is x86_64 only, so Linux ARM has a .flatpak bundle and a tarball with no flatpak update; merging architectures into one repo is its own piece of work. Neither Linux job runs the tests. Needs a list of any other architectures, and a way to test Linux ARM
 - Core - mc_smart_describe() is English-shaped ("field op value" clauses under "Tracks where …"): languages with grammatical case or agreement may need their own templates; dates use the smart_date template, not the OS's date format. Needs a real translation to show what the templates have to do
 - Android - there's no Create a new library, so a library mismatch can't be solved from the phone. Needs a decision on what replacing a library held in app storage should mean, as the desktops' answer is a new folder
 

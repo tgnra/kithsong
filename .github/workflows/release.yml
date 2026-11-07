@@ -130,9 +130,27 @@ jobs:
           path: dist/*.msixbundle
           if-no-files-found: error
 
+  # Each architecture builds on its own CPU: the container's image has an arm64 build, so no
+  # QEMU. ubuntu-24.04-arm is free for public repositories.
+  #
+  # Both upload a .flatpak bundle, but the signed repo stays x86_64 only. The site unpacks one
+  # kithsong-flatpak-repo.tar.gz, and each build's repo holds that build alone, so a second leg
+  # writing it would collide with the first and the site could lose x86_64. Only the leg with
+  # signed-repo gets the key, and without one release-linux.sh doesn't write the file. Merging
+  # the architectures into one repo is separate work; until then, keep signed-repo on x86_64.
   linux:
     needs: version
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            signed-repo: true
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            signed-repo: false
+    runs-on: ${{ matrix.runner }}
     # The tag tracks runtime-version in packaging/flatpak/ng.kithso.Kithsong.yml.
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
@@ -140,6 +158,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Import the Flatpak repo's signing key
+        if: matrix.signed-repo
         shell: bash
         env:
           KITHSONG_FLATPAK_GPG_KEY: ${{ secrets.KITHSONG_FLATPAK_GPG_KEY }}
@@ -161,19 +180,21 @@ jobs:
       - name: Build
         run: bash scripts/release-linux.sh
       - name: Remove the signing key
-        if: always()
+        if: always() && matrix.signed-repo
         shell: bash
         run: |
           gpgconf --kill all || true
           rm -rf "$RUNNER_TEMP/gnupg"
+      # The script names the bundle by flatpak --default-arch. Asking for this leg's arch fails
+      # here if that's ever not it, before two legs' files can collide in the release's dist/.
       - uses: actions/upload-artifact@v7
         with:
-          name: linux
-          path: dist/*.flatpak
+          name: linux-${{ matrix.arch }}
+          path: dist/*-linux-${{ matrix.arch }}.flatpak
           if-no-files-found: error
-      # Its own artifact, for the same reason as the MSIX's.
+      # Its own artifact, for the same reason as the MSIX's. x86_64 only, as above.
       - uses: actions/upload-artifact@v7
-        if: env.KITHSONG_FLATPAK_GPG_KEY_ID != ''
+        if: matrix.signed-repo && env.KITHSONG_FLATPAK_GPG_KEY_ID != ''
         with:
           name: linux-flatpak-repo
           path: dist/*.tar.gz
@@ -181,11 +202,19 @@ jobs:
 
   # For people who don't want the Flatpak. Its own job, as the binary only runs on systems at
   # least as new as the one it's built on: the runner's the oldest with the libadwaita we need
-  # (1.5), where the Flatpak job's GNOME SDK would rule out most distros. Keep the version
+  # (1.5), where the Flatpak job's GNOME SDK would rule out most distros. Keep both versions
   # pinned; ubuntu-latest would raise that floor unannounced.
   linux-tarball:
     needs: version
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
       - name: Install the build dependencies
@@ -198,8 +227,8 @@ jobs:
         run: bash scripts/release-linux-tarball.sh
       - uses: actions/upload-artifact@v7
         with:
-          name: linux-tarball
-          path: dist/kithsong-*-linux-*.tar.gz
+          name: linux-${{ matrix.arch }}-tarball
+          path: dist/kithsong-*-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
 
   android:
