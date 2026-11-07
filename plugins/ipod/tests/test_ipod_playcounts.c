@@ -1,5 +1,6 @@
 /* Play Counts and OTGPlaylistInfo: parsing every entry size, and the device layer's
- * handling (mapped to keys at open, cleared or folded in at commit). The files are built
+ * handling (mapped to keys at open, deleted only once taken in, kept true for a rewritten
+ * database until then) and Kithsong's own playlists. The files are built
  * from the documented layout. */
 #include <stdlib.h>
 
@@ -122,6 +123,12 @@ static int exists_rel(const char *mount, const char *rel) {
   return r;
 }
 
+static void ipod_otg_clear_dir(const char *mount) {
+  char *dir = ipod_path_join(mount, "iPod_Control/iTunes");
+  ipod_otg_clear(dir);
+  free(dir);
+}
+
 static void test_device(const char *root) {
   char keys[3][IPOD_KEY_LEN];
   /* Taken in: plays and lists are reported, then cleared without touching the counts. */
@@ -154,8 +161,8 @@ static void test_device(const char *root) {
     CHECK(otg[0].n == 2 && strcmp(otg[0].keys[0], keys[2]) == 0 && strcmp(otg[0].keys[1], keys[0]) == 0);
     CHECK(otg[1].n == 1 && strcmp(otg[1].keys[0], keys[1]) == 0);
   }
-  ipod_device_done(dev, IPOD_DONE_PLAYS | IPOD_DONE_PLAYLISTS);
-  CHECK_EQ(ipod_device_commit(dev, NULL), 0); /* nothing else changed: only clears */
+  CHECK_EQ(ipod_device_done(dev, IPOD_DONE_PLAYS | IPOD_DONE_PLAYLISTS, NULL), 0);
+  CHECK_EQ(ipod_device_commit(dev, NULL), 0); /* nothing else changed */
   CHECK(!exists_rel(mount, "iPod_Control/iTunes/Play Counts"));
   CHECK(!exists_rel(mount, "iPod_Control/iTunes/OTGPlaylistInfo"));
   CHECK(!exists_rel(mount, "iPod_Control/iTunes/OTGPlaylistInfo_1"));
@@ -163,40 +170,195 @@ static void test_device(const char *root) {
   ipod_device_close(dev);
   free(mount);
 
-  /* Not taken in, but the database is rewritten: folded in so the iPod keeps them. */
-  mount = setup(root, "folded", keys);
+  /* Not taken in, but the database is rewritten (an added track, a changed one, a removal):
+   * Play Counts and the OTG files stay exactly as they were, and still index the right
+   * tracks, because the removal waits. */
+  mount = setup(root, "kept", keys);
+  size_t pc_before_len = 0, otg_before_len = 0;
+  char *pc_path = ipod_path_join(mount, "iPod_Control/iTunes/Play Counts");
+  char *otg_path = ipod_path_join(mount, "iPod_Control/iTunes/OTGPlaylistInfo");
+  uint8_t *pc_before = ipod_read_file(pc_path, &pc_before_len);
+  uint8_t *otg_before = ipod_read_file(otg_path, &otg_before_len);
   dev = ipod_open(mount, 0, NULL);
   CHECK(dev != NULL);
   if (!dev) {
     free(mount);
     return;
   }
+  const char *nonce0 = ipod_device_records_nonce(dev);
+  CHECK(nonce0 && !*nonce0);
+  size_t otg_len = 0;
+  CHECK(ipod_device_otg_bytes(dev, &otg_len) != NULL && otg_len > otg_before_len);
   ipod_update_info up = {0};
   up.set_rating = 1;
   up.rating = 40;
   CHECK_EQ(ipod_device_update(dev, keys[1], &up, NULL), 0);
+  CHECK_EQ(ipod_device_remove(dev, keys[0], NULL), 0); /* put off */
+  CHECK(ipod_device_removal_deferred(dev, keys[0]));
+  CHECK(!ipod_device_removal_deferred(dev, keys[1]));
+  char *f0 = ipod_device_track_path(dev, keys[0]);
+  CHECK(f0 == NULL); /* setup's tracks have no files: the track itself is what stays */
+  char *src = test_scratch(root, "kept-src");
+  char *added = ipod_path_join(src, "new.mp3");
+  test_write(added, "ID3", 3);
+  ipod_put_info put = {0};
+  ipod_tags tags = {0};
+  tags.title = "Added";
+  put.tags = &tags;
+  put.codec = "mp3";
+  char k_added[IPOD_KEY_LEN];
+  CHECK_EQ(ipod_device_put(dev, added, &put, k_added, NULL), 0);
   CHECK_EQ(ipod_device_commit(dev, NULL), 0);
-  CHECK(!exists_rel(mount, "iPod_Control/iTunes/Play Counts"));
-  CHECK(!exists_rel(mount, "iPod_Control/iTunes/OTGPlaylistInfo"));
   CHECK(exists_rel(mount, "iPod_Control/iTunes/iTunesDB.kithsong-backup"));
-  CHECK_EQ(ipod_device_commit(dev, NULL), 0); /* again: nothing doubles */
+  CHECK_EQ(ipod_device_commit(dev, NULL), 0);
   ipod_device_close(dev);
-  char *path = ipod_path_join(mount, "iPod_Control/iTunes/iTunesDB");
-  ipod_db *db = ipod_db_read(path, NULL);
-  free(path);
-  CHECK(db != NULL);
-  if (db) {
-    CHECK_EQ(db->tracks[0]->play_count, 12);
-    CHECK_EQ(db->tracks[0]->last_played, 3700000000u);
-    CHECK_EQ(db->tracks[1]->play_count, 10);
+  size_t len_after = 0;
+  uint8_t *pc_after = ipod_read_file(pc_path, &len_after);
+  CHECK(pc_after && len_after == pc_before_len && memcmp(pc_after, pc_before, len_after) == 0);
+  free(pc_after);
+  uint8_t *otg_after = ipod_read_file(otg_path, &len_after);
+  CHECK(otg_after && len_after == otg_before_len && memcmp(otg_after, otg_before, len_after) == 0);
+  free(otg_after);
+  CHECK(exists_rel(mount, "iPod_Control/iTunes/OTGPlaylistInfo_1"));
+
+  /* Opened again, the same plays and lists come out, against the right tracks; the counts
+   * in the database were never touched. */
+  dev = ipod_open(mount, 0, NULL);
+  CHECK(dev != NULL);
+  if (dev) {
+    ipod_db *db = ipod_device_db(dev);
+    CHECK_EQ(db->n_tracks, 4);
+    CHECK(ipod_device_find(dev, keys[0]) != NULL); /* the removal waited */
+    CHECK(ipod_device_find(dev, k_added) != NULL);
+    CHECK_EQ(db->tracks[0]->play_count, 10);
+    CHECK_EQ(db->tracks[2]->play_count, 10);
     CHECK_EQ(db->tracks[1]->rating, 40);
-    CHECK_EQ(db->tracks[2]->play_count, 11);
-    CHECK_EQ(db->n_playlists, 3);
-    ipod_playlist *o1 = ipod_db_find_playlist(db, "On-The-Go 1");
-    CHECK(o1 && o1->n_items == 2 && o1->items[0] == db->tracks[2]->id);
-    CHECK(ipod_db_find_playlist(db, "On-The-Go 2") != NULL);
+    CHECK(ipod_db_find_playlist(db, "On-The-Go 1") == NULL); /* nothing folded */
+    plays = ipod_device_plays(dev, &n);
+    CHECK_EQ(n, 2);
+    if (n == 2) {
+      CHECK_STR(plays[0].key, keys[0]);
+      CHECK_EQ(plays[0].count, 2);
+      CHECK_STR(plays[1].key, keys[2]);
+    }
+    otg = ipod_device_otg_playlists(dev, &n);
+    CHECK_EQ(n, 2);
+    if (n == 2) CHECK(otg[0].n == 2 && strcmp(otg[0].keys[0], keys[2]) == 0);
+
+    /* Taken in now: deleted at once, the nonce renewed, the waiting removal done. */
+    CHECK_EQ(ipod_device_remove(dev, keys[0], NULL), 0);
+    CHECK_EQ(ipod_device_done(dev, IPOD_DONE_PLAYS, NULL), 0);
+    CHECK(!exists_rel(mount, "iPod_Control/iTunes/Play Counts"));
+    CHECK(exists_rel(mount, "iPod_Control/iTunes/OTGPlaylistInfo"));
+    CHECK(ipod_device_find(dev, keys[0]) != NULL); /* the OTG files still wait */
+    CHECK(strlen(ipod_device_records_nonce(dev)) == 32);
+    CHECK(exists_rel(mount, "iPod_Control/kithsong-records"));
+    char nonce1[40];
+    snprintf(nonce1, sizeof nonce1, "%s", ipod_device_records_nonce(dev));
+    CHECK(ipod_device_playcounts_bytes(dev, &n) == NULL);
+    CHECK_EQ(ipod_device_done(dev, IPOD_DONE_PLAYLISTS, NULL), 0);
+    CHECK(!exists_rel(mount, "iPod_Control/iTunes/OTGPlaylistInfo"));
+    CHECK(!exists_rel(mount, "iPod_Control/iTunes/OTGPlaylistInfo_1"));
+    CHECK(strcmp(nonce1, ipod_device_records_nonce(dev)) != 0);
+    CHECK(ipod_device_find(dev, keys[0]) == NULL);
+    CHECK(ipod_device_otg_bytes(dev, &n) == NULL);
+    CHECK_EQ(ipod_device_commit(dev, NULL), 0);
+    ipod_device_close(dev);
   }
-  ipod_db_free(db);
+  dev = ipod_open(mount, 0, NULL);
+  CHECK(dev != NULL);
+  if (dev) {
+    CHECK_EQ(ipod_device_db(dev)->n_tracks, 3);
+    CHECK(strlen(ipod_device_records_nonce(dev)) == 32);
+    plays = ipod_device_plays(dev, &n);
+    CHECK_EQ(n, 0);
+    ipod_device_close(dev);
+  }
+  free(pc_before);
+  free(otg_before);
+  free(pc_path);
+  free(otg_path);
+  free(f0);
+  free(added);
+  free(src);
+  free(mount);
+
+  /* A Play Counts file of nothing but zeros holds nothing to lose: it doesn't hold back a
+   * removal, and goes when the database is rewritten. */
+  mount = setup(root, "zeros", keys);
+  {
+    const uint32_t e[3][7] = {{0}};
+    ipod_buf b = {0};
+    put_playcounts(&b, 0x1C, 3, e);
+    char *path = ipod_path_join(mount, "iPod_Control/iTunes/Play Counts");
+    test_write(path, b.data, b.len);
+    free(path);
+    ipod_buf_free(&b);
+    ipod_otg_clear_dir(mount);
+  }
+  dev = ipod_open(mount, 0, NULL);
+  CHECK(dev != NULL);
+  if (dev) {
+    CHECK(ipod_device_playcounts_bytes(dev, &n) == NULL);
+    CHECK_EQ(ipod_device_remove(dev, keys[1], NULL), 0);
+    CHECK(!ipod_device_removal_deferred(dev, keys[1]));
+    CHECK(ipod_device_find(dev, keys[1]) == NULL);
+    CHECK_EQ(ipod_device_commit(dev, NULL), 0);
+    CHECK(!exists_rel(mount, "iPod_Control/iTunes/Play Counts"));
+    ipod_device_close(dev);
+  }
+  free(mount);
+}
+
+/* Kithsong's playlists replace only Kithsong's. */
+static void test_kith_playlists(const char *root) {
+  char keys[3][IPOD_KEY_LEN];
+  char *mount = setup(root, "lists", keys);
+  ipod_otg_clear_dir(mount);
+  ipod_device *dev = ipod_open(mount, 0, NULL);
+  CHECK(dev != NULL);
+  if (!dev) {
+    free(mount);
+    return;
+  }
+  CHECK_EQ(ipod_device_set_playlist(dev, "Mix", (const char *const[]){keys[2]}, 1, NULL), 0); /* "iTunes'" */
+  const char *ab[] = {keys[0], keys[1]}, *c[] = {keys[2]};
+  ipod_kith_playlist_in in[2] = {{"uid-mix", "Mix", ab, 2}, {"uid-run", "Run", c, 1}};
+  CHECK_EQ(ipod_device_set_kith_playlists(dev, in, 2, NULL), 0);
+  CHECK_EQ(ipod_device_commit(dev, NULL), 0);
+  ipod_device_close(dev);
+
+  dev = ipod_open(mount, 0, NULL);
+  CHECK(dev != NULL);
+  if (!dev) {
+    free(mount);
+    return;
+  }
+  ipod_db *db = ipod_device_db(dev);
+  ipod_playlist *theirs = ipod_db_find_playlist(db, "Mix");
+  ipod_playlist *mine = ipod_db_find_playlist(db, "Mix (Kithsong)");
+  CHECK(theirs && theirs->n_items == 1);
+  CHECK(mine && mine->n_items == 2);
+  CHECK(ipod_db_find_playlist(db, "Run") != NULL);
+  const ipod_kith_playlist *kp = ipod_kith_playlist_find(ipod_device_kith(dev), "uid-run");
+  CHECK(kp && strcmp(kp->name, "Run") == 0);
+  /* Run renamed Jog, Mix dropped. */
+  ipod_kith_playlist_in in2[1] = {{"uid-run", "Jog", ab, 2}};
+  CHECK_EQ(ipod_device_set_kith_playlists(dev, in2, 1, NULL), 0);
+  CHECK_EQ(ipod_device_commit(dev, NULL), 0);
+  ipod_device_close(dev);
+  dev = ipod_open(mount, 0, NULL);
+  CHECK(dev != NULL);
+  if (dev) {
+    db = ipod_device_db(dev);
+    CHECK(ipod_db_find_playlist(db, "Mix") != NULL);
+    CHECK(ipod_db_find_playlist(db, "Mix (Kithsong)") == NULL);
+    CHECK(ipod_db_find_playlist(db, "Run") == NULL);
+    ipod_playlist *jog = ipod_db_find_playlist(db, "Jog");
+    CHECK(jog && jog->n_items == 2);
+    CHECK_EQ(db->n_playlists, 3);
+    ipod_device_close(dev);
+  }
   free(mount);
 }
 
@@ -204,5 +366,6 @@ int main(int argc, char **argv) {
   const char *root = argc > 1 ? argv[1] : ".";
   test_parse();
   test_device(root);
+  test_kith_playlists(root);
   return TEST_RESULT();
 }
