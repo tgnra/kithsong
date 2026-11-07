@@ -259,6 +259,12 @@ private val ListArtSize = 56.dp
 /** The header's height under the status bar. */
 private val HeaderHeight = 64.dp
 
+/** The header's height in a dense window: about 48dp of real size. */
+private val DenseHeaderHeight = 56.dp
+
+@Composable
+private fun headerHeight() = if (LocalWindowLayout.current.dense) DenseHeaderHeight else HeaderHeight
+
 /** An album tile's or [TileRow] tile's title and artist, under its art and with the space below the row. */
 private val AlbumLabelsHeight = 58.dp
 
@@ -298,7 +304,20 @@ fun MainScreen(
     // A red dot on the header's menu and its Sync: deletes wait in the recycle bin while a member is online.
     syncDot: Boolean = false,
 ) {
-    BoxWithConstraints(modifier.fillMaxSize()) {
+    HomeFrame(
+        modifier,
+        small = {
+            SmallHome(
+                library,
+                bottomPadding,
+                SmallHomeActions(
+                    onOpen, onSearch, onSync, onSettings, onStats, onChooseWhatToSync,
+                    onStationMenu, onRecentMenu, onPlaylistMenu, onAlbumMenu, onArtistMenu, onAlbumGroupMenu, onNewList,
+                ),
+                importPickers, importRunning, banner, inGroup, syncDot, modifier,
+            )
+        },
+    ) {
         val density = LocalDensity.current
         // The list is inset from a camera cutout or navigation bar at the side, in landscape.
         val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal).inPane()
@@ -461,7 +480,7 @@ fun MainScreen(
             modifier = Modifier
                 .matchParentSize()
                 .windowInsetsPadding(sides)
-                .padding(top = with(density) { statusBarPx.toDp() } + HeaderHeight + 8.dp, bottom = bottomPadding + 8.dp, end = 2.dp),
+                .padding(top = with(density) { statusBarPx.toDp() } + headerHeight() + 8.dp, bottom = bottomPadding + 8.dp, end = 2.dp),
         )
         PullToSearchIndicator(
             pull,
@@ -485,14 +504,14 @@ private fun Header(
         Modifier
             .fillMaxWidth()
             .windowInsetsPadding(WindowInsets.statusBars.inPane())
-            .height(HeaderHeight)
+            .height(headerHeight())
             .padding(start = Gutter, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // The tile's own margin lines it up with the gutter's content, as the title text did.
         Box(Modifier.weight(1f)) {
             Wordmark(
-                height = 48.dp,
+                height = if (LocalWindowLayout.current.dense) 40.dp else 48.dp,
                 description = stringResource(R.string.app_name),
                 modifier = Modifier.offset(x = (-4).dp).semantics { heading() },
             )
@@ -721,8 +740,25 @@ private fun LazyItemScope.EmptyLibrary(
     onSync: () -> Unit,
     onChooseWhatToSync: () -> Unit,
 ) {
+    EmptyLibraryContent(
+        importPickers, inGroup, onSync, onChooseWhatToSync,
+        // As tall as it needs in a dense window, where the list scrolls to the buttons.
+        if (LocalWindowLayout.current.dense) Modifier.fillParentMaxWidth() else Modifier.fillParentMaxWidth().fillParentMaxHeight(0.7f),
+    )
+}
+
+/** What [EmptyLibrary] shows, smaller in a dense window. */
+@Composable
+internal fun EmptyLibraryContent(
+    importPickers: ImportPickers,
+    inGroup: Boolean,
+    onSync: () -> Unit,
+    onChooseWhatToSync: () -> Unit,
+    modifier: Modifier,
+) {
+    val dense = LocalWindowLayout.current.dense
     Column(
-        Modifier.fillParentMaxWidth().fillParentMaxHeight(0.7f).padding(32.dp),
+        modifier.padding(if (dense) 16.dp else 32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -730,12 +766,12 @@ private fun LazyItemScope.EmptyLibrary(
             Icons.LibraryMusic,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(72.dp),
+            modifier = Modifier.size(if (dense) 40.dp else 72.dp),
         )
         Text(
             stringResource(R.string.empty_title),
             style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(top = 16.dp),
+            modifier = Modifier.padding(top = if (dense) 8.dp else 16.dp),
         )
         Text(
             stringResource(if (inGroup) R.string.empty_text_choose else R.string.empty_text_import),
@@ -744,12 +780,12 @@ private fun LazyItemScope.EmptyLibrary(
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 4.dp),
         )
-        Button(onClick = if (inGroup) onChooseWhatToSync else onSync, modifier = Modifier.padding(top = 24.dp)) {
+        Button(onClick = if (inGroup) onChooseWhatToSync else onSync, modifier = Modifier.padding(top = if (dense) 12.dp else 24.dp)) {
             if (!inGroup) Icon(Icons.Sync, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
             Text(stringResource(if (inGroup) R.string.choose_what_to_sync else R.string.sync))
         }
         var menu by remember { mutableStateOf(false) }
-        Box(Modifier.padding(top = 8.dp)) {
+        Box(Modifier.padding(top = if (dense) 4.dp else 8.dp)) {
             TextButton(onClick = { menu = true }) {
                 Icon(Icons.Import, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
                 Text(stringResource(R.string.import_music))

@@ -24,8 +24,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
@@ -67,14 +69,37 @@ data class WindowFold(val vertical: Boolean, val start: Dp, val end: Dp)
 
 /**
  * How much smaller text and sizes are drawn. One setting for all of a window's screens, from
- * [WindowLayout.dense] and not the layout class, as a Medium window can be dense too.
+ * [WindowLayout.dense] and not the layout class, as a Medium window can be dense too. [scaledBy]
+ * applies it to everything under [ProvideWindowLayout], so a screen needs no code of its own for
+ * this, only for what it should leave out or lay out differently.
+ *
+ * [size] keeps the 48dp touch target Compose gives buttons at 40dp or more of real size: don't
+ * take it under 0.84 without raising LocalMinimumInteractiveComponentSize to match.
  */
+
 @Immutable
 data class LayoutScale(val font: Float, val size: Float) {
     companion object {
         val Regular = LayoutScale(font = 1f, size = 1f)
-        val Dense = LayoutScale(font = 0.85f, size = 0.85f)
+        val Dense = LayoutScale(font = 0.9f, size = 0.85f)
     }
+}
+
+/**
+ * This density with [scale] applied. Text goes through the system's own conversion first, so that
+ * its large text setting, which grows small text more than large, stays as the user has it, and
+ * dense text is that much smaller than it would be.
+ */
+internal fun Density.scaledBy(scale: LayoutScale): Density =
+    if (scale == LayoutScale.Regular) this else ScaledDensity(this, scale)
+
+private data class ScaledDensity(val base: Density, val scale: LayoutScale) : Density {
+    override val density get() = base.density * scale.size
+    override val fontScale get() = base.fontScale * scale.font / scale.size
+
+    override fun TextUnit.toDp(): Dp = with(base) { this@toDp.toDp() } * (scale.font / scale.size)
+
+    override fun Dp.toSp(): TextUnit = with(base) { (this@toSp * (scale.size / scale.font)).toSp() }
 }
 
 /**
@@ -122,7 +147,9 @@ data class WindowLayout(
 
 /**
  * A part of the window something is drawn in. [sides] are the window's edges it touches, the
- * only ones whose insets are its to clear: see [inPane].
+ * only ones whose insets are its to clear: see [inPane]. Its sizes are the window's dp, as
+ * [WindowLayout]'s are, for comparing with the thresholds; what's drawn is in scaled dp, for which
+ * see [drawnHeight].
  */
 @Immutable
 data class PaneArea(
@@ -193,13 +220,18 @@ fun WindowInsets.inPane(): WindowInsets = only(LocalPane.current.sides)
 @Composable
 fun isShortPane(): Boolean = LocalPane.current.height.whole() < ShortBelowHeight
 
+/** The pane's height in what's being drawn, whose dp are scaled: see [LayoutScale]. */
+@Composable
+fun drawnHeight(): Dp = LocalPane.current.height / LocalWindowLayout.current.scale.size
+
 /** [content] in [area], which [LocalPane] then says, at the area's place in the window. */
 @Composable
 fun Pane(area: PaneArea, content: @Composable BoxScope.() -> Unit) {
+    val size = LocalWindowLayout.current.scale.size
     CompositionLocalProvider(LocalPane provides area) {
         Box(
             if (area.whole) Modifier.fillMaxSize()
-            else Modifier.absoluteOffset(x = area.x).width(area.width).fillMaxHeight(),
+            else Modifier.absoluteOffset(x = area.x / size).width(area.width / size).fillMaxHeight(),
             content = content,
         )
     }
@@ -224,7 +256,10 @@ internal class FoldMemory<S> {
     }
 }
 
-/** Provides [LocalWindowLayout] and a whole-window [LocalPane], kept up with the live window and its folds. */
+/**
+ * Provides [LocalWindowLayout] and a whole-window [LocalPane], kept up with the live window and
+ * its folds, and the [LocalDensity] of the window's [LayoutScale] for all that's drawn in it.
+ */
 @Composable
 fun ProvideWindowLayout(content: @Composable () -> Unit) {
     val activity = LocalActivity.current
@@ -259,5 +294,11 @@ fun ProvideWindowLayout(content: @Composable () -> Unit) {
     }
     LaunchedEffect(layout) { Log.i("kithsong-layout", "$layout dense=${layout.dense} hinged=$hinged reported=${folds != null}") }
     val whole = PaneArea(0.dp, layout.width, layout.height, AllSides, whole = true)
-    CompositionLocalProvider(LocalWindowLayout provides layout, LocalPane provides whole, content = content)
+    val scaled = remember(density, layout.scale) { density.scaledBy(layout.scale) }
+    CompositionLocalProvider(
+        LocalWindowLayout provides layout,
+        LocalPane provides whole,
+        LocalDensity provides scaled,
+        content = content,
+    )
 }

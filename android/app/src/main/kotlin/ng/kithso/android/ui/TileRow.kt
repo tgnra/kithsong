@@ -32,6 +32,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -219,6 +220,7 @@ internal fun ArtTile(
     modifier: Modifier,
     badge: (@Composable () -> Unit)? = null,
     description: String? = null,
+    artShape: Shape = RoundedCornerShape(12.dp),
 ) {
     val said = description ?: if (subtitle.isNullOrEmpty()) title else "$title, $subtitle"
     Column(
@@ -231,7 +233,7 @@ internal fun ArtTile(
             AlbumArt(
                 art,
                 contentDescription = null,
-                shape = RoundedCornerShape(12.dp),
+                shape = artShape,
                 modifier = Modifier.fillMaxWidth().aspectRatio(1f),
             )
             if (badge != null) Box(Modifier.align(Alignment.TopEnd).padding(6.dp)) { badge() }

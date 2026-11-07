@@ -330,7 +330,7 @@ fun FastScroller(
         }
     }
     if (screen <= 0 || entries.isEmpty()) return
-    val screenHeight = LocalPane.current.height
+    val screenHeight = drawnHeight()
     BoxWithConstraints(modifier) {
         val fits = with(density) { (stripHeight(maxHeight, screenHeight) / MinTickHeight).toInt() }.coerceAtLeast(1)
         val known = heights.toMap()
@@ -407,7 +407,7 @@ fun FastScroller(
         }
     }
     val alpha by animateFloatAsState(if (shown) 1f else 0f, label = "fast scroll")
-    val screenHeight = LocalPane.current.height
+    val screenHeight = drawnHeight()
     // The entry the list is at, for accessibility: the last at or above the first item on screen.
     val at by remember(entries) {
         derivedStateOf {

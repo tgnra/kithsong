@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -54,7 +55,9 @@ import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.min
 import ng.kithso.android.R
 import ng.kithso.android.data.Track
 import ng.kithso.android.playback.Playback
@@ -72,11 +75,12 @@ private fun Track.byline() = trackByline(artist, album)
 
 /**
  * The floating player above the content: art, title and byline, play/pause, and a seekbar
- * beneath. Tapping it calls [onOpen] and a long press [onMenu]; swiping it left or right skips
+ * beneath, which a dense window leaves out, with smaller art. Tapping it calls [onOpen] and a long press [onMenu]; swiping it left or right skips
  * a track (see [TrackSwipeState]), which accessibility services get as actions.
  */
 @Composable
 fun MiniPlayer(playback: Playback, track: Track, onOpen: () -> Unit, onMenu: () -> Unit, modifier: Modifier = Modifier) {
+    val dense = LocalWindowLayout.current.dense
     val swipe = rememberTrackSwipe(playback)
     val nextLabel = stringResource(R.string.next_track)
     val previousLabel = stringResource(R.string.previous_track)
@@ -103,13 +107,13 @@ fun MiniPlayer(playback: Playback, track: Track, onOpen: () -> Unit, onMenu: () 
                     onLongClick = onMenu,
                     onClick = onOpen,
                 )
-                .padding(start = 10.dp, end = 4.dp, top = 10.dp),
+                .padding(start = if (dense) 6.dp else 10.dp, end = 4.dp, top = if (dense) 0.dp else 10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TrackSlides(swipe, Modifier.weight(1f).clipToBounds()) { shown ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        TrackArt(shown, contentDescription = null, shape = RoundedCornerShape(8.dp), modifier = Modifier.size(48.dp))
-                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                        TrackArt(shown, contentDescription = null, shape = RoundedCornerShape(8.dp), modifier = Modifier.size(if (dense) 40.dp else 48.dp))
+                        Column(Modifier.weight(1f).padding(horizontal = if (dense) 8.dp else 12.dp)) {
                             Text(
                                 shown?.title.orEmpty(),
                                 style = MaterialTheme.typography.titleSmall,
@@ -128,7 +132,7 @@ fun MiniPlayer(playback: Playback, track: Track, onOpen: () -> Unit, onMenu: () 
                 }
                 PlayPause(playback)
             }
-            Seekbar(
+            if (!dense) Seekbar(
                 positionMs = { playback.positionMs },
                 durationMs = track.durationMs,
                 onSeek = playback::seekTo,
@@ -165,7 +169,8 @@ private fun PlayPause(playback: Playback) {
  *
  * The chevron facing up at the foot of the player, away from the one in the corner that closes
  * it, slides the view up to show the queue ([QueuePage]), as does dragging up, and [slide] holds
- * how far. A window too short to spare the height has that chevron in the middle of the top row.
+ * how far. A window too short to spare the height has that chevron in the middle of the top row,
+ * as has any dense one.
  * Only the player's own view swipes between tracks, and the background stays put under both.
  * [queueBackEnabled]: system back is the queue's while it's open.
  */
@@ -195,17 +200,28 @@ internal fun FullPlayer(
                 .trackSwipe(swipe)
                 .windowInsetsPadding(WindowInsets.safeDrawing.inPane()),
         ) {
-            val wide = maxWidth > maxHeight
+            val dense = LocalWindowLayout.current.dense
+            val sidePadding = if (dense) 16.dp else 24.dp
+            val fontScale = LocalDensity.current.fontScale
+            // The art goes beside the controls if it's as big there as above them; it gives way to
+            // their width, so in a landscape phone's half pane it can end up better above them.
+            val artToControls = if (dense) 20.dp else 32.dp
+            val artMax = maxWidth - sidePadding * 2 - artToControls - MinControlsWidth
+            val artBeside = min(artMax, maxHeight - TopRowHeight - 16.dp)
+            val artAbove = maxHeight - TopRowHeight - (if (dense) 176.dp + 24.dp * fontScale else 256.dp + 56.dp * fontScale)
+            val wide = maxWidth > maxHeight && artBeside >= artAbove
             // Below about this, two lines and the controls don't fit, so a short title gives its space back.
-            val titleSpace = maxHeight >= 256.dp + 56.dp * LocalDensity.current.fontScale
-            Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+            val titleSpace = !dense && maxHeight >= 256.dp + 56.dp * fontScale
+            val playSize = if (maxWidth - sidePadding * 2 >= MinControlsWidth) 64.dp else 56.dp
+            val gap = if (dense) DenseControlsGap else ControlsGap
+            Column(Modifier.fillMaxSize().padding(horizontal = sidePadding)) {
                 // Nudged so the icons, not their touch targets, line up with the art.
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
                     IconButton(onClick = onCollapse, modifier = Modifier.offset(x = (-12).dp)) {
                         Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.close_player))
                     }
                     Spacer(Modifier.weight(1f))
-                    if (wide) {
+                    if (wide || dense) {
                         QueueChevron(slide)
                         Spacer(Modifier.weight(1f))
                     }
@@ -215,20 +231,21 @@ internal fun FullPlayer(
                 }
                 if (wide) {
                     Row(Modifier.fillMaxSize().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        PlayerArt(swipe, onMenu, Modifier.fillMaxHeight())
-                        Spacer(Modifier.size(32.dp))
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
+                        PlayerArt(swipe, onMenu, Modifier.heightIn(max = artMax.coerceAtLeast(0.dp)).fillMaxHeight())
+                        Spacer(Modifier.size(artToControls))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(gap)) {
                             PlayerTitle(swipe, titleSpace, Alignment.CenterStart)
                             // Moved, not closed up, so this centred column keeps its height and the title stays put.
-                            PlayerControls(playback, track, onAddToPlaylist, Modifier.offset(y = -ControlsGap))
+                            PlayerControls(playback, track, onAddToPlaylist, playSize, Modifier.offset(y = -gap))
                         }
                     }
                 } else {
                     TallPlayerLayout(
                         art = { PlayerArt(swipe, onMenu, Modifier) },
                         title = { PlayerTitle(swipe, titleSpace, Alignment.TopStart) },
-                        controls = { PlayerControls(playback, track, onAddToPlaylist) },
-                        chevron = { QueueChevron(slide) },
+                        controls = { PlayerControls(playback, track, onAddToPlaylist, playSize) },
+                        chevron = { if (dense) Spacer(Modifier) else QueueChevron(slide) },
+                        dense = dense,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -263,7 +280,7 @@ private fun QueueChevron(slide: QueueSlide) {
  *
  * The title sits under the art and the controls right under the title, which keeps the height
  * of two lines, so moving between a short title and a long one moves none of it. The chevron
- * stays at the foot, in the room below the controls.
+ * stays at the foot, in the room below the controls. A [dense] window has less between them.
  */
 @Composable
 private fun TallPlayerLayout(
@@ -271,16 +288,18 @@ private fun TallPlayerLayout(
     title: @Composable () -> Unit,
     controls: @Composable () -> Unit,
     chevron: @Composable () -> Unit,
+    dense: Boolean,
     modifier: Modifier,
 ) {
     Layout(listOf(art, title, controls, chevron), modifier) { (artItem, titleItem, controlsItem, chevronItem), constraints ->
         val width = constraints.maxWidth
         val height = constraints.maxHeight
-        val artGap = ArtGap.roundToPx()
+        val artGap = (if (dense) DenseArtGap else ArtGap).roundToPx()
+        val controlsGap = (if (dense) DenseControlsGap else ControlsGap).roundToPx()
         val chevronPlaced = chevronItem.single().measure(Constraints())
-        val bottom = maxOf(BottomGap.roundToPx(), chevronPlaced.height - ControlsGap.roundToPx())
+        val bottom = maxOf((if (dense) DenseBottomGap else BottomGap).roundToPx(), chevronPlaced.height - controlsGap)
         // ControlsGap isn't placed, it's part of the room below the controls, which sizes the art.
-        val fixed = artGap + ControlsGap.roundToPx() + bottom
+        val fixed = artGap + controlsGap + bottom
         val titlePlaced = titleItem.single().measure(Constraints(width, width, 0, height))
         // The controls come first, as they shrink only when there's no other way.
         val controlsPlaced = controlsItem.single()
@@ -314,6 +333,17 @@ private val MaxArtSize = 480.dp
 private val ArtGap = 24.dp
 private val BottomGap = 24.dp
 private val ControlsGap = 16.dp
+
+/** The same in a dense window. */
+private val DenseArtGap = 12.dp
+private val DenseBottomGap = 8.dp
+private val DenseControlsGap = 2.dp
+
+/** The row of buttons at the top, with what's above it. */
+private val TopRowHeight = 52.dp
+
+/** The controls' five buttons' width in a dense window, and the least they're given beside the art. */
+private val MinControlsWidth = 264.dp
 
 /** The most of what a tall window leaves over that goes above the art and below the controls. */
 private val MaxGapAboveArt = 96.dp
@@ -349,9 +379,10 @@ private fun PlayerArt(swipe: TrackSwipeState, onMenu: (() -> Unit)?, modifier: M
     }
 }
 
-/** The title and byline. With [twoLineSpace], always that height, with a shorter one at [alignment]. */
+/** The title and byline, a line each and smaller in a dense window. With [twoLineSpace], always the height of two, with a shorter one at [alignment]. */
 @Composable
 private fun PlayerTitle(swipe: TrackSwipeState, twoLineSpace: Boolean, alignment: Alignment) {
+    val dense = LocalWindowLayout.current.dense
     TrackSlides(swipe) { shown ->
         Box(Modifier.fillMaxWidth(), contentAlignment = alignment) {
             // Empty text holds the height, as large text doesn't scale its line height evenly.
@@ -362,13 +393,13 @@ private fun PlayerTitle(swipe: TrackSwipeState, twoLineSpace: Boolean, alignment
             Column(Modifier.fillMaxWidth()) {
                 Text(
                     shown?.title.orEmpty(),
-                    style = MaterialTheme.typography.headlineSmall,
-                    maxLines = 2,
+                    style = if (dense) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall,
+                    maxLines = if (dense) 1 else 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     shown?.byline().orEmpty(),
-                    style = MaterialTheme.typography.titleMedium,
+                    style = if (dense) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -379,8 +410,17 @@ private fun PlayerTitle(swipe: TrackSwipeState, twoLineSpace: Boolean, alignment
 }
 
 @Composable
-private fun PlayerControls(playback: Playback, track: Track, onAddToPlaylist: (() -> Unit)?, modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
+private fun PlayerControls(
+    playback: Playback,
+    track: Track,
+    onAddToPlaylist: (() -> Unit)?,
+    densePlaySize: Dp,
+    modifier: Modifier = Modifier,
+) {
+    val dense = LocalWindowLayout.current.dense
+    val skipSize = if (dense) 48.dp else 56.dp
+    val skipIconSize = if (dense) 28.dp else 32.dp
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(if (dense) DenseControlsGap else ControlsGap)) {
         SeekbarWithTimes(
             positionMs = { playback.positionMs },
             durationMs = track.durationMs,
@@ -395,19 +435,23 @@ private fun PlayerControls(playback: Playback, track: Track, onAddToPlaylist: ((
             IconButton(onClick = { onAddToPlaylist?.invoke() }, enabled = onAddToPlaylist != null, modifier = Modifier.offset(x = (-4).dp)) {
                 Icon(Icons.PlaylistAdd, contentDescription = stringResource(R.string.add_to_playlist))
             }
-            IconButton(onClick = playback::previous, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.SkipPrevious, contentDescription = stringResource(R.string.previous_track), modifier = Modifier.size(32.dp))
+            IconButton(onClick = playback::previous, modifier = Modifier.size(skipSize)) {
+                Icon(Icons.SkipPrevious, contentDescription = stringResource(R.string.previous_track), modifier = Modifier.size(skipIconSize))
             }
-            // Smaller, but still round, when the height is short (landscape with large text).
+            // Smaller, but still round, when the height is short (landscape with large text). A dense
+            // window has its size set, so that nothing squeezes it.
+            val playIconSize = if (dense) 32.dp else 40.dp
             FilledIconButton(
                 onClick = playback::toggle,
-                modifier = Modifier.sizeIn(maxWidth = 80.dp, maxHeight = 80.dp).aspectRatio(1f, matchHeightConstraintsFirst = true),
+                modifier = if (dense) Modifier.size(densePlaySize) else {
+                    Modifier.sizeIn(maxWidth = 80.dp, maxHeight = 80.dp).aspectRatio(1f, matchHeightConstraintsFirst = true)
+                },
             ) {
-                if (playback.isPlaying) Icon(Icons.Pause, contentDescription = stringResource(R.string.pause), modifier = Modifier.size(40.dp))
-                else Icon(Icons.Play, contentDescription = stringResource(R.string.play), modifier = Modifier.size(40.dp))
+                if (playback.isPlaying) Icon(Icons.Pause, contentDescription = stringResource(R.string.pause), modifier = Modifier.size(playIconSize))
+                else Icon(Icons.Play, contentDescription = stringResource(R.string.play), modifier = Modifier.size(playIconSize))
             }
-            IconButton(onClick = playback::next, enabled = playback.hasNext, modifier = Modifier.size(56.dp)) {
-                Icon(Icons.SkipNext, contentDescription = stringResource(R.string.next_track), modifier = Modifier.size(32.dp))
+            IconButton(onClick = playback::next, enabled = playback.hasNext, modifier = Modifier.size(skipSize)) {
+                Icon(Icons.SkipNext, contentDescription = stringResource(R.string.next_track), modifier = Modifier.size(skipIconSize))
             }
             IconToggleButton(
                 checked = playback.shuffle,
