@@ -1,5 +1,6 @@
 package ng.kithso.android.ui
 
+import android.content.pm.PackageManager
 import android.util.Log
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.Box
@@ -77,9 +78,9 @@ data class LayoutScale(val font: Float, val size: Float) {
 
 /**
  * The layout for a window [width] by [height]. Any [fold] rules out Large, as a hinge would cut
- * the middle pane in half. [foldKnown] is false until the system has said whether there is a
- * fold, which also rules it out: an open foldable mustn't show Large for its first frames, and
- * on a tablet Medium for those frames costs little.
+ * the middle pane in half. [foldKnown] is false while a fold can't be ruled out, which also rules
+ * it out: until the system has said, as an open foldable mustn't show Large for its first frames,
+ * and always on a device with a hinge, whose report can be missing altogether.
  */
 fun windowLayoutClass(width: Dp, height: Dp, fold: WindowFold? = null, foldKnown: Boolean = true): WindowLayoutClass = when {
     width >= LargeMinWidth && height >= LargeMinHeight && fold == null && foldKnown -> WindowLayoutClass.Large
@@ -232,14 +233,20 @@ fun ProvideWindowLayout(content: @Composable () -> Unit) {
             }
         }
     }
+    // A process can go its whole life with no fold reported on a device that has one, as seen on
+    // Test_Z_Fold_8, so a hinge means a fold can't be ruled out.
+    val hinged = remember(activity) {
+        activity?.packageManager?.hasSystemFeature(PackageManager.FEATURE_SENSOR_HINGE_ANGLE) == true
+    }
+    val foldKnown = folds != null && !hinged
     val size = LocalWindowInfo.current.containerSize
     val memory = remember { FoldMemory<IntSize>() }
     val layout = with(density) {
         // A vertical fold first, as that's the one panes go either side of.
         val fold = memory.resolve(size, folds?.let { all -> all.firstOrNull { it.vertical } ?: all.firstOrNull() })
-        WindowLayout.of(size.width.toDp(), size.height.toDp(), fold, foldKnown = folds != null)
+        WindowLayout.of(size.width.toDp(), size.height.toDp(), fold, foldKnown)
     }
-    LaunchedEffect(layout) { Log.i("kithsong-layout", "$layout dense=${layout.dense} foldKnown=${folds != null}") }
+    LaunchedEffect(layout) { Log.i("kithsong-layout", "$layout dense=${layout.dense} hinged=$hinged reported=${folds != null}") }
     val whole = PaneArea(0.dp, layout.width, layout.height, AllSides, whole = true)
     CompositionLocalProvider(LocalWindowLayout provides layout, LocalPane provides whole, content = content)
 }
