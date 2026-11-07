@@ -12,7 +12,6 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 - Analysis version 2: judge a few stations by ear, as the weights were only checked against albums and artists. `bpm` reads about a third of one 150 BPM album as 100, a dotted beat, which only matters if it's ever shown
 - Release - architectures other than x64. Windows and Linux build for ARM too, but the signed Flatpak repo is x86_64 only, so Linux ARM has a .flatpak bundle and a tarball with no flatpak update; merging architectures into one repo is its own piece of work. Neither Linux job runs the tests. Needs a list of any other architectures, and a way to test Linux ARM
 - Core - mc_smart_describe() is English-shaped ("field op value" clauses under "Tracks where …"): languages with grammatical case or agreement may need their own templates; dates use the smart_date template, not the OS's date format. Needs a real translation to show what the templates have to do
-- Android - there's no Create a new library, so a library mismatch can't be solved from the phone. Needs a decision on what replacing a library held in app storage should mean, as the desktops' answer is a new folder
 
 ## Library and browsing
 
@@ -60,6 +59,7 @@ See "Merging libraries" in docs/sync-protocol.md.
 ### Frontends
 - Windows and Linux - after Select all stores on its thread, the window can still stall: up to 0.7-1.6 s for 7,631 albums on a debug build, unmeasured in release; the reload after the write is suspected, a UI call waiting on api_lock is possible
 - All - the waiting-for-a-device banner has no Show that filters the library to those tracks. The core lists them (track_uids in mc_sync_waiting); each frontend needs a track list by uids, and those tracks have no file here
+- Android - a new library after a library mismatch (export as zips of up to 8 GB, then restart into an empty library and Pair again) is untested on a phone: an export to a USB stick or cloud folder, cancelling, a full disk, and re-importing the zips. A single or loose track credited to no artist isn't exported, as no listing has it. Decided: the export is files only (no playlists or plays), and a failed or cancelled export deletes all its zips, not just the last
 - Android - the first run logs "Couldn't open the library" (status -5) once before the folder exists; one sync session logged status -6 straight after a good one, perhaps both sides syncing at once; opening a stress library logs "Couldn't open sync" (status -15)
 
 ## Windows

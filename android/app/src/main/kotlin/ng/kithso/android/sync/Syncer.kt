@@ -103,6 +103,8 @@ sealed interface Pairing {
      * libraries, this phone's kept if [keptHere]; [scrobbleSignedOut] is the Last.fm user
      * signed out on the merged device, "" if none was.
      * [why] and [whyHere]: why a library mismatch wasn't a merge, and that it's about this phone.
+     * Not paired, [peerUid] is [peer]'s if known ("" if not), and [peerHost] and [peerPort]
+     * where this phone asked it ("" and 0 if it didn't ask, or that isn't known).
      */
     data class Ended(
         val peer: String,
@@ -117,6 +119,8 @@ sealed interface Pairing {
         val scrobbleSignedOut: String = "",
         val why: CoreSync.PairWhy = CoreSync.PairWhy.None,
         val whyHere: Boolean = false,
+        val peerHost: String = "",
+        val peerPort: Int = 0,
     ) : Pairing {
         override val merge: MergeProposal? get() = null
     }
@@ -301,6 +305,10 @@ class Syncer(
     private var declined = false
     private var debugMergePending = false
 
+    // Where the device this phone last asked to pair was, if known, for a new library's Pair
+    // again ([Pairing.Ended.peerHost]). Only touched on [thread].
+    private var pairAddress: Pair<String, Int>? = null
+
     init {
         scope.launch(thread) {
             for (event in events) onEvent(event)
@@ -334,10 +342,31 @@ class Syncer(
     }
 
     /** Asks [device], seen on the network, to pair. Its code is then typed in with [enterCode]. */
-    fun pair(device: NearbyDevice) = startPairing(device.name) { it.pairRequest(device.uid) }
+    fun pair(device: NearbyDevice) = startPairing(device.name) {
+        pairAddress = device.address?.let { host -> host to device.port }
+        it.pairRequest(device.uid)
+    }
 
     /** Asks the device at [host] to pair, for networks where discovery doesn't reach it. */
-    fun pair(host: String, port: Int) = startPairing(host) { it.pairRequestAddress(host, port) }
+    fun pair(host: String, port: Int) = startPairing(host) {
+        pairAddress = host to port
+        it.pairRequestAddress(host, port)
+    }
+
+    /**
+     * Pair again, after a new library: asks [uid] if discovery has seen it again, else the
+     * device at [host] (none: "") as it was then. [name] is what the dialogs call it.
+     */
+    fun pairAgain(uid: String, name: String, host: String, port: Int) = startPairing(name) { sync ->
+        try {
+            if (uid.isEmpty()) throw KithCoreException(CoreSync.ERR_NOT_FOUND)
+            sync.pairRequest(uid)
+        } catch (e: KithCoreException) {
+            if (e.status != CoreSync.ERR_NOT_FOUND || host.isEmpty()) throw e
+            pairAddress = host to port
+            sync.pairRequestAddress(host, port)
+        }
+    }
 
     fun enterCode(code: String) = call { sync ->
         val pairing = state.value.pairing as? Pairing.EnterCode ?: return@call
@@ -954,7 +983,11 @@ class Syncer(
                     event.merged, event.keptHere, event.scrobbleSignedOut,
                 )
             }
-            else -> Pairing.Ended(peer, event.reason, event.initiator, why = event.why, whyHere = event.whyHere)
+            else -> Pairing.Ended(
+                peer, event.reason, event.initiator, event.uid, why = event.why, whyHere = event.whyHere,
+                peerHost = pairAddress?.first.takeIf { event.initiator }.orEmpty(),
+                peerPort = pairAddress?.second.takeIf { event.initiator } ?: 0,
+            )
         }
         Log.i(TAG, "Pairing with $peer: ${event.reason}, status ${event.status}, merged ${event.merged}")
         // Wrong codes keep the merge's proposal or note with the code.

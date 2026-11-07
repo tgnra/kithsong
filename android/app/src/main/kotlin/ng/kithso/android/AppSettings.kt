@@ -56,6 +56,25 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
             save()
         }
 
+    /**
+     * Whether the next launch replaces the library with a new, empty one ([NewLibrary]), before
+     * anything opens it.
+     */
+    var newLibrary: Boolean
+        get() = core.bool(KEY_NEW_LIBRARY, false)
+        set(value) {
+            core.setBool(KEY_NEW_LIBRARY, value)
+            save()
+        }
+
+    /** The device to offer to pair with again once the new library is open, or null ([NewLibrary.Target]). */
+    var pairAgain: String?
+        get() = core.string(KEY_PAIR_AGAIN)
+        set(value) {
+            core.setString(KEY_PAIR_AGAIN, value)
+            save()
+        }
+
     /** Whether this phone scrobbles its plays; the account itself is the sync group's. */
     var scrobble: Boolean
         get() = core.scrobble
@@ -121,6 +140,8 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
         const val KEY_STRESS_LIBRARY = "stress_library"
         const val KEY_ASKED_FOR_NOTIFICATIONS = "android_asked_for_notifications"
         const val KEY_ARCHIVE_EXPLAINED = "archive_explained"
+        const val KEY_NEW_LIBRARY = "android_new_library"
+        const val KEY_PAIR_AGAIN = "android_pair_again"
         // What they were in [old].
         const val OLD_ASKED_FOR_NOTIFICATIONS = "asked_for_notifications"
         const val OLD_DEVICE_NAME = "device_name"

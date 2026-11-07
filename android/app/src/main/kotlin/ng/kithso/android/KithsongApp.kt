@@ -3,9 +3,11 @@ package ng.kithso.android
 import ng.kithso.core.*
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.os.Build
 import android.provider.Settings
+import android.util.AtomicFile
 import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
@@ -60,6 +62,10 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
     lateinit var testing: Testing
         private set
 
+    /** A new, empty library in place of this one, for pairing. */
+    lateinit var newLibrary: NewLibrary
+        private set
+
     /** Playlists' and album groups' pictures, which the core makes again if the system clears them away. */
     val playlistArtDir: File get() = File(cacheDir, PLAYLIST_ART_DIR)
 
@@ -108,6 +114,8 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         CoreTesting.setEnabled(settings.perfProfile)
         CoreTesting.markAt("main_entered", startedUs)
         CoreTesting.mark("settings_loaded")
+        // A new library asked for last time: the old one goes before anything opens it.
+        if (settings.newLibrary) replaceLibrary()
         // The click: App ends the view switch once the page is drawn.
         // By toString(), as R8 renames classes but not what a data class says it's called.
         BackStack.onPush = { page ->
@@ -139,6 +147,7 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         importer = Importer(this, core, MainScope())
         scrobbling = Scrobbling(libraryDir, File(noBackupFilesDir, "sync"), settings, MainScope())
         testing = Testing(this, noBackupFilesDir, settings, MainScope())
+        newLibrary = NewLibrary(this, settings, MainScope())
         CoreTesting.mark("app_created")
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
@@ -161,6 +170,33 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         if (NativeCore.followLocale(newConfig)) (library as? CoreLibrarySource)?.refresh()
+    }
+
+    /**
+     * Starts the process again: the launcher's activity in a new task, then this process goes.
+     * The new one reads settings from the start, so nothing of the old library is left open.
+     */
+    fun restart() {
+        val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return
+        startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+        Runtime.getRuntime().exit(0)
+    }
+
+    // At launch, before anything opens the library ([NewLibrary]): sets it aside, renamed, for
+    // NewLibrary to delete off the main thread, and forgets what pointed at its tracks: the
+    // queue PlaybackService kept, the pictures and recents kept with it, and the art caches.
+    // Failing, the old library stays and it's tried again next launch.
+    private fun replaceLibrary() {
+        val old = NewLibrary.replacedDir(this)
+        if (realLibraryDir.exists() && !realLibraryDir.renameTo(old)) {
+            Log.e(TAG, "Couldn't set the library aside for a new one")
+            return
+        }
+        AtomicFile(File(noBackupFilesDir, QUEUE_FILE)).delete()
+        getSharedPreferences("library", MODE_PRIVATE).edit().clear().commit()
+        for (cache in listOf(PLAYLIST_ART_DIR, COVER_DRAFT_DIR, ART_CACHE_DIR, AUTO_ART_DIR)) File(cacheDir, cache).deleteRecursively()
+        settings.newLibrary = false
+        Log.i(TAG, "Started a new library")
     }
 
     // What other devices call this phone unless it's renamed: the name set in the system
@@ -197,6 +233,9 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         const val TAG = "kithsong"
         const val PLAYLIST_ART_DIR = "playlist-art" // MC_PLAYLIST_ART_CACHE_DIR
         const val COVER_DRAFT_DIR = "cover-draft" // a cover chosen in the tag editor, not saved yet
+        const val QUEUE_FILE = "queue" // PlaybackService's QueueMemory
+        const val ART_CACHE_DIR = "art" // Coil's disk cache (ui/art/Art.kt)
+        const val AUTO_ART_DIR = "auto-art" // ArtProvider's
         const val OLD_SYNC_WORK = "sync" // the unique work name SyncWorker was scheduled under
     }
 }

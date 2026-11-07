@@ -101,13 +101,15 @@ fun AddDeviceDialog(onConnect: (host: String, port: Int) -> Unit, onDismiss: () 
 }
 
 /**
- * [PairingDialog] for the pairing under way, if any. [onChooseWhatToSync] opens a device's
- * page (a member's uid, or [THIS_DEVICE]) after pairing, to choose its sync settings.
+ * [PairingDialog] for the pairing under way, if any, and [NewLibraryDialogs]. [onChooseWhatToSync]
+ * opens a device's page (a member's uid, or [THIS_DEVICE]) after pairing, to choose its sync
+ * settings.
  */
 @Composable
 fun PairingDialogs(syncer: Syncer, settings: AppSettings, onChooseWhatToSync: (String) -> Unit) {
+    val newLibrary = NewLibraryDialogs(syncer)
     val pairing = syncer.status.collectAsState().value.pairing ?: return
-    PairingDialog(pairing, syncer, settings, onChooseWhatToSync)
+    PairingDialog(pairing, syncer, settings, onChooseWhatToSync, newLibrary)
 }
 
 /**
@@ -119,10 +121,18 @@ fun PairingDialogs(syncer: Syncer, settings: AppSettings, onChooseWhatToSync: (S
  *
  * When both devices have music, the smaller library is merged into the larger. If it's this
  * phone's, its user is asked first (Merge, or Cancel to decline): in place of the code entry
- * until answered, or under the code shown. If it's the other's, a note says so.
+ * until answered, or under the code shown. If it's the other's, a note says so. When they
+ * can't be merged and this phone could otherwise join, it offers a new, empty library
+ * ([newLibrary]): Export and start new, or, less prominently, Start new without exporting.
  */
 @Composable
-private fun PairingDialog(pairing: Pairing, syncer: Syncer, settings: AppSettings, onChooseWhatToSync: (String) -> Unit) {
+private fun PairingDialog(
+    pairing: Pairing,
+    syncer: Syncer,
+    settings: AppSettings,
+    onChooseWhatToSync: (String) -> Unit,
+    newLibrary: NewLibraryActions,
+) {
     when (pairing) {
         is Pairing.ShowCode -> {
             // The screen must not time out while someone types the code on the other device.
@@ -245,17 +255,37 @@ private fun PairingDialog(pairing: Pairing, syncer: Syncer, settings: AppSetting
                 paired && pairing.joined && pairing.archiveName.isNotEmpty() && !settings.archiveExplained
             }
             LaunchedEffect(explain) { if (explain) settings.archiveExplained = true }
+            // This phone has music of its own but could otherwise join: a new library lets it.
+            val offerNew = pairing.reason == CoreSync.PairReason.LibraryMismatch && newLibrary.canStart
+            val nearby = syncer.status.collectAsState().value.nearby
+            val target = { pairing.newLibraryTarget(nearby) }
             AlertDialog(
                 onDismissRequest = syncer::dismissPairing,
                 title = { Text(stringResource(if (paired) R.string.paired else R.string.pair_failed)) },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(endedText(pairing))
                         if (explain) Text(archiveExplainer(pairing))
+                        if (offerNew) {
+                            Text(stringResource(R.string.new_library_hint))
+                            // The bigger step, so less prominent than exporting first.
+                            TextButton(
+                                onClick = {
+                                    syncer.dismissPairing()
+                                    newLibrary.startWithoutExport(target())
+                                },
+                                modifier = Modifier.align(Alignment.End),
+                            ) { Text(stringResource(R.string.new_library_without_export), style = MaterialTheme.typography.labelMedium) }
+                        }
                     }
                 },
                 confirmButton = {
-                    if (choose != null) {
+                    if (offerNew) {
+                        TextButton(onClick = {
+                            syncer.dismissPairing()
+                            newLibrary.export(target())
+                        }) { Text(stringResource(R.string.new_library_export)) }
+                    } else if (choose != null) {
                         TextButton(onClick = {
                             syncer.dismissPairing()
                             onChooseWhatToSync(choose)
@@ -264,7 +294,7 @@ private fun PairingDialog(pairing: Pairing, syncer: Syncer, settings: AppSetting
                         TextButton(onClick = syncer::dismissPairing) { Text(stringResource(R.string.ok)) }
                     }
                 },
-                dismissButton = if (choose != null) {
+                dismissButton = if (choose != null || offerNew) {
                     { TextButton(onClick = syncer::dismissPairing) { Text(stringResource(R.string.ok)) } }
                 } else {
                     null

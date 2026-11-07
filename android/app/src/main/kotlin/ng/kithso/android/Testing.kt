@@ -1,6 +1,5 @@
 package ng.kithso.android
 
-import android.content.Intent
 import android.util.Log
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -121,13 +120,9 @@ class Testing(
         restart()
     }
 
-    // The launcher's activity in a new task, then this process goes: the new one reads settings
-    // from the start, so nothing of the old library is left open.
     private fun restart() {
         Log.i(TAG, "Restarting for ${settings.stressLibrary ?: "the real library"}")
-        val intent = app.packageManager.getLaunchIntentForPackage(app.packageName) ?: return
-        app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
-        Runtime.getRuntime().exit(0)
+        app.restart()
     }
 
     private companion object {

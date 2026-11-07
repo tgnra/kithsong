@@ -17,7 +17,8 @@
          from settings. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- SyncService runs in the foreground while a sync session or pairing is under way, and
-         ImportService while an import is (API 34+: the dataSync type). -->
+         ImportService while an import is, and ExportService while the library is exported
+         (API 34+: the dataSync type). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- No storage permission: import reads only what the user picks or shares, through the
          Storage Access Framework (OpenDocumentTree, OpenMultipleDocuments, and the intents
@@ -73,6 +74,11 @@
             android:foregroundServiceType="dataSync" />
         <service
             android:name=".sync.SyncService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <!-- While the library is exported before a new one replaces it (NewLibrary). -->
+        <service
+            android:name=".ExportService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
         <!-- Album art for Android Auto's browse lists, which it loads itself from the items'
