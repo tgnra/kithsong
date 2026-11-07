@@ -54,8 +54,10 @@ KITH_PLUGIN_EXPORT const kith_plugin *kith_plugin_init(const kith_host *host);
     mounted at `/app/plugins`.
 - **A plugin is native code with the app's full rights.** Every plugin found is listed under
   Settings › Plugins, showing its name, version and file path, and stays off until its user
-  turns it on. The list of enabled plugin ids goes in `settings.json`. A plugin that is off
-  is never loaded, not just left uncalled.
+  turns it on. The list of enabled plugins goes in `settings.json`, by file id (the file's name
+  without its extension), since a plugin that is off is never loaded, not just left uncalled,
+  and so can't be asked its own id. Once loaded, its id, name and version are remembered there
+  too, so the list shows them while it's off; until then it shows the file id.
 - A plugin whose `kith_plugin_init` returns NULL, or whose ABI doesn't match, is listed with
   the reason and isn't loaded.
 - Plugins are unloaded at shutdown, after every session using them has ended.

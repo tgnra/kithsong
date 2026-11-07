@@ -109,6 +109,27 @@ kithsong_test(test_shuffle)
 kithsong_test(test_stress)
 kithsong_test(test_art_colors)
 
+# Plugins: plugin_folder.c built as real plugins (a folder target and a WAV encoder; one that
+# claims another ABI; one whose init fails), into plugins/ beside the tests, which load them
+# through the loader. They include kithcore/plugin.h alone and don't link kithcore.
+foreach(_variant IN ITEMS folder badabi null)
+  add_library(kith_test_${_variant} MODULE plugin_folder.c)
+  target_include_directories(kith_test_${_variant} PRIVATE "${PROJECT_SOURCE_DIR}/core/include")
+  set_target_properties(kith_test_${_variant} PROPERTIES
+    PREFIX ""
+    C_VISIBILITY_PRESET hidden
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
+  kithsong_warnings(kith_test_${_variant})
+endforeach()
+target_compile_definitions(kith_test_badabi PRIVATE TEST_PLUGIN_BAD_ABI)
+target_compile_definitions(kith_test_null PRIVATE TEST_PLUGIN_NULL_INIT)
+foreach(_t IN ITEMS test_plugin_load test_plugin_encoder)
+  kithsong_test(${_t})
+  add_dependencies(${_t} kith_test_folder kith_test_badabi kith_test_null)
+endforeach()
+target_link_libraries(test_plugin_encoder PRIVATE mbedcrypto)  # hashes what it encoded
+
 set_tests_properties(test_player test_play_log test_radio_player test_up_next PROPERTIES SKIP_RETURN_CODE 77)  # no audio device
 kithsong_test(test_discovery)
 target_link_libraries(test_discovery PRIVATE mc_mdns)  # sends packets as a fake peer

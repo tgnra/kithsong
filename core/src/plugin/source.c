@@ -40,6 +40,7 @@ struct kith_source {
   int src_bits, lossless;
   uint64_t src_frames;
   kith_pcm_format fmt; /* what reads deliver; limits folded in */
+  int max_rate, max_channels, max_bits; /* limits asked for so far */
   int started;
 
   /* The pipeline, set up by the first read. */
@@ -81,31 +82,43 @@ static int lossless_path(const char *path) {
   return 0;
 }
 
-/* Folds want into src->fmt: exact fields replace, limits cap. */
+/* The lowest non-zero of a and b, 0 if both are. */
+static int tighter(int a, int b) {
+  return !a ? b : !b ? a : a < b ? a : b;
+}
+
+/* Folds want into src->fmt: exact fields replace, limits are kept and cap whatever is asked
+ * for after them too. bits is the significant bits: for F32 too, where 32 means as decoded. */
 static int apply(kith_source *src, const kith_pcm_format *want) {
-  if (!want) return KITH_OK;
-  if (want->sample_rate < 0 || want->channels < 0 || want->bits < 0 || want->max_sample_rate < 0 ||
-      want->max_channels < 0 || want->max_bits < 0 || want->sample < KITH_SAMPLE_DEFAULT ||
-      want->sample > KITH_SAMPLE_F32 || (want->sample_rate && want->sample_rate < 1000) ||
-      want->channels > 8 || (want->bits && (want->bits < 8 || want->bits > 32)))
-    return KITH_ERR_INVALID_ARG;
+  if (want) {
+    if (want->sample_rate < 0 || want->channels < 0 || want->bits < 0 || want->max_sample_rate < 0 ||
+        want->max_channels < 0 || want->max_bits < 0 || want->sample < KITH_SAMPLE_DEFAULT ||
+        want->sample > KITH_SAMPLE_F32 || (want->sample_rate && want->sample_rate < 1000) ||
+        want->channels > 8 || (want->bits && (want->bits < 8 || want->bits > 32)))
+      return KITH_ERR_INVALID_ARG;
+    src->max_rate = tighter(src->max_rate, want->max_sample_rate);
+    src->max_channels = tighter(src->max_channels, want->max_channels);
+    src->max_bits = tighter(src->max_bits, want->max_bits);
+  }
   kith_pcm_format *f = &src->fmt;
-  if (want->sample_rate) f->sample_rate = want->sample_rate;
-  if (want->channels) f->channels = want->channels;
-  if (want->sample) f->sample = want->sample;
-  if (want->bits) f->bits = want->bits;
-  if (want->max_sample_rate && f->sample_rate > want->max_sample_rate) {
-    /* 88.2 kHz goes to 44.1 rather than 48: whole multiples resample more cleanly. */
-    int r = want->max_sample_rate;
-    if (f->sample_rate % 44100 == 0 && r >= 44100) r = 44100;
-    else if (f->sample_rate % 48000 == 0 && r >= 48000) r = 48000;
+  if (want && want->sample_rate) f->sample_rate = want->sample_rate;
+  if (want && want->channels) f->channels = want->channels;
+  if (want && want->sample) f->sample = want->sample;
+  if (want && want->bits) f->bits = want->bits;
+  if (src->max_rate && f->sample_rate > src->max_rate) {
+    /* Down by a whole factor where one fits (88.2 kHz to 44.1, not 48): it resamples more
+     * cleanly. */
+    int r = src->max_rate;
+    for (int k = 8; k >= 1; k /= 2) {
+      if (f->sample_rate % 44100 == 0 && 44100 * k <= src->max_rate) { r = 44100 * k; break; }
+      if (f->sample_rate % 48000 == 0 && 48000 * k <= src->max_rate) { r = 48000 * k; break; }
+    }
     f->sample_rate = r;
   }
-  if (want->max_channels && f->channels > want->max_channels) f->channels = want->max_channels;
-  if (want->max_bits && f->bits > want->max_bits) f->bits = want->max_bits;
+  if (src->max_channels && f->channels > src->max_channels) f->channels = src->max_channels;
+  if (src->max_bits && f->bits > src->max_bits) f->bits = src->max_bits;
   if (f->sample == KITH_SAMPLE_S16 && f->bits > 16) f->bits = 16;
-  if (f->sample == KITH_SAMPLE_F32) f->bits = 32;
-  if (f->sample != KITH_SAMPLE_F32 && f->bits > 24 && f->sample != KITH_SAMPLE_S32) f->bits = 24;
+  if (f->bits > 32) f->bits = 32;
   return KITH_OK;
 }
 
@@ -138,7 +151,7 @@ int mc_source_open(const char *path, const kith_pcm_format *want, kith_source **
   src->fmt.sample_rate = (int)src->src_rate;
   src->fmt.channels = (int)src->src_channels;
   src->fmt.sample = KITH_SAMPLE_F32;
-  src->fmt.bits = 32;
+  src->fmt.bits = src->lossless ? src->src_bits : 32;
   if (mc_random_bytes(&src->rng, sizeof src->rng) != MC_OK || !src->rng) src->rng = 0x9e3779b9u;
   int rc = apply(src, want);
   if (rc != KITH_OK) {

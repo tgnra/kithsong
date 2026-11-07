@@ -320,6 +320,11 @@ static void take_value(void *user, const char *key, const char *value) {
   put_kv(user, key, value, 0);
 }
 
+/* The same for a key the plugin hasn't set itself. */
+static void take_missing(void *user, const char *key, const char *value) {
+  if (!find_kv(user, key)) put_kv(user, key, value, 0);
+}
+
 /* Loads e, which is on. Under lock. */
 static void load(entry *e) {
 #if LOADING
@@ -366,7 +371,14 @@ static void load(entry *e) {
     refused = mc_str(MC_STR_PLUGIN_REFUSED_ENTRY);
   } else {
     fill_host(e);
+    /* Its stored values, under the id it gave last time, for init to read. */
+    const char *known = g.settings ? mc_settings_plugin_known(g.settings, e->file_id, "id") : NULL;
+    if (known && !e->nvalues) mc_settings_plugin_values(g.settings, known, take_value, e);
+    /* Unlocked: init may call back into the host (settings_get), which locks. Only the UI
+     * thread changes the list, so the entry stays put meanwhile. */
+    unlock();
     p = init(&e->host);
+    lock();
     if (!p) refused = mc_str(MC_STR_PLUGIN_REFUSED_INIT);
     else if (p->abi != KITH_PLUGIN_ABI || p->size != (int)sizeof *p)
       refused = mc_str(MC_STR_PLUGIN_REFUSED_ABI);
@@ -393,7 +405,7 @@ static void load(entry *e) {
   set_reason(e, NULL);
   if (g.settings) {
     mc_settings_set_plugin_known(g.settings, e->file_id, p->id, p->name, p->version);
-    mc_settings_plugin_values(g.settings, p->id, take_value, e);
+    mc_settings_plugin_values(g.settings, p->id, take_missing, e);
   }
 #else
   e->state = MC_PLUGIN_OFF;
@@ -403,7 +415,11 @@ static void load(entry *e) {
 static void unload(entry *e) {
 #if LOADING
   if (!e->handle) return;
-  if (e->plugin && e->plugin->shutdown) e->plugin->shutdown();
+  if (e->plugin && e->plugin->shutdown) { /* unlocked, as init */
+    unlock();
+    e->plugin->shutdown();
+    lock();
+  }
 #if defined(_WIN32)
   FreeLibrary((HMODULE)e->handle);
 #else

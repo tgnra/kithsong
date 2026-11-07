@@ -102,8 +102,9 @@ typedef enum kith_sample_type {
 typedef struct kith_pcm_format {
   int sample_rate;           /* Hz: resampled to exactly this */
   int channels;              /* exactly this: more are downmixed, mono is copied to both */
-  int bits;                  /* significant bits per sample, 16 or 24 (or 32 for F32);
-                              * fewer than the source's are dithered (TPDF) */
+  int bits;                  /* significant bits per sample: 16 or 24, or for F32 the precision
+                              * there is (a lossless source's own bits, 32 for a lossy one).
+                              * Fewer than the source's are dithered (TPDF) */
   kith_sample_type sample;
   /* Limits, applied after the exact fields above: a source over them is brought down to
    * them (a 96 kHz source with max_sample_rate 48000 comes out at 48 kHz; 44.1 kHz stays as
@@ -457,6 +458,9 @@ typedef struct kith_plugin {
 } kith_plugin;
 
 typedef const kith_plugin *(*kith_plugin_init_fn)(const kith_host *host);
+
+/* The entry point every plugin defines. */
+KITH_PLUGIN_EXPORT const kith_plugin *kith_plugin_init(const kith_host *host);
 
 #ifdef __cplusplus
 }
