@@ -30,6 +30,9 @@
  * member is reachable is the last session attempt with it (mc_sync_peer.contact), so
  * discovery and reach checks, which come and go, never move it. */
 #include <stdarg.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -258,6 +261,9 @@ void mc_sync_emit_progress(mc_sync *sync, const mc_sync_progress *p) {
 }
 
 int mc_sync_tracing(void) {
+#ifdef __ANDROID__
+  return 1;
+#endif
   static int on = -1; /* the environment doesn't change, so a race only reads it twice */
   if (on < 0) {
     const char *v = getenv("KITHSONG_SYNC_TRACE");
@@ -310,6 +316,10 @@ void mc_sync_trace(const char *fmt, ...) {
   va_start(ap, fmt);
   vsnprintf(line + n, sizeof line - (size_t)n - 1, fmt, ap);
   va_end(ap);
+#ifdef __ANDROID__
+  __android_log_write(ANDROID_LOG_INFO, "kithsong-sync", line);
+  return;
+#endif
   size_t len = strlen(line);
   line[len++] = '\n';
   sqlite3_mutex *buf = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP2);
