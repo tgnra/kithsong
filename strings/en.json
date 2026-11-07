@@ -596,6 +596,11 @@
     "status_cancelled": { "text": "cancelled", "note": "A hand edit or MusicBrainz search that was stopped before it had changed anything." },
     "status_unknown": "unknown error",
 
+    "plugin_refused_load": { "text": "the file couldn't be loaded ({0})", "note": "Why a plugin that was turned on isn't running, after \"Couldn't load it:\" in Settings › Plugins. {0} is the system's own error." },
+    "plugin_refused_entry": { "text": "it isn't a Kithsong plugin", "note": "Why a plugin isn't running: the file has no plugin entry point." },
+    "plugin_refused_init": { "text": "it didn't start", "note": "Why a plugin isn't running: it said it couldn't start." },
+    "plugin_refused_abi": { "text": "it was made for another version of Kithsong", "note": "Why a plugin isn't running: it must be rebuilt for this version of the app." },
+
     "nothing_playing": "Nothing playing",
     "pair": { "text": "Pair", "note": "A button or screen title for pairing with another device." },
     "sync": { "text": "Sync", "note": "Pairing and syncing between devices: a menu item, screen title or notification channel name." },

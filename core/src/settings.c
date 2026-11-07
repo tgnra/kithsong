@@ -6,6 +6,7 @@
 
 #include <yyjson.h>
 
+#include "settings_internal.h"
 #include "util/platform.h"
 
 #define SETTINGS_FILE "settings.json"
@@ -246,3 +247,101 @@ mc_status mc_settings_set_volume(mc_settings *s, int volume) {
 int mc_settings_scrobble(const mc_settings *s) { return mc_settings_bool(s, "scrobble", 1); }
 
 mc_status mc_settings_set_scrobble(mc_settings *s, int on) { return mc_settings_set_bool(s, "scrobble", on); }
+
+/* --- Plugins (settings_internal.h) ---
+ * "plugins": {"enabled": [file ids], "known": {file id: {"id", "name", "version"}},
+ *             "settings": {plugin id: {key: text}}} */
+
+/* root.plugins[key], made an object if create and it isn't one. */
+static yyjson_mut_val *plugins_obj(const mc_settings *s, const char *key, int create) {
+  yyjson_mut_val *root = yyjson_mut_doc_get_root(s->doc);
+  yyjson_mut_val *p = yyjson_mut_obj_get(root, "plugins");
+  if (!yyjson_mut_is_obj(p)) {
+    if (!create) return NULL;
+    yyjson_mut_obj_remove_key(root, "plugins");
+    p = yyjson_mut_obj(s->doc);
+    if (!p || !yyjson_mut_obj_add_val(s->doc, root, "plugins", p)) return NULL;
+  }
+  if (!key) return p;
+  yyjson_mut_val *v = yyjson_mut_obj_get(p, key);
+  if (!v && create) {
+    v = !strcmp(key, "enabled") ? yyjson_mut_arr(s->doc) : yyjson_mut_obj(s->doc);
+    if (!v || !yyjson_mut_obj_add_val(s->doc, p, key, v)) return NULL;
+  }
+  return v;
+}
+
+int mc_settings_plugin_enabled(const mc_settings *s, const char *file_id) {
+  if (!s || !file_id) return 0;
+  yyjson_mut_val *arr = plugins_obj(s, "enabled", 0), *v;
+  if (!yyjson_mut_is_arr(arr)) return 0;
+  yyjson_mut_arr_iter it;
+  yyjson_mut_arr_iter_init(arr, &it);
+  while ((v = yyjson_mut_arr_iter_next(&it)))
+    if (yyjson_mut_is_str(v) && !strcmp(yyjson_mut_get_str(v), file_id)) return 1;
+  return 0;
+}
+
+mc_status mc_settings_set_plugin_enabled(mc_settings *s, const char *file_id, int on) {
+  if (!s || !file_id || !*file_id) return MC_ERR_INVALID_ARG;
+  yyjson_mut_val *arr = plugins_obj(s, "enabled", 1), *v;
+  if (!yyjson_mut_is_arr(arr)) return MC_ERR_NOMEM;
+  yyjson_mut_arr_iter it;
+  yyjson_mut_arr_iter_init(arr, &it);
+  while ((v = yyjson_mut_arr_iter_next(&it)))
+    if (yyjson_mut_is_str(v) && !strcmp(yyjson_mut_get_str(v), file_id)) yyjson_mut_arr_iter_remove(&it);
+  if (!on) return MC_OK;
+  return yyjson_mut_arr_add_strcpy(s->doc, arr, file_id) ? MC_OK : MC_ERR_NOMEM;
+}
+
+const char *mc_settings_plugin_known(const mc_settings *s, const char *file_id, const char *field) {
+  if (!s || !file_id || !field) return NULL;
+  yyjson_mut_val *known = plugins_obj(s, "known", 0);
+  return yyjson_mut_get_str(yyjson_mut_obj_get(yyjson_mut_obj_get(known, file_id), field));
+}
+
+mc_status mc_settings_set_plugin_known(mc_settings *s, const char *file_id, const char *id,
+                                       const char *name, const char *version) {
+  if (!s || !file_id || !*file_id) return MC_ERR_INVALID_ARG;
+  yyjson_mut_val *known = plugins_obj(s, "known", 1);
+  if (!yyjson_mut_is_obj(known)) return MC_ERR_NOMEM;
+  yyjson_mut_obj_remove_key(known, file_id);
+  yyjson_mut_val *o = yyjson_mut_obj(s->doc), *k = yyjson_mut_strcpy(s->doc, file_id);
+  if (!o || !k || !yyjson_mut_obj_add(known, k, o)) return MC_ERR_NOMEM;
+  if (id && !yyjson_mut_obj_add_strcpy(s->doc, o, "id", id)) return MC_ERR_NOMEM;
+  if (name && !yyjson_mut_obj_add_strcpy(s->doc, o, "name", name)) return MC_ERR_NOMEM;
+  if (version && !yyjson_mut_obj_add_strcpy(s->doc, o, "version", version)) return MC_ERR_NOMEM;
+  return MC_OK;
+}
+
+void mc_settings_plugin_values(const mc_settings *s, const char *plugin_id,
+                               void (*each)(void *user, const char *key, const char *value),
+                               void *user) {
+  if (!s || !plugin_id || !each) return;
+  yyjson_mut_val *obj = yyjson_mut_obj_get(plugins_obj(s, "settings", 0), plugin_id), *k;
+  if (!yyjson_mut_is_obj(obj)) return;
+  yyjson_mut_obj_iter it;
+  yyjson_mut_obj_iter_init(obj, &it);
+  while ((k = yyjson_mut_obj_iter_next(&it))) {
+    yyjson_mut_val *v = yyjson_mut_obj_iter_get_val(k);
+    if (yyjson_mut_is_str(v)) each(user, yyjson_mut_get_str(k), yyjson_mut_get_str(v));
+  }
+}
+
+mc_status mc_settings_set_plugin_value(mc_settings *s, const char *plugin_id, const char *key,
+                                       const char *value) {
+  if (!s || !plugin_id || !*plugin_id || !key || !*key) return MC_ERR_INVALID_ARG;
+  yyjson_mut_val *all = plugins_obj(s, "settings", 1);
+  if (!yyjson_mut_is_obj(all)) return MC_ERR_NOMEM;
+  yyjson_mut_val *obj = yyjson_mut_obj_get(all, plugin_id);
+  if (!yyjson_mut_is_obj(obj)) {
+    yyjson_mut_obj_remove_key(all, plugin_id);
+    obj = yyjson_mut_obj(s->doc);
+    yyjson_mut_val *k = yyjson_mut_strcpy(s->doc, plugin_id);
+    if (!obj || !k || !yyjson_mut_obj_add(all, k, obj)) return MC_ERR_NOMEM;
+  }
+  yyjson_mut_obj_remove_key(obj, key);
+  if (!value) return MC_OK;
+  yyjson_mut_val *k = yyjson_mut_strcpy(s->doc, key), *v = yyjson_mut_strcpy(s->doc, value);
+  return k && v && yyjson_mut_obj_add(obj, k, v) ? MC_OK : MC_ERR_NOMEM;
+}
