@@ -4,12 +4,14 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -22,6 +24,7 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Badge
@@ -38,8 +41,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,35 +83,50 @@ private val SidebarRowHeight = 44.dp
 /** A section heading's, Recents' and Devices'. */
 private val SidebarHeadingHeight = 36.dp
 
+/** The Devices heading's, which its + button makes taller than the others. */
+private val SidebarDevicesHeadingHeight = 48.dp
+
 /** The space above the first row, between the groups of pages, and below the last. */
 private val SidebarGap = 8.dp
 
-/** How many of Recents count towards the sidebar's height, which the rest scroll past. */
-private const val FIXED_RECENTS = 3
-
-/** How many recents the sidebar lists, as on the desktops. */
-private const val MAX_RECENTS = 10
+/** The fewest recents the sidebar lists, scrolling to them if there isn't room. */
+internal const val MIN_SIDEBAR_RECENTS = 3
 
 /** How tall a row is with the text at [fontScale]: taller only once the text needs it. */
 private fun sidebarRowHeight(fontScale: Float): Dp = maxOf(SidebarRowHeight, 24.dp * fontScale + 16.dp)
 
+/** How tall a row with a subtitle is, a device's, with the text at [fontScale]. */
+private fun sidebarTwoLineRowHeight(fontScale: Float): Dp = maxOf(sidebarRowHeight(fontScale), 36.dp * fontScale + 8.dp)
+
 /**
- * How tall the sidebar has to be to show, without scrolling, its pages, the Recents heading
- * and the first [FIXED_RECENTS] recents, with Import and Settings beneath them. Devices and the
- * rest of Recents can scroll. [useTabletLayout] wants this much room under the top bar.
+ * How tall the sidebar has to be to show, without scrolling, its pages and, beneath the
+ * divider, Library stats, Import and Settings. Recents and Devices go between them and scroll.
+ * [useTabletLayout] wants this much room under the top bar.
  */
 internal fun sidebarFixedHeight(fontScale: Float): Dp {
     val row = sidebarRowHeight(fontScale)
     val pages = 2 + TabletSection.entries.size - 1 // Home and Search; Albums to Album groups
-    val pinned = 2 // Import and Settings
-    return SidebarGap + row * pages + SidebarGap + SidebarHeadingHeight + row * FIXED_RECENTS +
-        1.dp + SidebarGap + row * pinned + SidebarGap
+    val pinned = 3 // Library stats, Import and Settings
+    return SidebarGap + row * pages + SidebarGap + 1.dp + SidebarGap + row * pinned + SidebarGap
+}
+
+/**
+ * How many of [available] recents the sidebar lists in [height], the room between its pages
+ * and the divider: as many as fit there with Devices ([devices] rows, and the Nearby heading
+ * if [nearby]) without scrolling, but at least [MIN_SIDEBAR_RECENTS].
+ */
+internal fun sidebarRecentsShown(height: Dp, fontScale: Float, available: Int, devices: Int, nearby: Boolean): Int {
+    val devicesHeight = SidebarDevicesHeadingHeight + sidebarTwoLineRowHeight(fontScale) * devices +
+        (if (nearby) SidebarHeadingHeight else 0.dp)
+    val fit = ((height - SidebarHeadingHeight - devicesHeight) / sidebarRowHeight(fontScale)).toInt()
+    return minOf(available, maxOf(MIN_SIDEBAR_RECENTS, fit))
 }
 
 /**
  * The tablet layout's sidebar, as the desktops': Home and Search, then the library's pages,
- * then Recents and Devices, scrolling between those and Import and Settings, which stay at
- * the bottom. What's showing is [section], unless a page the sidebar opens is ([page]:
+ * then Recents and Devices, scrolling between those and Library stats, Import and Settings,
+ * which stay at the bottom under a divider. Recents lists as many as fit
+ * ([sidebarRecentsShown]). What's showing is [section], unless a page the sidebar opens is ([page]:
  * Search, Settings, Library stats or a device's page), which is then the one picked.
  *
  * A recent opens with [onRecent], and long-pressing or right-clicking it opens its menu
@@ -117,8 +137,7 @@ internal fun sidebarFixedHeight(fontScale: Float): Dp {
  * this phone), a nearby one asks to pair, and the + adds one by address. [binDot] marks this
  * phone while deletes wait for a sync it would send, as the phone's menu marks Sync. Import
  * opens [importPickers]' choices in a menu, with a spinner while an import is
- * [importRunning]. Library stats, which the desktops have at the bottom, goes at the end of
- * what scrolls, as there's no room for it among what doesn't.
+ * [importRunning].
  */
 @Composable
 internal fun Sidebar(
@@ -157,78 +176,95 @@ internal fun Sidebar(
             Spacer(Modifier.height(SidebarGap))
             for (s in TabletSection.entries) if (s != TabletSection.Home) pick(s)
             Spacer(Modifier.height(SidebarGap))
-            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                val shown = recents.take(MAX_RECENTS)
-                if (shown.isNotEmpty()) {
-                    item(key = "recents") { SidebarHeading(stringResource(R.string.section_recents)) }
-                    items(shown, key = { "recent:${it.ref.kind}:${it.ref.uid}" }) { recent ->
-                        SidebarRow(
-                            recent.title,
-                            selected = false,
-                            height = row,
-                            leading = {
-                                AlbumArt(
-                                    recent.art,
-                                    contentDescription = null,
-                                    shape = if (recent.ref.kind == CollectionRef.Kind.Artist) CircleShape else RoundedCornerShape(6.dp),
-                                    modifier = Modifier.size(28.dp),
-                                )
-                            },
-                            onLongClick = { onRecentMenu(recent) },
-                            dropOn = recent.ref,
-                        ) { onRecent(recent) }
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val shown = recents.take(
+                    sidebarRecentsShown(
+                        maxHeight,
+                        LocalDensity.current.fontScale,
+                        available = recents.size,
+                        devices = 1 + status.members.size + status.nearby.size,
+                        nearby = status.nearby.isNotEmpty(),
+                    ),
+                )
+                val list = rememberLazyListState()
+                // A recent arriving at the top shows there, while the list is at its top. The list
+                // would otherwise stay with the item that was first, scrolling the new one out of
+                // sight. This has to be before the list's next layout, which is when it follows.
+                val front = shown.firstOrNull()?.ref
+                remember(front) {
+                    Snapshot.withoutReadObservation {
+                        if (list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0) list.requestScrollToItem(0)
                     }
+                    front
                 }
-                item(key = "devices") {
-                    SidebarHeading(stringResource(R.string.devices)) {
-                        IconButton(onClick = { adding = true }, enabled = status.running && status.pairing == null) {
-                            Icon(Icons.Add, contentDescription = stringResource(R.string.add_device))
+                LazyColumn(Modifier.fillMaxSize(), state = list) {
+                    if (shown.isNotEmpty()) {
+                        item(key = "recents") { SidebarHeading(stringResource(R.string.section_recents)) }
+                        items(shown, key = { "recent:${it.ref.kind}:${it.ref.uid}" }) { recent ->
+                            SidebarRow(
+                                recent.title,
+                                selected = false,
+                                height = row,
+                                leading = {
+                                    AlbumArt(
+                                        recent.art,
+                                        contentDescription = null,
+                                        shape = if (recent.ref.kind == CollectionRef.Kind.Artist) CircleShape else RoundedCornerShape(6.dp),
+                                        modifier = Modifier.size(28.dp),
+                                    )
+                                },
+                                onLongClick = { onRecentMenu(recent) },
+                                dropOn = recent.ref,
+                            ) { onRecent(recent) }
                         }
                     }
-                }
-                item(key = "self") {
-                    SidebarRow(
-                        status.deviceName,
-                        selected = page == Page.Device(THIS_DEVICE),
-                        height = row,
-                        icon = Icons.Smartphone,
-                        subtitle = stringResource(R.string.this_phone),
-                        badge = binDot,
-                        badgeDescription = stringResource(R.string.sync_bin_waiting),
-                    ) { onDevice(THIS_DEVICE) }
-                }
-                items(status.members, key = { "member:${it.uid}" }) { device ->
-                    val syncing = device.uid in status.syncing
-                    SidebarRow(
-                        device.name,
-                        selected = page == Page.Device(device.uid),
-                        height = row,
-                        icon = device.kind.icon,
-                        // Its first line: how it is, without why files wait, which its page says.
-                        subtitle = memberText(device, syncing).substringBefore('\n'),
-                        trailing = if (syncing) ({ CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }) else null,
-                    ) { onDevice(device.uid) }
-                }
-                if (status.nearby.isNotEmpty()) item(key = "nearby") { SidebarHeading(stringResource(R.string.devices_nearby)) }
-                items(status.nearby, key = { "nearby:${it.uid}" }) { device ->
-                    SidebarRow(
-                        device.name,
-                        selected = false,
-                        height = row,
-                        icon = device.kind.icon,
-                        subtitle = stringResource(if (device.inOtherGroup) R.string.device_in_other_group else R.string.device_tap_to_pair),
-                        enabled = !device.inOtherGroup && status.pairing == null,
-                        clickLabel = stringResource(R.string.pair),
-                    ) { syncer.pair(device) }
-                }
-                item(key = "stats") {
-                    Spacer(Modifier.height(SidebarGap))
-                    SidebarRow(stringResource(R.string.stats_title), page == Page.Stats, row, icon = Icons.BarChart) { onPage(Page.Stats) }
-                    Spacer(Modifier.height(SidebarGap))
+                    item(key = "devices") {
+                        SidebarHeading(stringResource(R.string.devices)) {
+                            IconButton(onClick = { adding = true }, enabled = status.running && status.pairing == null) {
+                                Icon(Icons.Add, contentDescription = stringResource(R.string.add_device))
+                            }
+                        }
+                    }
+                    item(key = "self") {
+                        SidebarRow(
+                            status.deviceName,
+                            selected = page == Page.Device(THIS_DEVICE),
+                            height = row,
+                            icon = Icons.Smartphone,
+                            subtitle = stringResource(R.string.this_phone),
+                            badge = binDot,
+                            badgeDescription = stringResource(R.string.sync_bin_waiting),
+                        ) { onDevice(THIS_DEVICE) }
+                    }
+                    items(status.members, key = { "member:${it.uid}" }) { device ->
+                        val syncing = device.uid in status.syncing
+                        SidebarRow(
+                            device.name,
+                            selected = page == Page.Device(device.uid),
+                            height = row,
+                            icon = device.kind.icon,
+                            // Its first line: how it is, without why files wait, which its page says.
+                            subtitle = memberText(device, syncing).substringBefore('\n'),
+                            trailing = if (syncing) ({ CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }) else null,
+                        ) { onDevice(device.uid) }
+                    }
+                    if (status.nearby.isNotEmpty()) item(key = "nearby") { SidebarHeading(stringResource(R.string.devices_nearby)) }
+                    items(status.nearby, key = { "nearby:${it.uid}" }) { device ->
+                        SidebarRow(
+                            device.name,
+                            selected = false,
+                            height = row,
+                            icon = device.kind.icon,
+                            subtitle = stringResource(if (device.inOtherGroup) R.string.device_in_other_group else R.string.device_tap_to_pair),
+                            enabled = !device.inOtherGroup && status.pairing == null,
+                            clickLabel = stringResource(R.string.pair),
+                        ) { syncer.pair(device) }
+                    }
                 }
             }
             HorizontalDivider()
             Spacer(Modifier.height(SidebarGap))
+            SidebarRow(stringResource(R.string.stats_title), page == Page.Stats, row, icon = Icons.BarChart) { onPage(Page.Stats) }
             ImportRow(importPickers, importRunning, row)
             SidebarRow(stringResource(R.string.settings), page == Page.Settings, row, icon = Icons.Settings) { onPage(Page.Settings) }
             Spacer(Modifier.height(SidebarGap))

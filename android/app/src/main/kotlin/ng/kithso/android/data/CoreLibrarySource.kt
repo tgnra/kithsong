@@ -1225,7 +1225,7 @@ class CoreLibrarySource(
         const val TAG = "kithsong"
         const val KEY_RECENTS = "recents" // only read once, to hand them to the core
         const val KEY_PLAYLIST_ART = "playlist_art"
-        const val MAX_RECENTS = 8
+        const val MAX_RECENTS = 40 // as many as a tablet's sidebar could fit
         const val SEARCH_LIMIT = 20 // of each kind, as the desktops show
 
         fun artRef(uid: String, label: String, file: File?) = ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)

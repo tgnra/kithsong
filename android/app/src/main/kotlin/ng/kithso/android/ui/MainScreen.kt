@@ -165,6 +165,9 @@ internal sealed interface MainItem {
 
 private const val RADIO_ROW_KEY = "row:radio"
 private const val RECENTS_ROW_KEY = "row:recents"
+
+/** How many recents the phone's row shows; a tablet's sidebar can show more. */
+internal const val PHONE_RECENTS = 8
 private const val ALBUM_GROUPS_ROW_KEY = "row:album-groups"
 private const val TILE_ROW_TYPE = "tiles"
 
@@ -186,7 +189,7 @@ internal fun mainItems(library: Library?, columns: Int, banner: Boolean, canMake
     }
     if (library.recents.isNotEmpty()) {
         add(MainItem.Heading(Section.Recents))
-        add(MainItem.RecentsRow(library.recents))
+        add(MainItem.RecentsRow(library.recents.take(PHONE_RECENTS)))
     }
     if (library.playlists.isNotEmpty() || headings) {
         add(MainItem.Heading(Section.Playlists))

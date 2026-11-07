@@ -35,7 +35,7 @@ class MainItemsTest {
             listOf(
                 MainItem.Header,
                 MainItem.Heading(Section.Recents),
-                MainItem.RecentsRow(recents(30)),
+                MainItem.RecentsRow(recents(30).take(PHONE_RECENTS)), // the sidebar takes more
                 MainItem.Heading(Section.AlbumGroups),
                 MainItem.AlbumGroupsRow(groups(30)),
                 MainItem.Heading(Section.Albums),
