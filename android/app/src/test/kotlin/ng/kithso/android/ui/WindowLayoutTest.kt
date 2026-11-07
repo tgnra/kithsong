@@ -142,8 +142,9 @@ class WindowLayoutTest {
             for (area in listOf(panes.main, panes.pages, panes.miniPlayer, panes.player)) {
                 assertTrue(area.whole)
                 assertEquals(0.dp, area.x)
-                assertEquals(window.width, area.width)
-                assertEquals(window.height, area.height)
+                // In the dp of what's drawn, which the Jelly's dense scale makes more of.
+                assertEquals(window.width / window.scale.size, area.width)
+                assertEquals(window.height / window.scale.size, area.height)
             }
         }
     }
@@ -151,11 +152,13 @@ class WindowLayoutTest {
     @Test
     fun mediumIsHalvesWithPagesAndPlayersOnTheRight() {
         val panes = panesFor(layout(915, 412))
+        // A phone on its side, so dense: halves of its width in drawn dp.
+        val half = 457.5.dp / LayoutScale.Dense.size
         assertTrue(panes.sideBySide)
         assertEquals(0.dp, panes.main.x)
-        assertEquals(457.5.dp, panes.main.width)
-        assertEquals(457.5.dp, panes.pages.x)
-        assertEquals(457.5.dp, panes.pages.width)
+        assertEquals(half, panes.main.width)
+        assertEquals(half, panes.pages.x)
+        assertEquals(half, panes.pages.width)
         assertEquals(panes.pages, panes.miniPlayer)
         assertEquals(panes.pages, panes.player)
     }
@@ -299,15 +302,24 @@ class WindowLayoutTest {
     }
 
     @Test
-    fun aDenseWindowDrawsTheStripInItsScaledDp() {
+    fun aDenseWindowsPanesAreInItsScaledDp() {
         // A phone on its side: drawn dp are 0.85 of real ones, so there are that many more of them.
-        val strip = homeStrip(panesFor(layout(850, 400)), LayoutScale.Dense)
+        val panes = panesFor(layout(850, 400))
+        assertEquals(500f, panes.pages.x.value, 0.01f)
+        assertEquals(500f, panes.pages.width.value, 0.01f)
+        assertEquals(400f / 0.85f, panes.pages.height.value, 0.01f)
+        assertTrue(panes.pages.short)
+        val strip = homeStrip(panes)
         assertEquals(500f, strip.middleContent.value, 0.01f)
         assertEquals(-500f, strip.leftMove.value, 0.01f)
         assertEquals(-500f, strip.middleMove.value, 0.01f)
-        // Its pane stays in the window's, as Pane does the scaling.
-        assertEquals(425.dp, strip.middle.x)
-        assertEquals(425.dp, strip.middle.width)
+    }
+
+    @Test
+    fun aRegularWindowsPanesAreInItsOwnDpAndNotShort() {
+        val panes = panesFor(layout(1280, 800))
+        assertEquals(1280.dp, panes.categories!!.width + panes.main.width + panes.pages.width)
+        assertFalse(panes.pages.short)
     }
 
     @Test

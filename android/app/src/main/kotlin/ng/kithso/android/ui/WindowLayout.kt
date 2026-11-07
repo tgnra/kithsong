@@ -133,8 +133,11 @@ data class WindowLayout(
     val height: Dp,
     val fold: WindowFold? = null,
 ) {
+    /** Short, as a phone is in landscape: screens then put their headers' parts side by side. */
+    val short: Boolean get() = height.whole() < ShortBelowHeight
+
     /** Space is tight: smaller text, a smaller header, the small mini player with no seekbar. */
-    val dense: Boolean get() = layoutClass == WindowLayoutClass.Small || height.whole() < ShortBelowHeight
+    val dense: Boolean get() = layoutClass == WindowLayoutClass.Small || short
 
     /** The scaling that goes with [dense]. */
     val scale: LayoutScale get() = if (dense) LayoutScale.Dense else LayoutScale.Regular
@@ -147,9 +150,10 @@ data class WindowLayout(
 
 /**
  * A part of the window something is drawn in. [sides] are the window's edges it touches, the
- * only ones whose insets are its to clear: see [inPane]. Its sizes are the window's dp, as
- * [WindowLayout]'s are, for comparing with the thresholds; what's drawn is in scaled dp, for which
- * see [drawnHeight] and [drawnWidth].
+ * only ones whose insets are its to clear: see [inPane]. Its sizes are in the dp of what's drawn,
+ * which a dense window scales (see [LayoutScale]), so they compare with what's laid out in it
+ * as they are. Only [WindowLayout] has the window's own dp, for the thresholds; [short] is the one
+ * of those a pane needs.
  */
 @Immutable
 data class PaneArea(
@@ -158,7 +162,15 @@ data class PaneArea(
     val height: Dp,
     val sides: WindowInsetsSides,
     val whole: Boolean = false,
-)
+    /** The window is short, as a phone is in landscape: see [isShortPane]. */
+    val short: Boolean = false,
+) {
+    /** This area of a window at [layout]'s size, in the dp of what's drawn there. */
+    internal fun drawnIn(layout: WindowLayout): PaneArea {
+        val size = layout.scale.size
+        return copy(x = x / size, width = width / size, height = height / size, short = layout.short)
+    }
+}
 
 internal val AllSides = WindowInsetsSides.Horizontal + WindowInsetsSides.Vertical
 
@@ -185,6 +197,9 @@ data class Panes(
 
     /** Home is columns across the window, not one list: see [HomeLayout]. */
     val columns: Boolean get() = home != main
+
+    internal fun map(f: (PaneArea) -> PaneArea) =
+        Panes(f(main), f(pages), f(miniPlayer), f(player), f(home), categories?.let(f))
 }
 
 /** The categories' share of a window, within [NarrowestCategories] and [WidestCategories]. */
@@ -205,7 +220,10 @@ private val WidestPages = 560.dp
  * The one place that decides where everything goes, for each layout class. Right-to-left, [rtl],
  * mirrors it: pages open on the left.
  */
-fun panesFor(layout: WindowLayout, rtl: Boolean = false): Panes = when (layout.layoutClass) {
+fun panesFor(layout: WindowLayout, rtl: Boolean = false): Panes = windowPanes(layout, rtl).map { it.drawnIn(layout) }
+
+/** [panesFor] in the window's dp. */
+private fun windowPanes(layout: WindowLayout, rtl: Boolean): Panes = when (layout.layoutClass) {
     WindowLayoutClass.Compact, WindowLayoutClass.Small -> {
         val all = PaneArea(0.dp, layout.width, layout.height, AllSides, whole = true)
         Panes(all, all, all, all)
@@ -259,26 +277,17 @@ fun WindowInsets.inPane(): WindowInsets = only(LocalPane.current.sides)
 
 /** Whether the pane is short, as a phone is in landscape: screens then put their headers' parts side by side. */
 @Composable
-fun isShortPane(): Boolean = LocalPane.current.height.whole() < ShortBelowHeight
-
-/** The pane's height in what's being drawn, whose dp are scaled: see [LayoutScale]. */
-@Composable
-fun drawnHeight(): Dp = LocalPane.current.height / LocalWindowLayout.current.scale.size
-
-/** The pane's width in what's being drawn, as [drawnHeight] is its height. */
-@Composable
-fun drawnWidth(): Dp = LocalPane.current.width / LocalWindowLayout.current.scale.size
+fun isShortPane(): Boolean = LocalPane.current.short
 
 /** [content] in [area], which [LocalPane] then says, at the area's place in the window. */
 @Composable
 fun Pane(area: PaneArea, content: @Composable BoxScope.() -> Unit) {
-    val size = LocalWindowLayout.current.scale.size
     CompositionLocalProvider(LocalPane provides area) {
         Box(
             if (area.whole) Modifier.fillMaxSize()
             // Measured from the left in any language: a Box would otherwise start from the right.
             else Modifier.fillMaxSize().wrapContentWidth(AbsoluteAlignment.Left)
-                .absoluteOffset(x = area.x / size).width(area.width / size),
+                .absoluteOffset(x = area.x).width(area.width),
             content = content,
         )
     }
@@ -361,7 +370,7 @@ fun ProvideWindowLayout(content: @Composable () -> Unit) {
         WindowLayout.of(size.width.toDp(), size.height.toDp(), fold, foldKnown = !hinged)
     }
     LaunchedEffect(layout) { Log.i("kithsong-layout", "$layout dense=${layout.dense} hinged=$hinged") }
-    val whole = PaneArea(0.dp, layout.width, layout.height, AllSides, whole = true)
+    val whole = PaneArea(0.dp, layout.width, layout.height, AllSides, whole = true).drawnIn(layout)
     val scaled = remember(density, layout.scale) { density.scaledBy(layout.scale) }
     CompositionLocalProvider(
         LocalWindowLayout provides layout,

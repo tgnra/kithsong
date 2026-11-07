@@ -84,7 +84,7 @@ internal data class HomeStrip(
     val middleMove: Dp,
 )
 
-internal fun homeStrip(panes: Panes, scale: LayoutScale = LayoutScale.Regular): HomeStrip {
+internal fun homeStrip(panes: Panes): HomeStrip {
     val main = panes.main
     val pages = panes.pages
     val rest = pages.x + pages.width / 2
@@ -93,9 +93,9 @@ internal fun homeStrip(panes: Panes, scale: LayoutScale = LayoutScale.Regular): 
     return HomeStrip(
         // It clears both sides' insets, as it's at each in turn, and must not move inside itself.
         middle = pages.copy(sides = AllSides),
-        middleContent = minOf(main.width, pages.width) / scale.size,
-        leftMove = (if (main.x < pages.x) -leftMove else leftMove) / scale.size,
-        middleMove = moved / scale.size,
+        middleContent = minOf(main.width, pages.width),
+        leftMove = if (main.x < pages.x) -leftMove else leftMove,
+        middleMove = moved,
     )
 }
 
@@ -143,7 +143,7 @@ internal fun HomeLayout(
         saved.SaveableStateProvider("list") { content(HomeColumn.All) }
     } else {
         saved.SaveableStateProvider("columns") {
-            val strip = homeStrip(panes, LocalWindowLayout.current.scale)
+            val strip = homeStrip(panes)
             Pane(panes.main) {
                 Box(
                     Modifier
