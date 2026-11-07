@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -22,6 +23,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -35,7 +37,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /** Which way a [DismissibleScreen] slides out. */
-enum class DismissDirection { Down, Right }
+enum class DismissDirection { Down, Right, Left }
 
 /** Where a [DismissibleScreen] rests: on screen, or slid out. */
 private enum class Layer { Shown, Hidden }
@@ -59,6 +61,10 @@ private enum class Layer { Shown, Hidden }
  * The drag, the slide in and out, and predictive back all move one [AnchoredDraggableState]:
  * drag steps apply as they come, under the same lock as the animations, so each takes over
  * from the last cleanly and every drag ends settled at one end or the other.
+ *
+ * A layer brought back (a rotation, a fold) is simply there, not slid in again. [onShown] is
+ * called once it's fully on screen. [onSlide] gets a function saying how far on screen it is, 0 to
+ * 1, for what moves along with it, then null when it goes. [scrim] is the dimming of what's beneath.
  */
 @Composable
 fun DismissibleScreen(
@@ -68,6 +74,9 @@ fun DismissibleScreen(
     onLeaving: () -> Unit = {},
     backEnabled: Boolean = true,
     draggable: Boolean = true,
+    scrim: Boolean = true,
+    onShown: () -> Unit = {},
+    onSlide: ((fraction: (() -> Float)?) -> Unit)? = null,
     content: @Composable (dismiss: () -> Unit) -> Unit,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -75,12 +84,15 @@ fun DismissibleScreen(
             if (direction == DismissDirection.Down) maxHeight.toPx() else maxWidth.toPx()
         }
         val anchors = remember(distance) { DraggableAnchors { Layer.Shown at 0f; Layer.Hidden at distance } }
-        val state = remember { AnchoredDraggableState(Layer.Hidden, anchors) }
+        var seen by rememberSaveable { mutableStateOf(false) }
+        val state = remember { AnchoredDraggableState(if (seen) Layer.Shown else Layer.Hidden, anchors) }
         // A new size (rotation, a resized window) moves the ends, keeping the layer at its end.
         SideEffect { if (state.anchors != anchors) state.updateAnchors(anchors, state.targetValue) }
         val scope = rememberCoroutineScope()
         val onLeavingNow by rememberUpdatedState(onLeaving)
         val onDismissedNow by rememberUpdatedState(onDismissed)
+        val onShownNow by rememberUpdatedState(onShown)
+        val distanceNow by rememberUpdatedState(distance)
         // Each once only: a fling and the close button can both finish out.
         var leaving by remember { mutableStateOf(false) }
         var gone by remember { mutableStateOf(false) }
@@ -93,7 +105,15 @@ fun DismissibleScreen(
         }
         val motion = spring<Float>(stiffness = Spring.StiffnessMediumLow)
 
-        LaunchedEffect(Unit) { state.animateTo(Layer.Shown, motion) }
+        LaunchedEffect(Unit) {
+            state.animateTo(Layer.Shown, motion)
+            seen = true
+            onShownNow()
+        }
+        if (onSlide != null) DisposableEffect(Unit) {
+            onSlide { (1f - state.requireOffset() / distanceNow).coerceIn(0f, 1f) }
+            onDispose { onSlide(null) }
+        }
 
         fun leave() {
             if (leaving) return
@@ -145,18 +165,23 @@ fun DismissibleScreen(
         // Dims the screen beneath, less as this one slides away.
         Box(
             Modifier.fillMaxSize().drawBehind {
-                drawRect(Color.Black, alpha = 0.32f * (1f - state.requireOffset() / distance).coerceIn(0f, 1f))
+                if (scrim) drawRect(Color.Black, alpha = 0.32f * (1f - state.requireOffset() / distance).coerceIn(0f, 1f))
             },
         )
         Box(
             Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    if (direction == DismissDirection.Down) translationY = state.requireOffset()
-                    else translationX = state.requireOffset()
+                    when (direction) {
+                        DismissDirection.Down -> translationY = state.requireOffset()
+                        DismissDirection.Right -> translationX = state.requireOffset()
+                        DismissDirection.Left -> translationX = -state.requireOffset()
+                    }
                 }
                 .anchoredDraggable(
                     state,
+                    // Said outright, as the default turns a drag round in right-to-left, and the layer doesn't.
+                    reverseDirection = direction == DismissDirection.Left,
                     orientation = if (direction == DismissDirection.Down) Orientation.Vertical else Orientation.Horizontal,
                     enabled = draggable && !leaving,
                     flingBehavior = flingBehavior,

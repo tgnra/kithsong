@@ -8,10 +8,10 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.absoluteOffset
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -160,7 +161,7 @@ data class PaneArea(
     val whole: Boolean = false,
 )
 
-private val AllSides = WindowInsetsSides.Horizontal + WindowInsetsSides.Vertical
+internal val AllSides = WindowInsetsSides.Horizontal + WindowInsetsSides.Vertical
 
 /**
  * Where each part of the app goes. App.kt calls [Pane] once for each, at the same place in every
@@ -170,16 +171,29 @@ private val AllSides = WindowInsetsSides.Horizontal + WindowInsetsSides.Vertical
  * loses them.
  */
 @Immutable
-data class Panes(val main: PaneArea, val pages: PaneArea, val miniPlayer: PaneArea, val player: PaneArea) {
+data class Panes(
+    val main: PaneArea,
+    val pages: PaneArea,
+    val miniPlayer: PaneArea,
+    val player: PaneArea,
+    /** What home is drawn in: [main], unless it has [columns]. */
+    val home: PaneArea = main,
+) {
     /** Pages open beside the main content rather than over it. */
     val sideBySide: Boolean get() = main != pages
+
+    /** Home is columns across the window, not one list: see [HomeLayout]. */
+    val columns: Boolean get() = home != main
 }
 
 /** Large's main content takes this share of the window, for now. */
 private const val LARGE_MAIN_SHARE = 0.6f
 
-/** The one place that decides where everything goes, for each layout class. */
-fun panesFor(layout: WindowLayout): Panes = when (layout.layoutClass) {
+/**
+ * The one place that decides where everything goes, for each layout class. Right-to-left, [rtl],
+ * mirrors it: pages open on the left.
+ */
+fun panesFor(layout: WindowLayout, rtl: Boolean = false): Panes = when (layout.layoutClass) {
     WindowLayoutClass.Compact, WindowLayoutClass.Small -> {
         val all = PaneArea(0.dp, layout.width, layout.height, AllSides, whole = true)
         Panes(all, all, all, all)
@@ -187,12 +201,13 @@ fun panesFor(layout: WindowLayout): Panes = when (layout.layoutClass) {
     // Either side of a hinge, which has a width on some devices; else halves.
     WindowLayoutClass.Medium -> {
         val fold = layout.fold?.takeIf { it.vertical }
-        split(layout, fold?.start ?: (layout.width / 2), fold?.end ?: (layout.width / 2))
+        val panes = split(layout, fold?.start ?: (layout.width / 2), fold?.end ?: (layout.width / 2), rtl)
+        panes.copy(home = PaneArea(0.dp, layout.width, layout.height, AllSides, whole = true))
     }
-    WindowLayoutClass.Large -> (layout.width * LARGE_MAIN_SHARE).let { split(layout, it, it) }
+    WindowLayoutClass.Large -> (layout.width * (if (rtl) 1 - LARGE_MAIN_SHARE else LARGE_MAIN_SHARE)).let { split(layout, it, it, rtl) }
 }
 
-private fun split(layout: WindowLayout, leftEnd: Dp, rightStart: Dp): Panes {
+private fun split(layout: WindowLayout, leftEnd: Dp, rightStart: Dp, rtl: Boolean): Panes {
     val left = PaneArea(0.dp, leftEnd, layout.height, WindowInsetsSides.Left + WindowInsetsSides.Vertical)
     val right = PaneArea(
         rightStart,
@@ -200,7 +215,7 @@ private fun split(layout: WindowLayout, leftEnd: Dp, rightStart: Dp): Panes {
         layout.height,
         WindowInsetsSides.Right + WindowInsetsSides.Vertical,
     )
-    return Panes(left, right, right, right)
+    return if (rtl) Panes(right, left, left, left) else Panes(left, right, right, right)
 }
 
 /** The window's layout. Set by [ProvideWindowLayout]. */
@@ -231,7 +246,9 @@ fun Pane(area: PaneArea, content: @Composable BoxScope.() -> Unit) {
     CompositionLocalProvider(LocalPane provides area) {
         Box(
             if (area.whole) Modifier.fillMaxSize()
-            else Modifier.absoluteOffset(x = area.x / size).width(area.width / size).fillMaxHeight(),
+            // Measured from the left in any language: a Box would otherwise start from the right.
+            else Modifier.fillMaxSize().wrapContentWidth(AbsoluteAlignment.Left)
+                .absoluteOffset(x = area.x / size).width(area.width / size),
             content = content,
         )
     }
