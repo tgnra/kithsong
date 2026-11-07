@@ -1,6 +1,6 @@
 # Plugins
 
-> Status: proposal, on the `experimental` branch. Nothing here is implemented yet. Change this
+> Status: being implemented on the `experimental` branch. Change this
 > document first, then the code.
 
 ## Goals
@@ -76,8 +76,12 @@ The plugin provides:
 | `probe(mount_path)` | Whether this volume is one of its devices: for the iPod, whether `iPod_Control/iTunes/iTunesDB` exists and `iPod_Control/Device/SysInfo` names a model without the hash. Cheap, no writes. |
 | `open(mount_path) → target` | Opens it. Reports a stable id (the iPod's FireWire GUID from SysInfo, falling back to its serial number), a name (the iPod's own name, from its master playlist), capacity, free space, and the formats it plays, with their limits (below). |
 | `list(target)` | What it holds: for each track, the plugin's own key, the `track_uid` it was written for (if Kithsong wrote it), format, bitrate and size. |
-| `put(target, track, file_path)` | Adds or replaces one track from an encoded file, with its tags and cover. |
+| `put(target, track, file_path)` | Adds or replaces one track from an encoded file, with its tags, cover, and play count and last played time. |
+| `update(target, key, track)` | Rewrites a track's tags, play count and last played time without copying its file again. |
 | `remove(target, key)` | Removes one track. |
+| `plays_read(target)` *(optional)* | Plays made on the device since the last sync: for each track key, how many and when the last one was (see Plays from the device). |
+| `playlists_read(target)` *(optional)* | Playlists made on the device: for the iPod, its On-The-Go playlists, each a name and a list of track keys. |
+| `device_done(target, what)` | Clears what core has taken in (`plays`, `playlists`), once it is safely in the library: for the iPod, deletes `Play Counts` and the `OTGPlaylistInfo` files at the next `commit()`. |
 | `commit(target)` | Writes the device's database. Core calls it every 50 tracks or 2 minutes during a sync, and at the end, so unplugging loses little. |
 | `close(target)` | Closes it. |
 | `eject(target)` *(optional)* | Flushes and ejects, if the device needs more than the OS's own eject. |
@@ -112,6 +116,10 @@ of that computer's `sync.db` that are never replicated (`tethered_devices`,
 - Other members don't see the iPod. Making tethered devices group members, so a phone could
   edit what goes on the iPod, is an open question (below).
 
+**Tracks Kithsong didn't write are never removed or changed.** An iPod that iTunes filled
+keeps that music beside Kithsong's: `list()` reports such tracks with no `track_uid`, and the
+plan leaves them alone, though their size counts against the free space.
+
 Each track the plugin writes is also recorded on the device itself
 (`iPod_Control/kithsong.json`: track key → `track_uid`, `file_uid`, format and hash), so
 another computer running Kithsong recognises the files and doesn't write them again.
@@ -131,6 +139,40 @@ Limits the target declares are applied while encoding. 4th-generation iPods play
 16 bits and 44.1 or 48 kHz, so a 24-bit/96 kHz FLAC is resampled to 44.1 kHz and dithered to
 16 bits. The iPod also doesn't play files with more than two channels, so multichannel
 sources are downmixed to stereo, as Opus transcodes already are.
+
+#### Plays from the device
+
+Play counts go both ways. Each sync starts by taking in what was played on the device, then
+writes the library's counts back:
+
+1. `plays_read()` gives, for each track key, a count of plays since the last sync and the time
+   of the last one. Keys with no `track_uid` (music Kithsong didn't write) are matched to
+   library tracks by artist, album, title and duration within 2 seconds. A track that matches
+   nothing is skipped and counted on the card as "plays of tracks not in the library".
+2. Each play becomes a play log row (`mc_library_log_play()`) with context `device`, the
+   tethered device's id as `context_uid`, end `finished` and `listened_ms` set to the track's
+   length. The device records only the last play's time, so with several plays the last one
+   gets that time and each earlier one is placed one track length (plus 30 seconds) before
+   the one after it. That's a guess, but it keeps the times in order and believable.
+3. Each play is also scrobbled (`mc_scrobbler_scrobble()`) if a scrobbling account is signed
+   in on this computer. Last.fm drops scrobbles older than 14 days, so those plays are only
+   logged, and the card says how many weren't scrobbled.
+4. Plays are taken in exactly once. Before `device_done(plays)`, core records the import in
+   `sync.db` (`tethered_imports`: device id, a hash of the `Play Counts` file, and the time).
+   A `Play Counts` file whose hash was already imported is cleared without being read again,
+   so an unplug between the import and the commit never doubles anything.
+5. Then every track Kithsong wrote gets the library's play count and last played time (from
+   the play log, the device's own plays included) through `update()`, so the iPod shows the
+   same totals as the app.
+
+#### Playlists from the device
+
+On-The-Go playlists made on the iPod become manual playlists in the library, named
+"On-The-Go 1" and so on, plus the iPod's name if the library already has one by that name.
+Their tracks are matched as for plays. Once the playlists are created, `device_done(playlists)`
+clears them from the iPod. A playlist is created only once, guarded like plays by
+`tethered_imports`. If the profile selects that playlist, it then goes back to the iPod as an
+ordinary playlist at the end of the same sync.
 
 ### Encoders
 
@@ -181,16 +223,19 @@ ships as a separate download rather than inside the app.
 - **Encoders**: ALAC from Apple's reference encoder (Apache-2.0), MP3 from LAME (LGPL-2.0,
   so the plugin's source and the means to relink it stay available, which shipping it from
   this repository covers). Both are listed in `LICENSES.md` under the plugin, not the app.
-- **Play counts back.** The iPod records plays in `iPod_Control/iTunes/Play Counts`. Reading
-  them into the play log, and so into Last.fm, is the obvious next feature. It needs a third
-  extension point ("play sources", below), so it isn't in version 1.
+- **Play counts and On-The-Go**: the plugin reads `iPod_Control/iTunes/Play Counts` (the
+  `mhdp` header and one entry per `mhit`, in the iTunesDB's track order) and
+  `OTGPlaylistInfo` plus `OTGPlaylistInfo_N` (`mhpo`: indexes into that same order), and
+  writes `play_count`, `last_played` (Mac epoch, 1904) in each `mhit`. The indexes only hold
+  for the iTunesDB they were made against, so the plugin reads plays and playlists before
+  it writes a new database.
 
 ## Later extension points
 
 In rough order of usefulness. Each one is added when a plugin needs it, not before:
 
-1. **Play sources**: plays made away from Kithsong (iPod play counts, a Rockbox
-   `playback.log`), added to the play log and scrobbled.
+1. **Play sources** that aren't device targets, such as a Rockbox `playback.log` read without
+   syncing, using the same import path as Plays from the device.
 2. **Decoders**: formats core doesn't read (AAC/M4A, WavPack, Monkey's Audio, DSD), which
    then feed playback, analysis and every encoder.
 3. **Metadata providers**: lyrics, artist images and bios, other tag sources (Discogs),
@@ -207,8 +252,10 @@ In rough order of usefulness. Each one is added when a plugin needs it, not befo
 3. Device targets: volume events from both frontends, the tethered tables in `sync.db`, the
    plan and the file loop, and a **folder target** test plugin (writes into a directory) so
    all of it can be tested without an iPod.
-4. The iPod plugin: iTunesDB writer and reader, ALAC and LAME, `kithsong.json`, tested
-   against fixture databases and then a real iPod.
+4. Plays and playlists from the device: the import, `tethered_imports`, scrobbling, writing
+   counts back. The folder test plugin fakes plays and a playlist to test it.
+5. The iPod plugin: iTunesDB, Play Counts and OTGPlaylistInfo reader and writer, ALAC and
+   LAME, `kithsong.json`, tested against fixture databases and then a real iPod.
 
 ## Open questions
 
