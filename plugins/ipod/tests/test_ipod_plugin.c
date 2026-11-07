@@ -26,14 +26,14 @@
 
 /* --- Audio files ----------------------------------------------------------------------- */
 
-typedef struct bits {
+typedef struct bitbuf {
   unsigned char *buf;
   size_t len, cap;
   uint64_t acc;
   int n;
-} bits;
+} bitbuf;
 
-static void bits_put(bits *b, uint32_t v, int count) {
+static void bits_put(bitbuf *b, uint32_t v, int count) {
   for (int i = count - 1; i >= 0; i--) {
     b->acc = b->acc << 1 | ((v >> i) & 1);
     if (++b->n == 8) {
@@ -74,7 +74,7 @@ static int32_t tone(uint32_t i, uint32_t rate, int ch, int bps, double pitch) {
 /* A stereo FLAC of a tone, in VERBATIM subframes: what a FLAC needs to be, no more. */
 static int write_flac(const char *path, uint32_t rate, int bps, double pitch) {
   const uint32_t block = 4096, total = rate * SECONDS;
-  bits b = {0};
+  bitbuf b = {0};
   bits_put(&b, 0x664C6143u, 32); /* fLaC */
   bits_put(&b, 1, 1);           /* last metadata block */
   bits_put(&b, 0, 7);           /* STREAMINFO */
@@ -368,9 +368,9 @@ int main(int argc, char **argv) {
   memset(&x, 0, sizeof x);
   mc_mutex_init(&x.lock);
   snprintf(x.base, sizeof x.base, "%s", argv[1]);
-  snprintf(x.libdir, sizeof x.libdir, "%s/lib", x.base);
-  snprintf(x.cfg, sizeof x.cfg, "%s/cfg", x.base);
-  snprintf(x.dev, sizeof x.dev, "%s/ipod", x.base);
+  snprintf(x.libdir, sizeof x.libdir, "%.900s/lib", x.base);
+  snprintf(x.cfg, sizeof x.cfg, "%.900s/cfg", x.base);
+  snprintf(x.dev, sizeof x.dev, "%.900s/ipod", x.base);
   mc_remove_tree(x.base);
   CHECK(mc_mkdirs(x.libdir) == MC_OK && mc_mkdirs(x.cfg) == MC_OK && mc_mkdirs(x.dev) == MC_OK);
   CHECK(mc_settings_load(x.cfg, &x.s) == MC_OK);
