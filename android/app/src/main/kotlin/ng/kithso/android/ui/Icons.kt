@@ -39,6 +39,13 @@ object Icons {
             "M13,10V7h-2v3H8v2h3v3h2v-3h3v-2H13zM24,18l-4.5,4.5L18,21l3,-3l-3,-3l1.5,-1.5L24,18z",
     )
     val PlaylistPlay = icon("PlaylistPlay", "M4,10h12v2H4zM4,6h12v2H4zM4,14h8v2H4zM14,14v6l5,-3z")
+    // The tablet layout's sidebar and top bar.
+    val Home = icon("Home", "M10,20v-6h4v6h5v-8h3L12,3 2,12h3v8z")
+    val QueueMusic = icon(
+        "QueueMusic",
+        "M15,6H3v2h12V6zM15,10H3v2h12v-2zM3,16h8v-2H3v2zM17,6v8.18c-0.31,-0.11 -0.65,-0.18 -1,-0.18" +
+            "c-1.66,0 -3,1.34 -3,3s1.34,3 3,3 3,-1.34 3,-3V8h3V6h-5z",
+    )
     val ArrowBack = icon("ArrowBack", "M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.41,-1.41L7.83,13H20v-2z")
     val Add = icon("Add", "M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z")
     val AutoAwesome = icon(

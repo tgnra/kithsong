@@ -92,10 +92,9 @@ fun SyncScreen(
 ) {
     val status by syncer.status.collectAsState()
     var adding by rememberSaveable { mutableStateOf(false) }
-    var leaving by rememberSaveable { mutableStateOf(false) }
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            contentPadding = pageSides()
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
             modifier = Modifier.fillMaxSize(),
@@ -130,19 +129,7 @@ fun SyncScreen(
             items(status.members, key = { "member:${it.uid}" }) { device ->
                 MemberRow(device, status, syncer) { onOpenDevice(device.uid) }
             }
-            if (status.members.isNotEmpty()) item(key = "sync_now") {
-                val syncing = status.syncing.isNotEmpty()
-                ListItem(
-                    leadingContent = {
-                        if (syncing) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Sync, contentDescription = null)
-                    },
-                    headlineContent = { Text(stringResource(if (syncing) R.string.syncing else R.string.sync_now)) },
-                    supportingContent = { Text(stringResource(R.string.sync_now_text)) },
-                    trailingContent = { if (syncing) CancelSyncButton { syncer.cancelSync() } },
-                    modifier = Modifier.clickable(enabled = status.running && !syncing) { syncer.syncNow() },
-                )
-            }
+            if (status.members.isNotEmpty()) item(key = "sync_now") { SyncNowRow(status, syncer) }
 
             if (status.nearby.isNotEmpty()) item(key = "nearby") {
                 Text(
@@ -179,13 +166,7 @@ fun SyncScreen(
                     supportingContent = { Text(stringResource(R.string.add_device_by_address_text)) },
                     modifier = Modifier.clickable(enabled = status.running && status.pairing == null) { adding = true },
                 )
-                if (status.inGroup) {
-                    ListItem(
-                        headlineContent = { Text(stringResource(R.string.leave_group), color = MaterialTheme.colorScheme.error) },
-                        supportingContent = { Text(stringResource(R.string.leave_group_text)) },
-                        modifier = Modifier.clickable(enabled = status.running) { leaving = true },
-                    )
-                }
+                if (status.inGroup) LeaveGroupRow(status, syncer)
             }
         }
     }
@@ -199,6 +180,33 @@ fun SyncScreen(
             onDismiss = { adding = false },
         )
     }
+}
+
+/** Sync now, with every member of the group; while a session runs, a spinner and a way to cancel it. */
+@Composable
+private fun SyncNowRow(status: SyncStatus, syncer: Syncer) {
+    val syncing = status.syncing.isNotEmpty()
+    ListItem(
+        leadingContent = {
+            if (syncing) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+            else Icon(Icons.Sync, contentDescription = null)
+        },
+        headlineContent = { Text(stringResource(if (syncing) R.string.syncing else R.string.sync_now)) },
+        supportingContent = { Text(stringResource(R.string.sync_now_text)) },
+        trailingContent = { if (syncing) CancelSyncButton { syncer.cancelSync() } },
+        modifier = Modifier.clickable(enabled = status.running && !syncing) { syncer.syncNow() },
+    )
+}
+
+/** Leave group, which asks first, naming the devices this phone would stop syncing with. */
+@Composable
+private fun LeaveGroupRow(status: SyncStatus, syncer: Syncer) {
+    var leaving by rememberSaveable { mutableStateOf(false) }
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.leave_group), color = MaterialTheme.colorScheme.error) },
+        supportingContent = { Text(stringResource(R.string.leave_group_text)) },
+        modifier = Modifier.clickable(enabled = status.running) { leaving = true },
+    )
     if (leaving) {
         AlertDialog(
             onDismissRequest = { leaving = false },
@@ -249,6 +257,11 @@ private fun MemberRow(device: SyncDevice, status: SyncStatus, syncer: Syncer, on
  * profile ([ProfileSection]). [uid] is a member's, or [THIS_DEVICE] for this phone. A member
  * that leaves the group closes the page with [onBack], as does back or a swipe right.
  * [onRename], if given, renames this phone; a member is renamed through its profile.
+ *
+ * With [onOpenBin], this phone's page also has what the Sync page has for the whole group, for
+ * the tablet layout, which lists the devices in its sidebar and has no Sync page: the recycle
+ * bin's notice ([onOpenBin] opens the bin), what may stop sync, Sync now with every member and
+ * Leave group, as the desktops' own page has them.
  */
 @Composable
 fun DeviceScreen(
@@ -257,9 +270,12 @@ fun DeviceScreen(
     bottomPadding: Dp,
     onBack: () -> Unit,
     onRename: ((String) -> Unit)? = null,
+    onOpenBin: (() -> Unit)? = null,
 ) {
     val status by syncer.status.collectAsState()
     val isSelf = uid == THIS_DEVICE
+    // The whole group's part of the Sync page, on this phone's own page, as the desktops have it.
+    val groupActions = isSelf && onOpenBin != null
     val device = status.members.find { it.uid == uid }
     // Removed here or by another device, or the group was left.
     val gone = !isSelf && device == null
@@ -272,12 +288,26 @@ fun DeviceScreen(
 
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            contentPadding = pageSides()
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
             modifier = Modifier.fillMaxSize(),
         ) {
             item(key = "header") { ScreenHeader(device?.name ?: status.deviceName, onBack) }
+
+            if (groupActions && status.binCount > 0) item(key = "bin") {
+                BinNotice(status.binCount, onOpenBin, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            }
+            if (groupActions) item(key = "notice") {
+                syncNotice(status)?.let { (text, isError) ->
+                    Text(
+                        text,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+            }
 
             item(key = "info") {
                 if (device == null) {
@@ -288,7 +318,8 @@ fun DeviceScreen(
                     )
                     InfoRow(stringResource(R.string.device_address), addressText(status.address?.takeIf { status.running }, status.port))
                     // After pairing by merging, until the old library's music has come in.
-                    if (status.mergePending) {
+                    // With the group's Sync now below, the notice above says this.
+                    if (status.mergePending && !(groupActions && status.members.isNotEmpty())) {
                         Text(
                             stringResource(R.string.merge_pending),
                             style = MaterialTheme.typography.bodyMedium,
@@ -314,6 +345,8 @@ fun DeviceScreen(
                             modifier = Modifier.clickable(enabled = status.running) { renaming = true },
                         )
                     }
+                    if (groupActions && status.members.isNotEmpty()) SyncNowRow(status, syncer)
+                    if (groupActions && status.inGroup) LeaveGroupRow(status, syncer)
                 } else {
                     val syncing = device.uid in status.syncing
                     ListItem(

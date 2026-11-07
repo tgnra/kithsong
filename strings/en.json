@@ -1363,7 +1363,22 @@
     "sync_notification_see_code": "Open Kithsong to see the code",
     "sync_notification_files_sent": { "one": "{0:d} of {1:d} file sent", "other": "{0:d} of {1:d} files sent", "note": "Audio files sent so far of those the other device is fetching from this phone, under \"Syncing with …\". The plural follows {1}." },
     "sync_error_open": "Couldn't open this phone's sync data",
-    "merge_tracks_deleted": { "one": "{0:d} duplicate deleted from this phone", "other": "{0:d} duplicates deleted from this phone", "note": "Tracks the library had in the same or better quality: this phone's copy was deleted (Android has no trash). One item of merge_tracks' list." }
+    "merge_tracks_deleted": { "one": "{0:d} duplicate deleted from this phone", "other": "{0:d} duplicates deleted from this phone", "note": "Tracks the library had in the same or better quality: this phone's copy was deleted (Android has no trash). One item of merge_tracks' list." },
+    "keys_playback": { "text": "Playback", "note": "Heading in the list of keyboard shortcuts, which Ctrl+? or Meta+/ shows." },
+    "keys_general": { "text": "General", "note": "Heading in the list of keyboard shortcuts." },
+    "keys_lists": { "text": "Lists", "note": "Heading in the list of keyboard shortcuts: the keys of the album, artist and playlist tiles and the rows of tracks." },
+    "keys_play_pause": { "text": "Play or pause", "note": "In the list of keyboard shortcuts, beside Space." },
+    "keys_seek_forward": { "text": "Forward 5 seconds", "note": "In the list of keyboard shortcuts." },
+    "keys_seek_back": { "text": "Back 5 seconds", "note": "In the list of keyboard shortcuts." },
+    "keys_volume_up": { "text": "Volume up", "note": "In the list of keyboard shortcuts." },
+    "keys_volume_down": { "text": "Volume down", "note": "In the list of keyboard shortcuts." },
+    "keys_mute": { "text": "Mute or unmute", "note": "In the list of keyboard shortcuts." },
+    "keys_shuffle": { "text": "Shuffle on or off", "note": "In the list of keyboard shortcuts." },
+    "keys_import": { "text": "Import a folder", "note": "In the list of keyboard shortcuts, beside Ctrl+O: asks for a folder of music to import." },
+    "keys_back": { "text": "Back, or close the track list", "note": "In the list of keyboard shortcuts, beside Escape." },
+    "keys_shortcuts": { "text": "Keyboard shortcuts", "note": "In the list of keyboard shortcuts, beside Ctrl+?, which shows it." },
+    "keys_open": { "text": "Open or play the selected item", "note": "In the list of keyboard shortcuts, beside Enter: opens the album, artist or playlist the focus is on, or plays the track." },
+    "keys_item_menu": { "text": "The selected item's menu", "note": "In the list of keyboard shortcuts, beside the Menu key and Shift+F10." }
   },
   "wear": {
     "watch_empty_text": "No music on this watch yet. Pair it under Sync to add some.",

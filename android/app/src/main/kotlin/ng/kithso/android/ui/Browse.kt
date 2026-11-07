@@ -24,7 +24,7 @@ import ng.kithso.android.data.CollectionRef
 
 internal val BrowseGutter = 16.dp
 internal val TileSpacing = 12.dp
-private val MinTileWidth = 150.dp
+internal val MinTileWidth = 150.dp
 private val StripTileWidth = 140.dp
 
 /** How many album tiles fit across [width], as on the main screen. */
@@ -43,7 +43,10 @@ internal fun BrowseHeading(text: String) {
     )
 }
 
-/** An album's cover, title and [subtitle]; tapping it opens the album, long-pressing it its menu. */
+/**
+ * An album's cover, title and [subtitle]; tapping it opens the album, long-pressing it its menu.
+ * In the tablet layout it drags onto an album group.
+ */
 @Composable
 private fun AlbumTile(
     album: Album,
@@ -59,6 +62,7 @@ private fun AlbumTile(
         onLongClick = { onMenu(album) },
         onClick = { onOpen(CollectionRef(CollectionRef.Kind.Album, album.uid)) },
         modifier = modifier,
+        drag = DragItem.Album(album.uid, album.title, album.artist),
     )
 }
 

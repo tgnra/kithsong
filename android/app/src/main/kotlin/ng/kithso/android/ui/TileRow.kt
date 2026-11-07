@@ -1,7 +1,6 @@
 package ng.kithso.android.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.Arrangement
@@ -208,6 +207,7 @@ internal fun StationBadge() {
 /**
  * Art with a title and, unless it's null, a [subtitle] under it, as a [modifier]-wide tap target;
  * the [badge] goes in the art's top corner. [description], if any, is what TalkBack says of it.
+ * A right-click opens its menu too, and in the tablet layout it drags [drag], if given.
  */
 @Composable
 internal fun ArtTile(
@@ -219,12 +219,14 @@ internal fun ArtTile(
     modifier: Modifier,
     badge: (@Composable () -> Unit)? = null,
     description: String? = null,
+    drag: DragItem? = null,
 ) {
     val said = description ?: if (subtitle.isNullOrEmpty()) title else "$title, $subtitle"
     Column(
         modifier
             .clip(RoundedCornerShape(12.dp))
-            .combinedClickable(onLongClick = onLongClick, onClick = onClick)
+            .listItemKeys(RoundedCornerShape(12.dp), onLongClick)
+            .menuClickable(onLongClick, onClick, drag)
             .semantics { contentDescription = said },
     ) {
         Box {

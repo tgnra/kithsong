@@ -4,7 +4,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -690,9 +689,9 @@ internal fun Artist.subtitle(): String =
     if (albumCount > 0) pluralStringResource(R.plurals.albums, albumCount, albumCount)
     else pluralStringResource(R.plurals.tracks, trackCount, trackCount)
 
-/** A list row with art, for playlists and artists. */
+/** A list row with art, for playlists and artists. A right-click opens its menu, as a long press does. */
 @Composable
-private fun LibraryRow(
+internal fun LibraryRow(
     title: String,
     subtitle: String,
     art: ArtRef,
@@ -705,7 +704,7 @@ private fun LibraryRow(
         supportingContent = { Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         leadingContent = { AlbumArt(art, contentDescription = null, shape = artShape, modifier = Modifier.size(ListArtSize)) },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier.combinedClickable(onLongClick = onLongClick, onClick = onClick),
+        modifier = Modifier.listItemKeys(ListRowFocusShape, onLongClick).menuClickable(onLongClick, onClick),
     )
 }
 

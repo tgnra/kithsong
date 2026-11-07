@@ -7,7 +7,9 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.verticalDrag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -204,6 +206,20 @@ internal fun Modifier.queueDrag(slide: QueueSlide, swipe: TrackSwipeState? = nul
 }
 
 /**
+ * Drags on this element, once its children have had what they want of them, go no further: not
+ * to skip a track nor to dismiss the player. For the queue where it shares the player's view, as
+ * in tabletop, so that a drag on the list that the list can't use, or on the empty queue, doesn't
+ * take the player away.
+ */
+internal fun Modifier.keepsDrags(): Modifier = pointerInput(Unit) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        val start = awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() } ?: return@awaitEachGesture
+        drag(start.id) { it.consume() }
+    }
+}
+
+/**
  * A drag down the list past its top moves the view back towards the player, and on the way back
  * up moves the view before the list scrolls.
  */
@@ -234,9 +250,12 @@ private class QueueListScroll(private val slide: QueueSlide) : NestedScrollConne
  * for each entry of up next, in the order it plays, with its title, its artist or how many tracks
  * are left of it, how long it is, a handle to drag it by and an x to take it out. Accessibility
  * services get moving and removing as actions on the row, which is what Windows' keys are there.
+ *
+ * With no [slide] it's beside the player rather than under it, as in tabletop: there's nothing to
+ * close, and the list scrolls only itself.
  */
 @Composable
-internal fun QueuePage(playback: Playback, slide: QueueSlide, modifier: Modifier = Modifier) {
+internal fun QueuePage(playback: Playback, slide: QueueSlide?, modifier: Modifier = Modifier) {
     val entries = playback.upNext
     val listState = rememberLazyListState()
     val reorder = remember(listState) { ReorderState(listState) }
@@ -254,16 +273,20 @@ internal fun QueuePage(playback: Playback, slide: QueueSlide, modifier: Modifier
         dragging = null
     }
     val title = stringResource(R.string.queue)
-    val scroll = remember(slide) { QueueListScroll(slide) }
+    val scroll = remember(slide) { slide?.let(::QueueListScroll) }
     Column(
         modifier.semantics { paneTitle = title },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Row(
-            Modifier.widthIn(max = MaxQueueWidth).fillMaxWidth().padding(top = 4.dp, start = 12.dp, end = 24.dp),
+            // Without the chevron, the heading lines up with the rows' handles.
+            Modifier
+                .widthIn(max = MaxQueueWidth)
+                .fillMaxWidth()
+                .padding(top = 4.dp, start = if (slide != null) 12.dp else 16.dp, end = 24.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = slide::hide) {
+            if (slide != null) IconButton(onClick = slide::hide) {
                 Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.close_queue))
             }
             Text(
@@ -287,7 +310,7 @@ internal fun QueuePage(playback: Playback, slide: QueueSlide, modifier: Modifier
             }
         } else {
             LazyColumn(
-                Modifier.weight(1f).widthIn(max = MaxQueueWidth).fillMaxWidth().nestedScroll(scroll),
+                Modifier.weight(1f).widthIn(max = MaxQueueWidth).fillMaxWidth().then(if (scroll != null) Modifier.nestedScroll(scroll) else Modifier),
                 state = listState,
             ) {
                 itemsIndexed(rows, key = { _, entry -> entry.id }) { i, entry ->

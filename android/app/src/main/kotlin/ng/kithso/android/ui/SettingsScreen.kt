@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -97,7 +98,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            contentPadding = pageSides()
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
             modifier = Modifier.fillMaxSize(),
@@ -270,13 +271,19 @@ private const val ANALYSIS_COUNT_MS = 5_000L
 
 /**
  * A full screen's header: a back button calling [onBack], and [title] under it, or beside it
- * in a short window. [actions] go at the end of the back button's row.
+ * in a short window. [actions] go at the end of the back button's row. A page the tablet
+ * layout's sidebar picked has nothing to go back to, so no back button ([LocalPageChrome]).
  */
 @Composable
 fun ScreenHeader(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
+    val hasBack = LocalPageChrome.current.back != PageBack.None
     val back = @Composable {
-        IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp, top = 4.dp)) {
-            Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back))
+        if (hasBack) {
+            IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp, top = 4.dp)) {
+                Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back))
+            }
+        } else {
+            Spacer(Modifier.size(12.dp, 8.dp))
         }
     }
     val heading = @Composable { modifier: Modifier ->
@@ -288,7 +295,7 @@ fun ScreenHeader(title: String, onBack: () -> Unit, actions: @Composable RowScop
     }
     if (isShortWindow()) {
         Row(
-            Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars),
+            Modifier.fillMaxWidth().windowInsetsPadding(pageTop()),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             back()
@@ -296,7 +303,7 @@ fun ScreenHeader(title: String, onBack: () -> Unit, actions: @Composable RowScop
             actions()
         }
     } else {
-        Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) {
+        Column(Modifier.fillMaxWidth().windowInsetsPadding(pageTop())) {
             Row(Modifier.fillMaxWidth().padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 back()
                 Spacer(Modifier.weight(1f))

@@ -50,7 +50,7 @@ fun StatsScreen(source: LibrarySource, bottomPadding: Dp, onBack: () -> Unit) {
     val stats by produceState<LibraryStats?>(null, library) { value = source.stats() }
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            contentPadding = pageSides()
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
             modifier = Modifier.fillMaxSize(),

@@ -34,7 +34,7 @@ private const val HOURS_ONLY_FROM = 100L
 /**
  * A seekbar over [durationMs]. [positionMs] is read only in here, so the position ticking
  * recomposes the seekbar and nothing around it. While dragging it shows the drag position,
- * and seeks when let go.
+ * and seeks when let go. With nothing to seek in, it's greyed out ([enabled]).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,6 +45,7 @@ fun Seekbar(
     modifier: Modifier = Modifier,
     trackHeight: Dp = 4.dp,
     thumbHeight: Dp = 16.dp,
+    enabled: Boolean = true,
 ) {
     var dragging by remember { mutableStateOf<Float?>(null) }
     val duration = durationMs.coerceAtLeast(1).toFloat()
@@ -59,6 +60,7 @@ fun Seekbar(
             dragging?.let { onSeek((it * duration).toLong()) }
             dragging = null
         },
+        enabled = enabled,
         interactionSource = interaction,
         thumb = {
             SliderDefaults.Thumb(interaction, thumbSize = DpSize(4.dp, thumbHeight))

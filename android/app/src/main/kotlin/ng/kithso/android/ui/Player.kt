@@ -6,6 +6,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.BoxWithConstraintsScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +33,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
@@ -43,9 +46,12 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -55,6 +61,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import ng.kithso.android.R
 import ng.kithso.android.data.Track
 import ng.kithso.android.playback.Playback
@@ -72,8 +79,9 @@ private fun Track.byline() = trackByline(artist, album)
 
 /**
  * The floating player above the content: art, title and byline, play/pause, and a seekbar
- * beneath. Tapping it calls [onOpen] and a long press [onMenu]; swiping it left or right skips
- * a track (see [TrackSwipeState]), which accessibility services get as actions.
+ * beneath. Tapping it calls [onOpen] and a long press or a right-click [onMenu]; swiping it
+ * left or right skips a track (see [TrackSwipeState]), which accessibility services get as
+ * actions.
  */
 @Composable
 fun MiniPlayer(playback: Playback, track: Track, onOpen: () -> Unit, onMenu: () -> Unit, modifier: Modifier = Modifier) {
@@ -103,6 +111,7 @@ fun MiniPlayer(playback: Playback, track: Track, onOpen: () -> Unit, onMenu: () 
                     onLongClick = onMenu,
                     onClick = onOpen,
                 )
+                .secondaryClick(onMenu)
                 .padding(start = 10.dp, end = 4.dp, top = 10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -168,6 +177,10 @@ private fun PlayPause(playback: Playback) {
  * how far. A window too short to spare the height has that chevron in the middle of the top row.
  * Only the player's own view swipes between tracks, and the background stays put under both.
  * [queueBackEnabled]: system back is the queue's while it's open.
+ *
+ * Half open in tabletop, it's laid out around the fold instead (see [TabletopPlayerLayout]):
+ * the art and title in the half that stands up, and the controls in the half on the table, with
+ * the queue beside them where there's room for it, so it's never slid to.
  */
 @Composable
 internal fun FullPlayer(
@@ -180,70 +193,102 @@ internal fun FullPlayer(
     onMenu: (() -> Unit)? = null,
 ) {
     val swipe = rememberTrackSwipe(playback)
+    val shape = rememberWindowShape()
     QueueBackHandler(slide, queueBackEnabled)
     Surface(
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxSize().onSizeChanged { slide.page = it.height.toFloat() },
     ) {
         ArtBackdrop(rememberArtColors(track.art), Modifier.fillMaxSize())
-        BoxWithConstraints(
-            Modifier
-                .fillMaxSize()
-                .graphicsLayer { translationY = -slide.progress * slide.page }
-                .coveredIf(slide.open)
-                .queueDrag(slide, swipe)
-                .trackSwipe(swipe)
-                .windowInsetsPadding(WindowInsets.safeDrawing),
-        ) {
-            val wide = maxWidth > maxHeight
-            // Below about this, two lines and the controls don't fit, so a short title gives its space back.
-            val titleSpace = maxHeight >= 256.dp + 56.dp * LocalDensity.current.fontScale
-            Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
-                // Nudged so the icons, not their touch targets, line up with the art.
-                Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                    IconButton(onClick = onCollapse, modifier = Modifier.offset(x = (-12).dp)) {
-                        Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.close_player))
-                    }
-                    Spacer(Modifier.weight(1f))
-                    if (wide) {
-                        QueueChevron(slide)
-                        Spacer(Modifier.weight(1f))
-                    }
-                    if (onMenu != null) IconButton(onClick = onMenu, modifier = Modifier.offset(x = 12.dp)) {
-                        Icon(Icons.MoreVert, contentDescription = stringResource(R.string.track_menu))
-                    }
-                }
-                if (wide) {
-                    Row(Modifier.fillMaxSize().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        PlayerArt(swipe, onMenu, Modifier.fillMaxHeight())
-                        Spacer(Modifier.size(32.dp))
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
-                            PlayerTitle(swipe, titleSpace, Alignment.CenterStart)
-                            // Moved, not closed up, so this centred column keeps its height and the title stays put.
-                            PlayerControls(playback, track, onAddToPlaylist, Modifier.offset(y = -ControlsGap))
-                        }
-                    }
-                } else {
-                    TallPlayerLayout(
-                        art = { PlayerArt(swipe, onMenu, Modifier) },
-                        title = { PlayerTitle(swipe, titleSpace, Alignment.TopStart) },
-                        controls = { PlayerControls(playback, track, onAddToPlaylist) },
-                        chevron = { QueueChevron(slide) },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-        }
-        if (slide.shown) {
-            QueuePage(
-                playback,
-                slide,
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val fold = tabletopFold(shape)
+            val queueBeside = fold?.queueBeside == true
+            // The queue that was slid to is beside the controls now, and stays there.
+            LaunchedEffect(queueBeside) { if (queueBeside) slide.hide() }
+            BoxWithConstraints(
                 Modifier
                     .fillMaxSize()
-                    .graphicsLayer { translationY = (1f - slide.progress) * slide.page }
-                    .queueDrag(slide)
+                    .graphicsLayer { translationY = -slide.progress * slide.page }
+                    .coveredIf(slide.open)
+                    .then(if (queueBeside) Modifier else Modifier.queueDrag(slide, swipe))
+                    .trackSwipe(swipe)
                     .windowInsetsPadding(WindowInsets.safeDrawing),
-            )
+            ) {
+                val wide = maxWidth > maxHeight
+                // Below about this, two lines and the controls don't fit, so a short title gives its space back.
+                val titleSpace = maxHeight >= 256.dp + 56.dp * LocalDensity.current.fontScale
+                if (fold != null) {
+                    TabletopPlayerLayout(
+                        fold,
+                        topRow = { PlayerTopRow(onCollapse, onMenu, chevron = null) },
+                        art = { PlayerArt(swipe, onMenu, Modifier) },
+                        title = {
+                            PlayerTitle(swipe, twoLineSpace = true, if (fold.titleBeside) Alignment.CenterStart else Alignment.TopStart)
+                        },
+                        controls = { PlayerControls(playback, track, onAddToPlaylist) },
+                        // Dragging on the list scrolls it, and nothing else.
+                        side = {
+                            if (queueBeside) QueuePage(playback, slide = null, Modifier.keepsDrags())
+                            else QueueChevron(slide)
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+                    PlayerTopRow(onCollapse, onMenu, chevron = if (wide) ({ QueueChevron(slide) }) else null)
+                    if (wide) {
+                        Row(Modifier.fillMaxSize().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            PlayerArt(swipe, onMenu, Modifier.fillMaxHeight())
+                            Spacer(Modifier.size(32.dp))
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
+                                PlayerTitle(swipe, titleSpace, Alignment.CenterStart)
+                                // Moved, not closed up, so this centred column keeps its height and the title stays put.
+                                PlayerControls(playback, track, onAddToPlaylist, Modifier.offset(y = -ControlsGap))
+                            }
+                        }
+                    } else {
+                        TallPlayerLayout(
+                            art = { PlayerArt(swipe, onMenu, Modifier) },
+                            title = { PlayerTitle(swipe, titleSpace, Alignment.TopStart) },
+                            controls = { PlayerControls(playback, track, onAddToPlaylist) },
+                            chevron = { QueueChevron(slide) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+            if (slide.shown && !queueBeside) {
+                QueuePage(
+                    playback,
+                    slide,
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { translationY = (1f - slide.progress) * slide.page }
+                        .queueDrag(slide)
+                        .windowInsetsPadding(WindowInsets.safeDrawing),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The close button, the menu button across from it if there's [onMenu], and between them the
+ * [chevron] to the queue, where the window is too short for it at the foot.
+ */
+@Composable
+private fun PlayerTopRow(onCollapse: () -> Unit, onMenu: (() -> Unit)?, chevron: (@Composable () -> Unit)?) {
+    // Nudged so the icons, not their touch targets, line up with the art.
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        IconButton(onClick = onCollapse, modifier = Modifier.offset(x = (-12).dp)) {
+            Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.close_player))
+        }
+        Spacer(Modifier.weight(1f))
+        if (chevron != null) {
+            chevron()
+            Spacer(Modifier.weight(1f))
+        }
+        if (onMenu != null) IconButton(onClick = onMenu, modifier = Modifier.offset(x = 12.dp)) {
+            Icon(Icons.MoreVert, contentDescription = stringResource(R.string.track_menu))
         }
     }
 }
@@ -304,6 +349,136 @@ private fun TallPlayerLayout(
     }
 }
 
+/**
+ * Where the fold crosses the full player's content in tabletop, in pixels down from the top of
+ * the content, inside the system bars: [top] is where the half that stands up ends and [bottom]
+ * where the half on the table begins, which are the same for a fold with no width.
+ * [titleBeside] is whether the half that stands up is wide enough for the title beside the art,
+ * and [queueBeside] whether the half on the table has room for the queue beside the controls.
+ */
+@Immutable
+private class TabletopFold(val top: Int, val bottom: Int, val titleBeside: Boolean, val queueBeside: Boolean)
+
+/**
+ * The fold across this player, in tabletop, if each half has room for its part. The thresholds
+ * are on the content inside the system bars, so the navigation bar's height counts against the
+ * half on the table.
+ *
+ * The fold's bounds are in the window, and the player is placed against them only while it fills
+ * the window, so that the window's origin is its own and the content is moved from it by the
+ * insets alone. The bounds aren't mapped through the player's own position instead, as that
+ * moves as the player slides in and out, which would move the art and title against the screen.
+ */
+@Composable
+private fun BoxWithConstraintsScope.tabletopFold(shape: WindowShape): TabletopFold? {
+    val fold = shape.fold?.takeIf { shape.tabletop } ?: return null
+    val window = LocalWindowInfo.current.containerSize
+    if (constraints.maxWidth != window.width || constraints.maxHeight != window.height) return null
+    val density = LocalDensity.current
+    val insets = WindowInsets.safeDrawing
+    val insetTop = insets.getTop(density)
+    val height = window.height - insetTop - insets.getBottom(density)
+    val width = window.width - insets.getLeft(density, LocalLayoutDirection.current) -
+        insets.getRight(density, LocalLayoutDirection.current)
+    val top = fold.bounds.top.roundToInt() - insetTop
+    val bottom = fold.bounds.bottom.roundToInt() - insetTop
+    return with(density) {
+        val minHalf = MinTabletopHalf.roundToPx()
+        if (top < minHalf || height - bottom < minHalf) return null
+        val inner = width - 2 * PlayerGutter.roundToPx()
+        // Half as wide again as it's tall, the title has room beside art the half's height.
+        val titleBeside = inner > (top - TabletopGap.roundToPx()) * 3 / 2
+        val queueBeside = inner >= (MinTabletopControls + TabletopGap * 2 + MinTabletopQueue).roundToPx() &&
+            height - bottom >= MinTabletopQueueHeight.roundToPx()
+        TabletopFold(top, bottom, titleBeside, queueBeside)
+    }
+}
+
+/**
+ * The full player's parts around a fold in tabletop. Nothing crosses the fold: [topRow], [art]
+ * and [title] go above it, and [controls] and [side] below, each kept [TabletopGap] from it.
+ *
+ * Above, the art is as big as the height left by the top row and the title. A half that's wide
+ * for its height, as a book-style foldable's is, has the title beside the art
+ * ([TabletopFold.titleBeside]); a narrower one, as a flip phone's, has it under the art.
+ *
+ * Below, with [TabletopFold.queueBeside], the controls are down the left of the half and [side]
+ * is the queue down the right, to the edge, as its rows have their own margins. Without, the
+ * controls take the half's width and [side] is the chevron to the queue, at the foot as in
+ * [TallPlayerLayout].
+ */
+@Composable
+private fun TabletopPlayerLayout(
+    fold: TabletopFold,
+    topRow: @Composable () -> Unit,
+    art: @Composable () -> Unit,
+    title: @Composable () -> Unit,
+    controls: @Composable () -> Unit,
+    side: @Composable () -> Unit,
+    modifier: Modifier,
+) {
+    Layout(
+        contents = listOf(topRow, art, title, controls, side),
+        modifier = modifier,
+    ) { (topRowItem, artItem, titleItem, controlsItem, sideItem), constraints ->
+        val width = constraints.maxWidth
+        val height = constraints.maxHeight
+        val gutter = PlayerGutter.roundToPx()
+        val gap = TabletopGap.roundToPx()
+        val inner = (width - 2 * gutter).coerceAtLeast(0)
+        val maxArt = MaxArtSize.roundToPx()
+
+        // Above the fold.
+        val topRowPlaced = topRowItem.single().measure(Constraints(inner, inner, 0, fold.top))
+        val upperTop = topRowPlaced.height
+        val upperHeight = (fold.top - gap - upperTop).coerceAtLeast(0)
+        val titleBeside = fold.titleBeside
+        val artSide: Int
+        val titlePlaced = if (titleBeside) {
+            artSide = minOf(upperHeight, maxArt, inner / 2)
+            val titleWidth = (inner - artSide - gap * 2).coerceAtLeast(0)
+            titleItem.single().measure(Constraints(titleWidth, titleWidth, 0, upperHeight))
+        } else {
+            val placed = titleItem.single().measure(Constraints(inner, inner, 0, upperHeight))
+            artSide = minOf(inner, maxArt, upperHeight - placed.height - ArtGap.roundToPx()).coerceAtLeast(0)
+            placed
+        }
+        val artPlaced = artItem.single().measure(Constraints.fixed(artSide, artSide))
+
+        // Below it.
+        val lowerTop = fold.bottom + gap
+        val controlsWidth = if (fold.queueBeside) minOf((inner - gap * 2) / 2, maxArt) else inner
+        val sidePlaced: Placeable
+        val lowerBottom: Int
+        if (fold.queueBeside) {
+            val sideWidth = (width - gutter - controlsWidth - gap * 2).coerceAtLeast(0)
+            sidePlaced = sideItem.single().measure(Constraints.fixed(sideWidth, (height - fold.bottom).coerceAtLeast(0)))
+            lowerBottom = height - BottomGap.roundToPx()
+        } else {
+            sidePlaced = sideItem.single().measure(Constraints())
+            lowerBottom = height - maxOf(BottomGap.roundToPx(), sidePlaced.height)
+        }
+        val lowerHeight = (lowerBottom - lowerTop).coerceAtLeast(0)
+        val controlsPlaced = controlsItem.single().measure(Constraints(controlsWidth, controlsWidth, 0, lowerHeight))
+
+        layout(width, height) {
+            topRowPlaced.place(gutter, 0)
+            if (titleBeside) {
+                artPlaced.place(gutter, upperTop + (upperHeight - artSide) / 2)
+                titlePlaced.place(gutter + artSide + gap * 2, upperTop + (upperHeight - titlePlaced.height) / 2)
+            } else {
+                val block = artSide + ArtGap.roundToPx() + titlePlaced.height
+                val artTop = upperTop + (upperHeight - block) / 2
+                artPlaced.place(gutter + (inner - artSide) / 2, artTop)
+                titlePlaced.place(gutter, artTop + artSide + ArtGap.roundToPx())
+            }
+            controlsPlaced.place(gutter, lowerTop + (lowerHeight - controlsPlaced.height) / 2)
+            if (fold.queueBeside) sidePlaced.place(width - sidePlaced.width, fold.bottom)
+            else sidePlaced.place((width - sidePlaced.width) / 2, height - sidePlaced.height)
+        }
+    }
+}
+
 /** The largest the full player's art gets, and the width of the buttons under it. */
 private val MaxArtSize = 480.dp
 
@@ -315,12 +490,42 @@ private val ArtGap = 24.dp
 private val BottomGap = 24.dp
 private val ControlsGap = 16.dp
 
+/** Either side of the full player's content, but for the queue beside it in tabletop. */
+private val PlayerGutter = 24.dp
+
+/**
+ * In tabletop: between the fold and what's either side of it, and twice that between the
+ * controls and the queue beside them.
+ */
+private val TabletopGap = 16.dp
+
+/**
+ * The least height of each half, inside the system bars, for the tabletop layout: the top row,
+ * some art and the title above, and the controls and the chevron below. Less, and the player
+ * keeps its usual layout, across the fold.
+ */
+private val MinTabletopHalf = 220.dp
+
+/**
+ * The least width the controls and the queue each need to go side by side under the fold. The
+ * controls' row of five buttons is about 290dp at the narrowest, and a queue row narrower than
+ * this has little room left for its title between the handle, the time and the x. Book-style
+ * foldables are about 840dp across in tabletop, so they have the queue beside; a flip phone is
+ * about 410dp, so it has the controls alone and the chevron to the queue, as on a phone.
+ */
+private val MinTabletopControls = 320.dp
+private val MinTabletopQueue = 280.dp
+
+/** The least height under the fold for the queue beside the controls: its heading and two rows. */
+private val MinTabletopQueueHeight = 200.dp
+
 /** The most of what a tall window leaves over that goes above the art and below the controls. */
 private val MaxGapAboveArt = 96.dp
 private val MaxGapBelowControls = 64.dp
 
 /**
- * [onMenu], if given, is a long press on the art, with the buzz a long press has elsewhere.
+ * [onMenu], if given, is a long press on the art, with the buzz a long press has elsewhere, or
+ * a right-click.
  * It leaves taps alone, as there's nothing to tap, and a drag is the player's: its swipes take
  * the touch away from a press, and a press that's held takes the touch for itself.
  */
@@ -331,6 +536,7 @@ private fun PlayerArt(swipe: TrackSwipeState, onMenu: (() -> Unit)?, modifier: M
     val menuLabel = stringResource(R.string.track_menu)
     val longPress = if (onMenu == null) Modifier else Modifier
         .semantics(mergeDescendants = true) { onLongClick(menuLabel) { menu?.invoke(); true } }
+        .secondaryClick { menu?.invoke() }
         .pointerInput(Unit) {
             detectTapGestures(
                 onLongPress = {

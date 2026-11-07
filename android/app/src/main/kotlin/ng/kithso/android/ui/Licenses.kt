@@ -79,7 +79,7 @@ fun LicensesScreen(bottomPadding: Dp, onOpen: (String) -> Unit, onBack: () -> Un
     val licenses by produceState<Licenses?>(null) { value = withContext(Dispatchers.IO) { context.loadLicenses() } }
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            contentPadding = pageSides()
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
             modifier = Modifier.fillMaxSize(),
@@ -133,7 +133,7 @@ fun LicenseTextScreen(asset: String, bottomPadding: Dp, onBack: () -> Unit) {
     }
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            contentPadding = pageSides()
                 .add(WindowInsets(bottom = bottomPadding + 16.dp))
                 .asPaddingValues(),
             modifier = Modifier.fillMaxSize(),

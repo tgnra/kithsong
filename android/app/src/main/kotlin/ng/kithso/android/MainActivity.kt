@@ -10,6 +10,9 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.view.KeyEvent
+import android.view.KeyboardShortcutGroup
+import android.view.Menu
 import android.util.Log
 import android.widget.Toast
 import android.window.OnBackInvokedDispatcher
@@ -17,10 +20,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.core.content.IntentCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import ng.kithso.android.importer.ImportSource
 import ng.kithso.android.ui.App
+import ng.kithso.android.ui.KeyboardShortcuts
+import ng.kithso.android.ui.LocalShortcuts
 import ng.kithso.android.ui.theme.KithsongTheme
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.first
@@ -29,6 +35,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 class MainActivity : ComponentActivity() {
     private val askForNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
+    // The keyboard shortcuts (ui/Shortcuts.kt), which App says what to do for.
+    private val shortcuts = KeyboardShortcuts()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -86,17 +95,20 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             KithsongTheme {
-                App(
-                    app.library,
-                    app.playback,
-                    app.syncer,
-                    app.importer,
-                    app.settings,
-                    app.libraryDir,
-                    onPlay = ::askForNotificationsOnce,
-                    onImportStarted = ::askForNotificationsOnce,
-                    onLeave = if (systemBack) null else ::leave,
-                )
+                CompositionLocalProvider(LocalShortcuts provides shortcuts) {
+                    App(
+                        app.library,
+                        app.playback,
+                        app.syncer,
+                        app.importer,
+                        app.settings,
+                        app.libraryDir,
+                        onPlay = ::askForNotificationsOnce,
+                        onImportStarted = ::askForNotificationsOnce,
+                        onLeave = if (systemBack) null else ::leave,
+                        shortcuts = shortcuts,
+                    )
+                }
             }
         }
     }
@@ -126,6 +138,19 @@ class MainActivity : ComponentActivity() {
         if (playback.isPlaying) return
         playback.stop()
         if (isTaskRoot) finishAndRemoveTask()
+    }
+
+    // Every key, for the shortcuts: most before the focused element sees it, Space after, if
+    // nothing used it. Whether a text field has the focus is whether the window is taking text.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val text = window.decorView.findFocus()?.onCheckIsTextEditor() == true
+        return shortcuts.beforeFocused(event, text) || super.dispatchKeyEvent(event) || shortcuts.afterFocused(event, text)
+    }
+
+    // The shortcuts in the system's list of them, which Meta+/ shows (Ctrl+? too, as on the desktops).
+    override fun onProvideKeyboardShortcuts(data: MutableList<KeyboardShortcutGroup>, menu: Menu?, deviceId: Int) {
+        super.onProvideKeyboardShortcuts(data, menu, deviceId)
+        data.addAll(shortcuts.groups(this))
     }
 
     override fun onNewIntent(intent: Intent) {

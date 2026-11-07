@@ -1,7 +1,6 @@
 package ng.kithso.android.ui
 
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -54,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -224,12 +224,20 @@ fun DetailScreen(
 
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            val columns = albumColumns(maxWidth)
             val group = ref.kind == CollectionRef.Kind.AlbumGroup
             ArtBackdrop(rememberArtColors(picture ?: list?.art), Modifier.matchParentSize())
             val density = LocalDensity.current
-            val statusBarPx = WindowInsets.statusBars.getTop(density)
-            val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            val statusBarPx = pageTop().getTop(density)
+            val sides = pageSides()
+            // In the tablet layout an album group's grid keeps its albums off the fold, as the
+            // album grid does; the phone's is as it always was.
+            val layoutDirection = LocalLayoutDirection.current
+            val inTablet = LocalPageChrome.current.inTablet
+            val leftPx = sides.getLeft(density, layoutDirection)
+            val gridFold = rememberGridFold(if (inTablet) rememberWindowShape().fold else null, leftPx.toFloat())
+            val gridWidth = maxWidth - with(density) { (leftPx + sides.getRight(density, layoutDirection)).toDp() }
+            val grid = if (inTablet) gridColumns(gridWidth, gridFold.span) else null
+            val columns = grid?.count ?: albumColumns(maxWidth)
             // An artist's page jumps between its headings, and through its tracks by title.
             val scrollEntries = if (ref.kind == CollectionRef.Kind.Artist && list != null) {
                 val titles = listOf(
@@ -247,10 +255,10 @@ fun DetailScreen(
             }
             LazyColumn(
                 state = listState,
-                contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+                contentPadding = pageSides()
                     .add(WindowInsets(bottom = bottomPadding))
                     .asPaddingValues(),
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().then(gridFold.modifier),
             ) {
                 item(key = "header", contentType = "header") {
                     DetailHeader(
@@ -335,7 +343,8 @@ fun DetailScreen(
                         EmptyListNote(smart, group = true)
                     }
                     items(albums.chunked(columns), key = { "albums:${it.first().uid}" }, contentType = { "albums" }) { row ->
-                        AlbumGridRow(row, columns, { onOpen(it.copy(group = ref.uid)) }, albumMenu)
+                        if (grid != null) AlbumGridRow(row, grid, { onOpen(it.copy(group = ref.uid)) }, albumMenu)
+                        else AlbumGridRow(row, columns, { onOpen(it.copy(group = ref.uid)) }, albumMenu)
                     }
                     return@LazyColumn
                 }
@@ -565,6 +574,7 @@ private fun DetailActions(onPlay: ((Boolean) -> Unit)?, onShuffleAlbums: (() -> 
  * room for the tracks. A playlist that can be edited has Edit, or Done while [editing], at
  * the other end from the back button, as has a manual album group; [editing] is null for anything else.
  * An album or a smart list has a menu button there instead ([onMenu], [menuDescription] for accessibility).
+ * In the tablet layout's pane the back button is a close button ([PageBack.Close]).
  */
 @Composable
 private fun DetailHeader(
@@ -577,9 +587,12 @@ private fun DetailHeader(
     menuDescription: String = "",
 ) {
     val short = isShortWindow()
+    // In the tablet layout's pane beside the content, the page closes rather than going back.
+    val closes = LocalPageChrome.current.back == PageBack.Close
     val back = @Composable {
         IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp, top = 4.dp)) {
-            Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back))
+            if (closes) Icon(Icons.Clear, contentDescription = stringResource(R.string.close))
+            else Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back))
         }
     }
     val edit = @Composable {
@@ -594,13 +607,13 @@ private fun DetailHeader(
         }
     }
     if (short) {
-        Row(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) {
+        Row(Modifier.fillMaxWidth().windowInsetsPadding(pageTop())) {
             back()
             if (list != null) DetailTitle(kind, list, 96.dp, Modifier.weight(1f).padding(start = 4.dp, top = 12.dp))
             edit()
         }
     } else {
-        Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) {
+        Column(Modifier.fillMaxWidth().windowInsetsPadding(pageTop())) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 back()
                 Spacer(Modifier.weight(1f))
@@ -654,6 +667,7 @@ private fun DetailTitle(kind: CollectionRef.Kind, list: TrackList, artSize: Dp, 
     }
 }
 
+/** A track; in the tablet layout it drags onto a playlist. */
 @Composable
 private fun TrackRow(track: Track, showAlbum: Boolean, onLongClick: () -> Unit, onClick: () -> Unit) {
     ListItem(
@@ -676,7 +690,9 @@ private fun TrackRow(track: Track, showAlbum: Boolean, onLongClick: () -> Unit, 
         } else null,
         trailingContent = { Text(formatTime(track.durationMs)) },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-        modifier = Modifier.combinedClickable(onLongClick = onLongClick, onClick = onClick),
+        modifier = Modifier
+            .listItemKeys(ListRowFocusShape, onLongClick)
+            .menuClickable(onLongClick, onClick, DragItem.Track(track.uid, track.title, track.artist)),
     )
 }
 

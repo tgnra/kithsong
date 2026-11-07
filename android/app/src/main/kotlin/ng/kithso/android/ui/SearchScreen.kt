@@ -1,9 +1,10 @@
 package ng.kithso.android.ui
 
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.add
@@ -97,12 +98,17 @@ fun SearchScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.statusBars)
-                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                    .windowInsetsPadding(pageTop())
+                    .windowInsetsPadding(pageSides())
                     .padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onBack) { Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back)) }
+                // Not for the tablet layout's Search, which its sidebar picked.
+                if (LocalPageChrome.current.back != PageBack.None) {
+                    IconButton(onClick = onBack) { Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back)) }
+                } else {
+                    Spacer(Modifier.width(12.dp))
+                }
                 TextField(
                     value = query,
                     onValueChange = { query = it },
@@ -128,7 +134,7 @@ fun SearchScreen(
             }
             val found = results
             LazyColumn(
-                contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+                contentPadding = pageSides()
                     .add(WindowInsets(bottom = bottomPadding))
                     .asPaddingValues(),
                 modifier = Modifier.fillMaxSize(),
@@ -169,7 +175,7 @@ private fun LazyListScope.results(
             }
         }
         SearchResults.Kind.Albums -> items(found.albums, key = { "album:${it.uid}" }) { album ->
-            ResultRow(album.title, album.artist, album.art, rounded) {
+            ResultRow(album.title, album.artist, album.art, rounded, drag = DragItem.Album(album.uid, album.title, album.artist)) {
                 onOpen(CollectionRef(CollectionRef.Kind.Album, album.uid))
             }
         }
@@ -180,6 +186,7 @@ private fun LazyListScope.results(
                 track.art,
                 rounded,
                 onLongClick = { onTrackMenu(track) },
+                drag = DragItem.Track(track.uid, track.title, track.artist),
             ) { onPlayTrack(track) }
         }
         SearchResults.Kind.Playlists -> items(found.playlists, key = { "playlist:${it.uid}" }) { playlist ->
@@ -195,6 +202,7 @@ private fun LazyListScope.results(
     }
 }
 
+/** A result, which in the tablet layout drags [drag], if given, as a track list's tracks and the albums' tiles do. */
 @Composable
 private fun ResultRow(
     title: String,
@@ -202,13 +210,14 @@ private fun ResultRow(
     art: ArtRef,
     artShape: Shape,
     onLongClick: (() -> Unit)? = null,
+    drag: DragItem? = null,
     onClick: () -> Unit,
 ) {
     ListItem(
         headlineContent = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = { Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         leadingContent = { AlbumArt(art, contentDescription = null, shape = artShape, modifier = Modifier.size(48.dp)) },
-        modifier = Modifier.combinedClickable(onLongClick = onLongClick, onClick = onClick),
+        modifier = Modifier.listItemKeys(ListRowFocusShape, onLongClick).menuClickable(onLongClick, onClick, drag),
     )
 }
 

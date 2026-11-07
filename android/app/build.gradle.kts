@@ -70,6 +70,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    // The window's size and fold (ui/WindowShape.kt), for the tablet layout and tabletop.
+    implementation("androidx.compose.material3.adaptive:adaptive:1.2.0")
     // The launch screen, in the system's light or dark colours, on every version back to 24.
     implementation("androidx.core:core-splashscreen:1.2.0")
     // Album art loading and caching; the art itself comes from ui/art/Art.kt's ArtSource.

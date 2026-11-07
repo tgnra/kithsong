@@ -13,6 +13,7 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 - Release - architectures other than x64. Windows and Linux build for ARM too, but the signed Flatpak repo is x86_64 only, so Linux ARM has a .flatpak bundle and a tarball with no flatpak update; merging architectures into one repo is its own piece of work. Neither Linux job runs the tests. Needs a list of any other architectures, and a way to test Linux ARM
 - Core - mc_smart_describe() is English-shaped ("field op value" clauses under "Tracks where …"): languages with grammatical case or agreement may need their own templates; dates use the smart_date template, not the OS's date format. Needs a real translation to show what the templates have to do
 
+- Android - the tablet layout's decisions: Sync now, Leave group and the recycle bin's notice are on this phone's own page in the sidebar, as on the desktops (a Sync now in the Devices heading, or a Sync page, are the other answers); the sidebar's rows are 44dp, under the 48dp touch target, which is what lets a Pixel Fold held sideways have the layout; and where a fold leaves too narrow a strip past the sidebar (the 7.6" Fold-in) the sidebar widens to the fold, so the grid isn't split there
 ## Library and browsing
 
 - Android - Android Auto's queue items now expose art through ArtProvider, untested there
@@ -24,6 +25,8 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 - Android - a cover decoded for a large view also serves smaller ones, drawn without mipmaps, so fine detail can shimmer in small art (seen as a moiré on a 1 px test grid in the album header); not blur, and real covers may not show it
 - Android - first paint is about 0.1-0.2 s later since covers stopped being shared across sizes (measured on the emulator; check on a phone)
 
+- Android - the tablet and foldable work is untested on a device or emulator: the switch between layouts (600dp wide, and the sidebar with 3 recents high) while something is open, the album grid's gap over a fold, the tabletop player (auto-open and close, the queue beside the controls, a flip phone's fallback), keyboard focus and shortcuts (Space and the arrows in Search, Tab between the parts), and drag and drop (scrolling and taps starting no drag, right-click not taken as Back, a target scrolled into view mid-drag). Drag and drop is off in the made-up library, which can't be edited
+- Android - the tablet layout has no fast scroll strip on its grids, and an empty library's welcome is only on Home
 ### Hand edits
 - Windows and Linux - a MusicBrainz search thread still running during Save shares the handle's edit watch
 - Decided: peers' files keep their old tags and places; the rows are what they show, and fetching audio again for a tag isn't worth it
