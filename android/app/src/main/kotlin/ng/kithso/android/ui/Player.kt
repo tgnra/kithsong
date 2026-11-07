@@ -201,18 +201,14 @@ internal fun FullPlayer(
                 .windowInsetsPadding(WindowInsets.safeDrawing.inPane()),
         ) {
             val dense = LocalWindowLayout.current.dense
-            val sidePadding = if (dense) 16.dp else 24.dp
+            val sidePadding = playerSidePadding(dense)
             val fontScale = LocalDensity.current.fontScale
-            // The art goes beside the controls if it's as big there as above them; it gives way to
-            // their width, so in a landscape phone's half pane it can end up better above them.
-            val artToControls = if (dense) 20.dp else 32.dp
-            val artMax = maxWidth - sidePadding * 2 - artToControls - MinControlsWidth
-            val artBeside = min(artMax, maxHeight - TopRowHeight - 16.dp)
-            val artAbove = maxHeight - TopRowHeight - (if (dense) 176.dp + 24.dp * fontScale else 256.dp + 56.dp * fontScale)
-            val wide = maxWidth > maxHeight && artBeside >= artAbove
+            val artToControls = playerArtToControls(dense)
+            val artMax = playerArtMaxBeside(maxWidth, dense)
+            val wide = playerIsWide(maxWidth, maxHeight, dense, fontScale)
             // Below about this, two lines and the controls don't fit, so a short title gives its space back.
             val titleSpace = !dense && maxHeight >= 256.dp + 56.dp * fontScale
-            val playSize = if (maxWidth - sidePadding * 2 >= MinControlsWidth) 64.dp else 56.dp
+            val playSize = if (maxWidth - sidePadding * 2 >= MinDenseControlsWidth) 64.dp else 56.dp
             val gap = if (dense) DenseControlsGap else ControlsGap
             Column(Modifier.fillMaxSize().padding(horizontal = sidePadding)) {
                 // Nudged so the icons, not their touch targets, line up with the art.
@@ -263,6 +259,27 @@ internal fun FullPlayer(
             )
         }
     }
+}
+
+/** The full player's padding down each side. */
+private fun playerSidePadding(dense: Boolean) = if (dense) 16.dp else 24.dp
+
+/** What's between the art and the controls beside it. */
+private fun playerArtToControls(dense: Boolean) = if (dense) 20.dp else 32.dp
+
+/** The most the art can be beside the controls in a window [width] across, leaving them their width. */
+internal fun playerArtMaxBeside(width: Dp, dense: Boolean): Dp =
+    width - playerSidePadding(dense) * 2 - playerArtToControls(dense) - (if (dense) MinDenseControlsWidth else MinControlsWidth)
+
+/**
+ * Whether the art goes beside the controls in a window [width] by [height]: if it's wider than
+ * it's tall, and the art's as big there as above them. In a landscape phone's half pane the art
+ * gives way so much to the controls' width that it can end up better above them.
+ */
+internal fun playerIsWide(width: Dp, height: Dp, dense: Boolean, fontScale: Float): Boolean {
+    val beside = min(playerArtMaxBeside(width, dense), height - TopRowHeight - 16.dp)
+    val above = height - TopRowHeight - (if (dense) 176.dp + 24.dp * fontScale else 256.dp + 56.dp * fontScale)
+    return width > height && beside >= above
 }
 
 /** Slides the view to the queue. */
@@ -342,8 +359,9 @@ private val DenseControlsGap = 2.dp
 /** The row of buttons at the top, with what's above it. */
 private val TopRowHeight = 52.dp
 
-/** The controls' five buttons' width in a dense window, and the least they're given beside the art. */
-private val MinControlsWidth = 264.dp
+/** The width of the controls' five buttons with a little to spare, and the same in a dense window. */
+private val MinControlsWidth = 296.dp
+private val MinDenseControlsWidth = 264.dp
 
 /** The most of what a tall window leaves over that goes above the art and below the controls. */
 private val MaxGapAboveArt = 96.dp
