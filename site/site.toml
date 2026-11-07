@@ -26,5 +26,5 @@ href = "/docs/install/"
 [[downloads]]
 platform = "android"
 name = "Android"
-store = "Google Play"
-href = "#"
+store = "APK"
+href = "/docs/install/"

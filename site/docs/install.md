@@ -32,4 +32,4 @@ Alternatively, there is a `.flatpak` bundle, and a tarball built for each releas
 
 ## Android
 
-TODO
+Install an APK from [the Releases page](https://github.com/tgnra/kithsong/releases). A Play Store listing is coming soon.
