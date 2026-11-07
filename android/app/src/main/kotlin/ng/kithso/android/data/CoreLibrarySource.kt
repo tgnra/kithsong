@@ -264,7 +264,7 @@ class CoreLibrarySource(
         val lib = open() ?: throw MusicCoreException(CoreSync.ERR_NOT_FOUND)
         val artists = lib.artists()
         ProfileChoices(
-            albums = lib.albums().byTitle().map { ProfileChoice(it.uid, it.title, it.artist ?: unknownArtist(), it.year) },
+            albums = lib.albums().map { ProfileChoice(it.uid, it.title, it.artist ?: unknownArtist(), it.year) },
             artists = artists.map { ProfileChoice(it.uid, it.name, albumCount = it.albumCount, sortKey = it.sortName) },
             playlists = lib.playlists().map { ProfileChoice(it.uid, it.name) },
             albumGroups = lib.albumGroups().map { ProfileChoice(it.uid, it.name, albumCount = it.albumCount) },
@@ -803,7 +803,7 @@ class CoreLibrarySource(
 
     private fun read(lib: CoreLibrary): Contents {
         val covers = Covers()
-        val albumInfos = lib.albums().filter { it.folder != null }.byTitle()
+        val albumInfos = lib.albums().filter { it.folder != null }
         val artistInfos = lib.artistsHere()
         val albums = albumInfos.map { info ->
             Album(info.uid, info.title, info.artist ?: unknownArtist(), info.year, covers.album(info))
@@ -995,9 +995,3 @@ class CoreLibrarySource(
             }
     }
 }
-
-/**
- * Albums as the app lists them, by title. The core has them by artist, and albums of the same
- * title stay in that order.
- */
-private fun List<AlbumInfo>.byTitle(): List<AlbumInfo> = sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })

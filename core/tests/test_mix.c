@@ -155,7 +155,7 @@ static void test_listing(const char *scratch) {
   CHECK(in_albums(lib, "Edge Single") == 0); /* a millisecond under */
   CHECK(in_albums(lib, "Zero Length") == 0);
 
-  /* In the albums' order: by artist, then year. */
+  /* In the albums' order: by title. */
   mc_album_list *list = NULL;
   CHECK(mc_library_list_albums(lib, &list) == MC_OK);
   if (list) {

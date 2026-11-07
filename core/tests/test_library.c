@@ -1589,7 +1589,22 @@ static void test_artists_and_groups(const char *scratch) {
     CHECK(strcmp(albums->items[i].uid, "al4") != 0);
     CHECK(!albums->items[i].is_singles);
   }
+  /* By title, whoever they're by. */
+  if (albums && albums->count == 6) {
+    const char *const titles[] = {"Abbey Road", "Arrival", "Help!", "Mix", "Secret Name", "Tribute"};
+    for (int i = 0; i < 6; i++) CHECK_STR(albums->items[i].title, titles[i]);
+  }
   mc_album_list_free(albums);
+  /* Albums of the same title go by artist. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title, artist_uid) VALUES ('al8', 'mix', 'ar4');") == SQLITE_OK);
+  albums = NULL;
+  CHECK(mc_library_list_albums(lib, &albums) == MC_OK && albums && albums->count == 7);
+  if (albums && albums->count == 7) {
+    CHECK_STR(albums->items[3].artist, "abba");
+    CHECK_STR(albums->items[4].artist, "Guest");
+  }
+  mc_album_list_free(albums);
+  CHECK(exec(db, "DELETE FROM albums WHERE uid = 'al8';") == SQLITE_OK);
   albums = NULL;
   CHECK(mc_library_list_artist_albums(lib, "ar5", &albums) == MC_OK && albums && albums->count == 0);
   mc_album_list_free(albums);

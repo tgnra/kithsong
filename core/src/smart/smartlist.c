@@ -133,8 +133,8 @@ static const field_def k_fields[] = {
  * order; albums as mc_library_list_albums() has them. uid last, so ties always come out the
  * same way. */
 static const char *const k_default_order[] = {
-  "coalesce(aar.sort_name, aar.name) COLLATE NOCASE, al.year,"
-  " al.title COLLATE NOCASE, al.uid, coalesce(t.disc_no, 0), t.track_no IS NULL, t.track_no,"
+  "al.title COLLATE NOCASE, coalesce(aar.sort_name, aar.name) COLLATE NOCASE, al.year,"
+  " al.uid, coalesce(t.disc_no, 0), t.track_no IS NULL, t.track_no,"
   " t.title COLLATE NOCASE, t.uid",
   ALBUM_ORDER ", a.uid",
 };

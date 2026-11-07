@@ -129,7 +129,7 @@ void mc_library_rollback(mc_library *lib);
   "  WHERE t.album_uid = a.uid LIMIT 1), ar.uid"
 #define ALBUM_JOINS " LEFT JOIN artists ar ON ar.uid = a.artist_uid"
 #define ALBUM_ORDER \
-  "coalesce(ar.sort_name, ar.name) COLLATE NOCASE, a.year, a.title COLLATE NOCASE"
+  "a.title COLLATE NOCASE, coalesce(ar.sort_name, ar.name) COLLATE NOCASE, a.year"
 
 /* Files the tracks with no album that where says (an SQL condition on t, with ?1 for arg if
  * it's not NULL) as albums of one track, of the track's title, artists and year, for them to

@@ -164,7 +164,7 @@ typedef struct mc_album_list {
 
 /* Every album but the singles (albums with one track in the library, which the Artist view
  * shows instead: see mc_library_list_artist_singles(); a continuous mix of one track isn't
- * one, see edit.h), in display order: by artist (sort name), then by year and title. One query; cheap enough to call again after an import.
+ * one, see edit.h), in display order: by title, then by artist (sort name) and year. One query; cheap enough to call again after an import.
  * Free with mc_album_list_free(). */
 mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out);
 void mc_album_list_free(mc_album_list *list);

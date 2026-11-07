@@ -104,7 +104,7 @@ static void populate(sqlite3 *db) {
 
 static void test_track_rules(mc_library *lib) {
   /* No match: everything, as the album grid orders it. */
-  CHECK_TRACKS("{\"v\":1}", "Dancing Queen|Money, Money|Come Together|Something|Words");
+  CHECK_TRACKS("{\"v\":1}", "Come Together|Something|Dancing Queen|Money, Money|Words");
 
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"genre\",\"op\":\"contains\",\"value\":\"RO\"}}",
                "Come Together|Something");
@@ -120,12 +120,12 @@ static void test_track_rules(mc_library *lib) {
                "Dancing Queen|Money, Money");
 
   /* Numbers; duration is in seconds. != includes tracks with no year. */
-  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"plays\",\"op\":\"<\",\"value\":3}}", "Money, Money|Something|Words");
+  CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"plays\",\"op\":\"<\",\"value\":3}}", "Something|Money, Money|Words");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"plays\",\"op\":\">=\",\"value\":7}}", "Come Together");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"duration\",\"op\":\">\",\"value\":200}}",
-               "Dancing Queen|Come Together");
+               "Come Together|Dancing Queen");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"duration\",\"op\":\"between\",\"value\":[180,190]}}",
-               "Money, Money|Something");
+               "Something|Money, Money");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"year\",\"op\":\"=\",\"value\":2001}}", "Words");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"year\",\"op\":\"!=\",\"value\":1969}}",
                "Dancing Queen|Money, Money|Words");
@@ -133,24 +133,24 @@ static void test_track_rules(mc_library *lib) {
 
   /* Dates, against the fixed clock. Never played counts as not played within. */
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"last_played\",\"op\":\"within\",\"value\":{\"days\":30}}}",
-               "Money, Money|Come Together");
+               "Come Together|Money, Money");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"last_played\",\"op\":\"not_within\",\"value\":{\"days\":30}}}",
-               "Dancing Queen|Something|Words");
+               "Something|Dancing Queen|Words");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"not\":{\"field\":\"last_played\",\"op\":\"within\",\"value\":{\"days\":30}}}}",
-               "Dancing Queen|Something|Words");
+               "Something|Dancing Queen|Words");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"added\",\"op\":\"within\",\"value\":{\"days\":30}}}",
                "Dancing Queen");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"added\",\"op\":\"after\",\"value\":500}}",
-               "Dancing Queen|Money, Money|Come Together|Something");
+               "Come Together|Something|Dancing Queen|Money, Money");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"added\",\"op\":\"before\",\"value\":5000}}", "Come Together|Something");
 
   /* Conditions on the track's album, files, playlists and groups. */
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":true}}", "Words");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"on_device\",\"op\":\"is\",\"value\":false}}",
-               "Money, Money|Something|Words");
+               "Something|Money, Money|Words");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"format\",\"op\":\"is\",\"value\":\"FLAC\"}}", "Come Together");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"format\",\"op\":\"is_not\",\"value\":\"flac\"}}",
-               "Dancing Queen|Money, Money|Something|Words");
+               "Something|Dancing Queen|Money, Money|Words");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"playlist\",\"op\":\"is\",\"value\":\"pl1\"}}", "Something");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"group\",\"op\":\"is\",\"value\":\"g1\"}}",
                "Dancing Queen|Money, Money");
@@ -159,13 +159,13 @@ static void test_track_rules(mc_library *lib) {
   /* Groups. */
   CHECK_TRACKS("{\"v\":1,\"match\":{\"any\":[{\"field\":\"genre\",\"op\":\"is\",\"value\":\"pop\"},"
                "{\"not\":{\"field\":\"on_device\",\"op\":\"is\",\"value\":false}}]}}",
-               "Dancing Queen|Money, Money|Come Together");
+               "Come Together|Dancing Queen|Money, Money");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"all\":[{\"field\":\"genre\",\"op\":\"is\",\"value\":\"pop\"},"
                "{\"field\":\"plays\",\"op\":\">\",\"value\":1}]}}",
                "Dancing Queen");
   /* Empty groups are left out, as if they weren't there: a rule of nothing else matches
    * everything. */
-#define ALL_TRACKS "Dancing Queen|Money, Money|Come Together|Something|Words"
+#define ALL_TRACKS "Come Together|Something|Dancing Queen|Money, Money|Words"
   CHECK_TRACKS("{\"v\":1,\"match\":{\"all\":[]}}", ALL_TRACKS);
   CHECK_TRACKS("{\"v\":1,\"match\":{\"any\":[]}}", ALL_TRACKS);
   CHECK_TRACKS("{\"v\":1,\"match\":{\"not\":{\"any\":[]}}}", ALL_TRACKS);
@@ -230,20 +230,20 @@ static void test_order(mc_library *lib) {
 }
 
 static void test_album_rules(mc_library *lib) {
-  CHECK_ALBUMS("{\"v\":1}", "Arrival|Abbey Road|Low Singles");
+  CHECK_ALBUMS("{\"v\":1}", "Abbey Road|Arrival|Low Singles");
   CHECK_ALBUMS("{\"v\":1,\"order\":[{\"field\":\"plays\",\"dir\":\"desc\"}],\"limit\":2}", "Abbey Road|Arrival");
   CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"added\",\"op\":\"within\",\"value\":{\"days\":30}}}", "Arrival");
   CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"genre\",\"op\":\"is\",\"value\":\"pop\"}}", "Arrival");
   /* No track of the album is rock. */
   CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"genre\",\"op\":\"is_not\",\"value\":\"rock\"}}", "Arrival|Low Singles");
-  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"track_count\",\"op\":\"=\",\"value\":2}}", "Arrival|Abbey Road");
+  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"track_count\",\"op\":\"=\",\"value\":2}}", "Abbey Road|Arrival");
   CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"duration\",\"op\":\">\",\"value\":430}}", "Abbey Road");
   CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"group\",\"op\":\"is\",\"value\":\"g1\"}}", "Arrival");
-  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"on_device\",\"op\":\"is\",\"value\":true}}", "Arrival|Abbey Road");
+  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"on_device\",\"op\":\"is\",\"value\":true}}", "Abbey Road|Arrival");
   CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"last_played\",\"op\":\"empty\"}}", "Low Singles");
   CHECK_ALBUMS("{\"v\":1,\"order\":[{\"field\":\"artist\"}]}", "Arrival|Abbey Road|Low Singles");
   CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":true}}", "Low Singles");
-  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":false}}", "Arrival|Abbey Road");
+  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":false}}", "Abbey Road|Arrival");
 }
 
 /* A single is a track alone on its album, or one with no album; an album is one when it has
@@ -256,7 +256,7 @@ static void test_singles(mc_library *lib) {
         SQLITE_OK);
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":true}}", "Loose|Words");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":false}}",
-               "Dancing Queen|Money, Money|Come Together|Something|One|Two");
+               "Come Together|Something|Dancing Queen|Money, Money|One|Two");
   CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":true}}", "Low Singles");
   /* Once Words has company, Low Singles is an album. */
   CHECK(exec(db, "UPDATE tracks SET album_uid = 'al3' WHERE uid = 't6'") == SQLITE_OK);
@@ -720,14 +720,14 @@ static void test_credits(mc_library *lib) {
              "INSERT INTO album_artists (uid, album_uid, artist_uid, position, joinphrase) VALUES"
              " ('c3', 'al1', 'ar1', 0, ' & '), ('c4', 'al1', 'ar2', 1, '');") == SQLITE_OK);
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"is\",\"value\":\"abba\"}}",
-               "Dancing Queen|Money, Money|Come Together|Something");
+               "Come Together|Something|Dancing Queen|Money, Money");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"is_not\",\"value\":\"Abba\"}}", "Words");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"contains\",\"value\":\"feat\"}}", "Something");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"is\",\"value\":\"The Beatles\"}}",
                "Come Together|Something");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"album_artist\",\"op\":\"is\",\"value\":\"Abba\"}}",
-               "Dancing Queen|Money, Money|Come Together|Something");
-  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"is\",\"value\":\"Abba\"}}", "Arrival|Abbey Road");
+               "Come Together|Something|Dancing Queen|Money, Money");
+  CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"is\",\"value\":\"Abba\"}}", "Abbey Road|Arrival");
   CHECK_ALBUMS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"starts_with\",\"value\":\"The Beatles &\"}}",
                "Abbey Road");
   CHECK_TRACKS("{\"v\":1,\"match\":{\"field\":\"artist\",\"op\":\"empty\"}}", "");
