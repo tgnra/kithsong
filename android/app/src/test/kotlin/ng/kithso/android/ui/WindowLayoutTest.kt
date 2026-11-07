@@ -80,6 +80,14 @@ class WindowLayoutTest {
     }
 
     @Test
+    fun aThresholdIsMetToTheNearestDp() {
+        // Store_Tablet_10 as measured: 1440 pixels at a density of 1.8.
+        assertEquals(Large, windowLayoutClass(799.99994.dp, 1422.2222.dp))
+        assertEquals(Medium, windowLayoutClass(599.99994.dp, 1066.6666.dp))
+        assertFalse(WindowLayout.of(1000.dp, 479.99994.dp).dense)
+    }
+
+    @Test
     fun largeNeedsItsHeight() {
         assertEquals(Large, classOf(800, 560))
         assertEquals(Medium, classOf(800, 559))

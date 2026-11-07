@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
+import kotlin.math.roundToInt
 
 /** Which of the app's layouts a window gets. See [windowLayoutClass]. */
 enum class WindowLayoutClass {
@@ -77,16 +78,26 @@ data class LayoutScale(val font: Float, val size: Float) {
 }
 
 /**
+ * To the nearest dp, for comparing with the thresholds: a window's pixels over its density don't
+ * come out whole, and 1440 at 1.8 is 799.99994.
+ */
+private fun Dp.whole(): Dp = value.roundToInt().dp
+
+/**
  * The layout for a window [width] by [height]. Any [fold] rules out Large, as a hinge would cut
  * the middle pane in half. [foldKnown] is false while a fold can't be ruled out, which also rules
  * it out: until the system has said, as an open foldable mustn't show Large for its first frames,
  * and always on a device with a hinge, whose report can be missing altogether.
  */
-fun windowLayoutClass(width: Dp, height: Dp, fold: WindowFold? = null, foldKnown: Boolean = true): WindowLayoutClass = when {
-    width >= LargeMinWidth && height >= LargeMinHeight && fold == null && foldKnown -> WindowLayoutClass.Large
-    width >= MediumMinWidth -> WindowLayoutClass.Medium
-    width < SmallBelowWidth || height < ShortBelowHeight -> WindowLayoutClass.Small
-    else -> WindowLayoutClass.Compact
+fun windowLayoutClass(width: Dp, height: Dp, fold: WindowFold? = null, foldKnown: Boolean = true): WindowLayoutClass {
+    val across = width.whole()
+    val down = height.whole()
+    return when {
+        across >= LargeMinWidth && down >= LargeMinHeight && fold == null && foldKnown -> WindowLayoutClass.Large
+        across >= MediumMinWidth -> WindowLayoutClass.Medium
+        across < SmallBelowWidth || down < ShortBelowHeight -> WindowLayoutClass.Small
+        else -> WindowLayoutClass.Compact
+    }
 }
 
 /** What the window is, for choosing a layout: read it from [LocalWindowLayout]. */
@@ -98,7 +109,7 @@ data class WindowLayout(
     val fold: WindowFold? = null,
 ) {
     /** Space is tight: smaller text, a smaller header, the small mini player with no seekbar. */
-    val dense: Boolean get() = layoutClass == WindowLayoutClass.Small || height < ShortBelowHeight
+    val dense: Boolean get() = layoutClass == WindowLayoutClass.Small || height.whole() < ShortBelowHeight
 
     /** The scaling that goes with [dense]. */
     val scale: LayoutScale get() = if (dense) LayoutScale.Dense else LayoutScale.Regular
@@ -180,7 +191,7 @@ fun WindowInsets.inPane(): WindowInsets = only(LocalPane.current.sides)
 
 /** Whether the pane is short, as a phone is in landscape: screens then put their headers' parts side by side. */
 @Composable
-fun isShortPane(): Boolean = LocalPane.current.height < ShortBelowHeight
+fun isShortPane(): Boolean = LocalPane.current.height.whole() < ShortBelowHeight
 
 /** [content] in [area], which [LocalPane] then says, at the area's place in the window. */
 @Composable
