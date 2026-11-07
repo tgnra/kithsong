@@ -111,9 +111,8 @@ private fun Dp.whole(): Dp = value.roundToInt().dp
 
 /**
  * The layout for a window [width] by [height]. Any [fold] rules out Large, as a hinge would cut
- * the middle pane in half. [foldKnown] is false while a fold can't be ruled out, which also rules
- * it out: until the system has said, as an open foldable mustn't show Large for its first frames,
- * and always on a device with a hinge, whose report can be missing altogether.
+ * the middle pane in half. [foldKnown] is false if a fold can't be ruled out, which also rules it
+ * out: on a device with a hinge, whose report can come late or not at all.
  */
 fun windowLayoutClass(width: Dp, height: Dp, fold: WindowFold? = null, foldKnown: Boolean = true): WindowLayoutClass {
     val across = width.whole()
@@ -178,6 +177,8 @@ data class Panes(
     val player: PaneArea,
     /** What home is drawn in: [main], unless it has [columns]. */
     val home: PaneArea = main,
+    /** Where the categories go, with three panes: [main] is then the middle pane. */
+    val categories: PaneArea? = null,
 ) {
     /** Pages open beside the main content rather than over it. */
     val sideBySide: Boolean get() = main != pages
@@ -186,8 +187,19 @@ data class Panes(
     val columns: Boolean get() = home != main
 }
 
-/** Large's main content takes this share of the window, for now. */
-private const val LARGE_MAIN_SHARE = 0.6f
+/** The categories' share of a window, within [NarrowestCategories] and [WidestCategories]. */
+private const val CATEGORIES_SHARE = 0.2f
+
+/** As narrow as the categories go, in the narrowest Large window: their rows' text still fits. */
+private val NarrowestCategories = 160.dp
+private val WidestCategories = 208.dp
+
+/** The pages' share of what the categories leave. */
+private const val PAGES_SHARE = 0.45f
+
+/** A track list's and the player's width at least, and at most, as they gain nothing past it. */
+private val NarrowestPages = 320.dp
+private val WidestPages = 560.dp
 
 /**
  * The one place that decides where everything goes, for each layout class. Right-to-left, [rtl],
@@ -204,7 +216,21 @@ fun panesFor(layout: WindowLayout, rtl: Boolean = false): Panes = when (layout.l
         val panes = split(layout, fold?.start ?: (layout.width / 2), fold?.end ?: (layout.width / 2), rtl)
         panes.copy(home = PaneArea(0.dp, layout.width, layout.height, AllSides, whole = true))
     }
-    WindowLayoutClass.Large -> (layout.width * (if (rtl) 1 - LARGE_MAIN_SHARE else LARGE_MAIN_SHARE)).let { split(layout, it, it, rtl) }
+    WindowLayoutClass.Large -> threePanes(layout, rtl)
+}
+
+/** The categories, the middle pane and the pages, from the left, or from the right in right-to-left. */
+private fun threePanes(layout: WindowLayout, rtl: Boolean): Panes {
+    val categories = (layout.width * CATEGORIES_SHARE).coerceIn(NarrowestCategories, WidestCategories)
+    val rest = layout.width - categories
+    val pages = (rest * PAGES_SHARE).coerceIn(NarrowestPages, WidestPages)
+    val middle = rest - pages
+    val left = WindowInsetsSides.Left + WindowInsetsSides.Vertical
+    val right = WindowInsetsSides.Right + WindowInsetsSides.Vertical
+    val main = PaneArea(if (rtl) pages else categories, middle, layout.height, WindowInsetsSides.Vertical)
+    val pagesArea = PaneArea(if (rtl) 0.dp else categories + middle, pages, layout.height, if (rtl) left else right)
+    val categoriesArea = PaneArea(if (rtl) pages + middle else 0.dp, categories, layout.height, if (rtl) right else left)
+    return Panes(main, pagesArea, pagesArea, pagesArea, categories = categoriesArea)
 }
 
 private fun split(layout: WindowLayout, leftEnd: Dp, rightStart: Dp, rtl: Boolean): Panes {
@@ -297,8 +323,7 @@ internal class FoldMemory<S> {
 fun ProvideWindowLayout(content: @Composable () -> Unit) {
     val activity = LocalActivity.current
     val density = LocalDensity.current
-    // Null until the system has said, so that "no folds" can be told from "not known yet".
-    var folds by remember { mutableStateOf<List<WindowFold>?>(if (activity == null) emptyList() else null) }
+    var folds by remember { mutableStateOf(emptyList<WindowFold>()) }
     LaunchedEffect(activity, density) {
         if (activity == null) return@LaunchedEffect
         WindowInfoTracker.getOrCreate(activity).windowLayoutInfo(activity).collect { info ->
@@ -313,19 +338,20 @@ fun ProvideWindowLayout(content: @Composable () -> Unit) {
         }
     }
     // A process can go its whole life with no fold reported on a device that has one, as seen on
-    // Test_Z_Fold_8, so a hinge means a fold can't be ruled out.
+    // Test_Z_Fold_8, and the report takes about 450 ms to come where it does, so this is what
+    // decides: a device with a hinge can't rule out a fold, and one without can from the first
+    // frame, which keeps a tablet from starting as Medium every time it opens or turns.
     val hinged = remember(activity) {
         activity?.packageManager?.hasSystemFeature(PackageManager.FEATURE_SENSOR_HINGE_ANGLE) == true
     }
-    val foldKnown = folds != null && !hinged
     val size = LocalWindowInfo.current.containerSize
     val memory = remember { FoldMemory<IntSize>() }
     val layout = with(density) {
         // A vertical fold first, as that's the one panes go either side of.
-        val fold = memory.resolve(size, folds?.let { all -> all.firstOrNull { it.vertical } ?: all.firstOrNull() })
-        WindowLayout.of(size.width.toDp(), size.height.toDp(), fold, foldKnown)
+        val fold = memory.resolve(size, folds.firstOrNull { it.vertical } ?: folds.firstOrNull())
+        WindowLayout.of(size.width.toDp(), size.height.toDp(), fold, foldKnown = !hinged)
     }
-    LaunchedEffect(layout) { Log.i("kithsong-layout", "$layout dense=${layout.dense} hinged=$hinged reported=${folds != null}") }
+    LaunchedEffect(layout) { Log.i("kithsong-layout", "$layout dense=${layout.dense} hinged=$hinged") }
     val whole = PaneArea(0.dp, layout.width, layout.height, AllSides, whole = true)
     val scaled = remember(density, layout.scale) { density.scaledBy(layout.scale) }
     CompositionLocalProvider(

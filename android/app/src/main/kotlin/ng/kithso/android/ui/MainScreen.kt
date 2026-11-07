@@ -291,7 +291,7 @@ private val AlbumLabelsHeight = 58.dp
  * import that's [importRunning]. [onSearch] is the header's menu's Search, and pulling the list down
  * from its top (see [pullToSearch]). With [onNewList], the Playlists and Album groups headings
  * have a + for a new playlist or (with true) album group. [column] is the part of the library this
- * is, when home is columns.
+ * is, when home is columns, and with [HomeColumn.Category], [category] is that part.
  */
 @Composable
 fun MainScreen(
@@ -320,6 +320,7 @@ fun MainScreen(
     // A red dot on the header's menu and its Sync: deletes wait in the recycle bin while a member is online.
     syncDot: Boolean = false,
     column: HomeColumn = HomeColumn.All,
+    category: Section = Section.Albums,
 ) {
     HomeFrame(
         modifier,
@@ -346,11 +347,12 @@ fun MainScreen(
 
         val hasBanner = banner != null
         val canMake = onNewList != null
-        val items = remember(library, columns, hasBanner, canMake, column) {
+        val items = remember(library, columns, hasBanner, canMake, column, category) {
             when (column) {
                 HomeColumn.All -> mainItems(library, columns, hasBanner, canMake)
                 HomeColumn.Left -> leftColumnItems(library, columns, hasBanner, canMake)
                 HomeColumn.Middle -> middleColumnItems(library, columns)
+                HomeColumn.Category -> categoryItems(library, category, columns, hasBanner)
             }
         }
         val sections = remember(items) {
@@ -384,7 +386,10 @@ fun MainScreen(
         }
         val other = stringResource(R.string.fast_scroll_other)
         val titles = Section.entries.associateWith { stringResource(it.title) }
-        val scrollEntries = remember(items, titles, other) { fastScrollEntries(items, titles, other) }
+        // A category's heading alone is nowhere to go.
+        val scrollEntries = remember(items, titles, other) {
+            fastScrollEntries(items, titles, other).takeUnless { column == HomeColumn.Category && it.size < 2 }.orEmpty()
+        }
         // Pulling down from the top opens search, as the header's menu does.
         val pull = rememberPullToSearch(onSearch)
 
@@ -659,8 +664,8 @@ private fun HeaderMenu(
  * A section's heading, a tap target across the whole row. Tapping it opens a list of every
  * section, and picking one scrolls there; [current] is the section at the top of the screen,
  * marked in the list. TalkBack gets the tap, and a jump to each other section as a custom action.
- * With [onNew], a + at the end, clear of the fast scroll strip, makes a new playlist or album
- * group.
+ * With no other section to go to it's only a heading. With [onNew], a + at the end, clear of the
+ * fast scroll strip, makes a new playlist or album group.
  */
 @Composable
 private fun SectionHeading(
@@ -681,7 +686,7 @@ private fun SectionHeading(
             Modifier
                 .fillMaxWidth()
                 .heightIn(min = 52.dp)
-                .clickable(onClickLabel = jumpLabel) { open = true }
+                .then(if (sections.size > 1) Modifier.clickable(onClickLabel = jumpLabel) { open = true } else Modifier)
                 .semantics(mergeDescendants = true) {
                     heading()
                     customActions = jumpActions
@@ -690,7 +695,7 @@ private fun SectionHeading(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(stringResource(section.title), style = MaterialTheme.typography.titleLarge)
-            Icon(Icons.ExpandMore, contentDescription = null, modifier = Modifier.padding(start = 4.dp))
+            if (sections.size > 1) Icon(Icons.ExpandMore, contentDescription = null, modifier = Modifier.padding(start = 4.dp))
         }
         if (onNew != null) {
             IconButton(

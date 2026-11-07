@@ -1,5 +1,6 @@
 package ng.kithso.android.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,7 +28,9 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -50,10 +53,12 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -466,68 +471,100 @@ private fun UtilitiesPage(
             .padding(top = 4.dp, bottom = frame.bottomPadding + Gutter),
     ) {
         frame.banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
-        var importing by remember { mutableStateOf(false) }
-        Box {
-            UtilityRow(
-                stringResource(R.string.import_music),
-                { Icon(Icons.Import, contentDescription = null) },
-                onClick = { importing = true },
-                description = if (importRunning) stringResource(R.string.import_running_title) else null,
-                trailing = if (importRunning) {
-                    { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
-                } else {
-                    null
-                },
-            )
-            ImportMenu(importing, importPickers, onDismiss = { importing = false })
-        }
-        UtilityRow(stringResource(R.string.search), { Icon(Icons.Search, contentDescription = null) }, actions.onSearch)
-        UtilityRow(
-            stringResource(R.string.sync),
-            { BadgedBox(badge = { if (syncDot) Badge() }) { Icon(Icons.Sync, contentDescription = null) } },
-            actions.onSync,
-            description = if (syncDot) stringResource(R.string.sync_bin_waiting) else null,
-        )
-        UtilityRow(stringResource(R.string.stats_title), { Icon(Icons.BarChart, contentDescription = null) }, actions.onStats)
-        UtilityRow(stringResource(R.string.settings), { Icon(Icons.Settings, contentDescription = null) }, actions.onSettings)
-        val new = actions.onNewList
-        if (new != null && !library.isEmpty) {
-            if (library.playlists.isEmpty()) {
-                UtilityRow(stringResource(R.string.new_playlist_menu), { Icon(Icons.Add, contentDescription = null) }, { new(false) })
-            }
-            if (library.albumGroups.isEmpty()) {
-                UtilityRow(stringResource(R.string.new_album_group_menu), { Icon(Icons.Add, contentDescription = null) }, { new(true) })
-            }
-        }
+        UtilityRows(actions.onSearch, actions.onSync, actions.onSettings, actions.onStats, importPickers, importRunning, syncDot)
+        NewListRows(library, actions.onNewList)
     }
 }
 
-/** A row of the utilities page: [description], if any, is what TalkBack says in place of [text]. */
+/** The utilities, as rows of a page or, with [panel], of [CategoriesPanel]. */
 @Composable
-private fun UtilityRow(
+internal fun UtilityRows(
+    onSearch: () -> Unit,
+    onSync: () -> Unit,
+    onSettings: () -> Unit,
+    onStats: () -> Unit,
+    importPickers: ImportPickers,
+    importRunning: Boolean,
+    syncDot: Boolean,
+    panel: Boolean = false,
+) {
+    var importing by remember { mutableStateOf(false) }
+    Box {
+        UtilityRow(
+            stringResource(R.string.import_music),
+            { Icon(Icons.Import, contentDescription = null) },
+            onClick = { importing = true },
+            description = if (importRunning) stringResource(R.string.import_running_title) else null,
+            trailing = if (importRunning) {
+                { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
+            } else {
+                null
+            },
+            panel = panel,
+        )
+        ImportMenu(importing, importPickers, onDismiss = { importing = false })
+    }
+    UtilityRow(stringResource(R.string.search), { Icon(Icons.Search, contentDescription = null) }, onSearch, panel = panel)
+    UtilityRow(
+        stringResource(R.string.sync),
+        { BadgedBox(badge = { if (syncDot) Badge() }) { Icon(Icons.Sync, contentDescription = null) } },
+        onSync,
+        description = if (syncDot) stringResource(R.string.sync_bin_waiting) else null,
+        panel = panel,
+    )
+    UtilityRow(stringResource(R.string.stats_title), { Icon(Icons.BarChart, contentDescription = null) }, onStats, panel = panel)
+    UtilityRow(stringResource(R.string.settings), { Icon(Icons.Settings, contentDescription = null) }, onSettings, panel = panel)
+}
+
+/** A row for making the first playlist or album group, where there's no category for its +. */
+@Composable
+internal fun NewListRows(library: Library, onNewList: ((isAlbums: Boolean) -> Unit)?, panel: Boolean = false) {
+    if (onNewList == null || library.isEmpty) return
+    if (library.playlists.isEmpty()) {
+        UtilityRow(stringResource(R.string.new_playlist_menu), { Icon(Icons.Add, contentDescription = null) }, { onNewList(false) }, panel = panel)
+    }
+    if (library.albumGroups.isEmpty()) {
+        UtilityRow(stringResource(R.string.new_album_group_menu), { Icon(Icons.Add, contentDescription = null) }, { onNewList(true) }, panel = panel)
+    }
+}
+
+/**
+ * A row of the utilities page: [description], if any, is what TalkBack says in place of [text].
+ * With [panel] it's a tighter row inset from its edges, to fit [CategoriesPanel] and, with
+ * [selected], mark what's chosen there.
+ */
+@Composable
+internal fun UtilityRow(
     text: String,
     icon: @Composable () -> Unit,
     onClick: () -> Unit,
     description: String? = null,
     trailing: (@Composable () -> Unit)? = null,
+    panel: Boolean = false,
+    selected: Boolean? = null,
 ) {
+    val fill = if (selected == true) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .then(if (panel) Modifier.padding(horizontal = 4.dp).clip(RoundedCornerShape(8.dp)).background(fill) else Modifier)
+            .heightIn(min = if (panel) 44.dp else 48.dp)
+            .then(
+                if (selected != null) Modifier.selectable(selected, role = Role.Tab, onClick = onClick)
+                else Modifier.clickable(onClick = onClick),
+            )
+            .padding(horizontal = if (panel) 8.dp else 16.dp, vertical = if (panel) 4.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         icon()
         Text(
             text,
-            style = MaterialTheme.typography.bodyLarge,
+            style = if (panel) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .weight(1f)
-                .padding(start = 16.dp)
+                .padding(start = if (panel) 10.dp else 16.dp)
                 .semantics { if (description != null) contentDescription = description },
         )
         trailing?.invoke()

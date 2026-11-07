@@ -93,6 +93,12 @@ class BackStackTest {
     }
 
     @Test
+    fun aPageOpenedInPlaceIsStillAndWhatsStackedOnItSlides() {
+        val stack = BackStack<Page>().besideHome(album, still = true).push(Page.Search)
+        assertEquals(listOf(true, false), stack.layers.map { it.still })
+    }
+
+    @Test
     fun replacingTakesThePagesStackedInTheRightPaneToo() {
         val stack = BackStack<Page>().besideHome(album).push(Page.Search).besideHome(otherAlbum)
         assertEquals(listOf<Page>(otherAlbum), stack.pages)

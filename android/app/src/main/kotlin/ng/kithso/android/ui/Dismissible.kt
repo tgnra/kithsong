@@ -62,8 +62,8 @@ private enum class Layer { Shown, Hidden }
  * drag steps apply as they come, under the same lock as the animations, so each takes over
  * from the last cleanly and every drag ends settled at one end or the other.
  *
- * A layer brought back (a rotation, a fold) is simply there, not slid in again. [onShown] is
- * called once it's fully on screen. [onSlide] gets a function saying how far on screen it is, 0 to
+ * A layer brought back (a rotation, a fold) is simply there, not slid in again, as is one that
+ * doesn't [slideIn]. [onShown] is called once it's fully on screen. [onSlide] gets a function saying how far on screen it is, 0 to
  * 1, for what moves along with it, then null when it goes. [scrim] is the dimming of what's beneath.
  */
 @Composable
@@ -75,6 +75,7 @@ fun DismissibleScreen(
     backEnabled: Boolean = true,
     draggable: Boolean = true,
     scrim: Boolean = true,
+    slideIn: Boolean = true,
     onShown: () -> Unit = {},
     onSlide: ((fraction: (() -> Float)?) -> Unit)? = null,
     content: @Composable (dismiss: () -> Unit) -> Unit,
@@ -85,7 +86,7 @@ fun DismissibleScreen(
         }
         val anchors = remember(distance) { DraggableAnchors { Layer.Shown at 0f; Layer.Hidden at distance } }
         var seen by rememberSaveable { mutableStateOf(false) }
-        val state = remember { AnchoredDraggableState(if (seen) Layer.Shown else Layer.Hidden, anchors) }
+        val state = remember { AnchoredDraggableState(if (seen || !slideIn) Layer.Shown else Layer.Hidden, anchors) }
         // A new size (rotation, a resized window) moves the ends, keeping the layer at its end.
         SideEffect { if (state.anchors != anchors) state.updateAnchors(anchors, state.targetValue) }
         val scope = rememberCoroutineScope()

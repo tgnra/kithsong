@@ -113,8 +113,11 @@ class WindowLayoutTest {
     }
 
     @Test
-    fun notYetKnowingOfAFoldIsNeverLarge() {
-        assertEquals(Medium, classOf(933, 704, foldKnown = false))
+    fun aHingeWithNoFoldReportedIsNeverLarge() {
+        // The Z Fold 8 open at 420 and 480 dpi and a higher density's narrower window, with no report.
+        for ((width, height) in listOf(933 to 704, 816 to 616, 1200 to 900)) {
+            assertEquals(Medium, classOf(width, height, foldKnown = false))
+        }
         assertEquals(Compact, classOf(412, 915, foldKnown = false))
     }
 
@@ -174,18 +177,71 @@ class WindowLayoutTest {
 
     @Test
     fun aPaneOnlyClearsTheEdgesItTouches() {
-        for (window in listOf(layout(915, 412), layout(1422, 800))) {
-            val panes = panesFor(window)
-            assertEquals(WindowInsetsSides.Left + WindowInsetsSides.Vertical, panes.main.sides)
-            assertEquals(WindowInsetsSides.Right + WindowInsetsSides.Vertical, panes.pages.sides)
+        val left = WindowInsetsSides.Left + WindowInsetsSides.Vertical
+        val right = WindowInsetsSides.Right + WindowInsetsSides.Vertical
+        val two = panesFor(layout(915, 412))
+        assertEquals(left, two.main.sides)
+        assertEquals(right, two.pages.sides)
+        val three = panesFor(layout(1422, 800))
+        assertEquals(left, three.categories?.sides)
+        assertEquals(WindowInsetsSides.Vertical, three.main.sides)
+        assertEquals(right, three.pages.sides)
+    }
+
+    private fun assertThreePanesFill(panes: Panes, width: Dp) {
+        val inOrder = listOfNotNull(panes.categories, panes.main, panes.pages).sortedBy { it.x }
+        assertEquals(3, inOrder.size)
+        assertEquals(0.dp, inOrder.first().x)
+        for ((one, next) in inOrder.zipWithNext()) assertEquals(one.x.value + one.width.value, next.x.value, 0.01f)
+        assertEquals(width.value, inOrder.last().x.value + inOrder.last().width.value, 0.01f)
+    }
+
+    @Test
+    fun largesThreePanesFillTheWindowInOrder() {
+        for (width in listOf(800, 1000, 1067, 1422)) {
+            val panes = panesFor(layout(width, 800))
+            assertThreePanesFill(panes, width.dp)
+            assertEquals(0.dp, panes.categories?.x)
+            assertEquals(panes.categories?.width, panes.main.x)
+            assertEquals(panes.pages, panes.miniPlayer)
+            assertEquals(panes.pages, panes.player)
+            assertEquals(panes.main, panes.home)
+            assertFalse(panes.columns)
+            assertTrue(panes.sideBySide)
         }
     }
 
     @Test
-    fun largesPanesFillTheWindow() {
-        val panes = panesFor(layout(1000, 800))
-        assertEquals(panes.main.width, panes.pages.x)
-        assertEquals(1000.dp, panes.pages.x + panes.pages.width)
+    fun theCategoriesGiveWayBeforeTheOtherPanes() {
+        // The two narrowest: a 10 inch tablet in portrait, and a 7 inch in landscape.
+        val portrait = panesFor(layout(800, 1422))
+        assertEquals(160.dp, portrait.categories?.width)
+        assertEquals(320.dp, portrait.main.width)
+        assertEquals(320.dp, portrait.pages.width)
+        val landscape = panesFor(layout(1067, 600))
+        assertEquals(208.dp, landscape.categories?.width)
+        assertTrue(landscape.main.width > 450.dp)
+        assertTrue(landscape.pages.width > 380.dp)
+        // No wider past that, for all the room there is.
+        assertEquals(208.dp, panesFor(layout(1422, 800)).categories?.width)
+    }
+
+    @Test
+    fun rightToLeftMirrorsTheThreePanes() {
+        val panes = panesFor(layout(1000, 800), rtl = true)
+        assertThreePanesFill(panes, 1000.dp)
+        assertEquals(0.dp, panes.pages.x)
+        assertEquals(panes.pages.width, panes.main.x)
+        assertEquals(WindowInsetsSides.Right + WindowInsetsSides.Vertical, panes.categories?.sides)
+        assertEquals(WindowInsetsSides.Left + WindowInsetsSides.Vertical, panes.pages.sides)
+    }
+
+    @Test
+    fun onlyLargeHasCategories() {
+        assertEquals(null, panesFor(layout(412, 915)).categories)
+        assertEquals(null, panesFor(layout(240, 427)).categories)
+        assertEquals(null, panesFor(layout(915, 412)).categories)
+        assertEquals(null, panesFor(layout(933, 704, hinge(466.dp))).categories)
     }
 
     @Test

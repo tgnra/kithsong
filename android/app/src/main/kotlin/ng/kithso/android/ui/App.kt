@@ -128,8 +128,14 @@ fun App(
     // Where everything goes in this window; every layout has the one nav and the same calls below.
     val panes = panesFor(LocalWindowLayout.current, LocalLayoutDirection.current == LayoutDirection.Rtl)
     val sideBySide by rememberUpdatedState(panes.sideBySide)
+    val threePanes = panes.categories != null
+    val appearInPlace by rememberUpdatedState(threePanes)
     // How far each page has slid in, which home's columns follow.
     val slides = remember { PageSlides() }
+    // What's chosen in the left pane, kept in a window without one, for going back to it; null
+    // until something is.
+    var chosenCategory by rememberSaveable { mutableStateOf<Section?>(null) }
+    val category = shownCategory(library, chosenCategory)
 
     // Lists end clear of the mini player, which sits above the navigation bar, if it's over them.
     var miniPlayerHeight by remember { mutableIntStateOf(0) }
@@ -164,10 +170,15 @@ fun App(
         { page -> nav = (if (sideBySide) nav.removeAll { it == Page.Player } else nav).push(page) }
     }
     // From home, beside the pages, a page takes the place of what's open there; from its middle
-    // column it shifts home over. Over home there's nothing to replace, as home can't be tapped.
+    // column it shifts home over. With three panes there are no columns to move, and it appears
+    // in place, as a desktop's does. Over home there's nothing to replace, as home can't be tapped.
     val openFromHome: (Page, Boolean) -> Unit = remember {
         { page, fromMiddle ->
-            nav = if (sideBySide) nav.removeAll { it == Page.Player }.besideHome(page, fromMiddle) else nav.push(page)
+            nav = if (sideBySide) {
+                nav.removeAll { it == Page.Player }.besideHome(page, fromMiddle, still = appearInPlace)
+            } else {
+                nav.push(page)
+            }
         }
     }
     // A station has no page, so it never reaches the back stack: opening it plays it.
@@ -349,7 +360,25 @@ fun App(
     // A Surface rather than a background, so text gets the surface's content colour.
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Box(Modifier.fillMaxSize()) {
-            Pane(panes.home) { HomeLayout(panes, { slides.shownOf(nav) }, nav.shifted, top != null) { column ->
+            panes.categories?.let { area ->
+                Pane(area) {
+                    CategoriesPanel(
+                        library,
+                        category,
+                        onChoose = { chosenCategory = it },
+                        onSearch = { openFromHome(Page.Search, false) },
+                        onSync = { openFromHome(Page.Sync, false) },
+                        onSettings = { openFromHome(Page.Settings, false) },
+                        onStats = { openFromHome(Page.Stats, false) },
+                        onNewList = if (actions.editor != null) actions::newList else null,
+                        importPickers = importPickers,
+                        importRunning = importProgress?.phase?.isOver == false,
+                        syncDot = binDot,
+                        modifier = Modifier.coveredIf(smartOpen),
+                    )
+                }
+            }
+            Pane(panes.home) { HomeLayout(panes, category.takeIf { threePanes }, { slides.shownOf(nav) }, nav.shifted, top != null) { column ->
               val middle = column == HomeColumn.Middle
               MainScreen(
                 library,
@@ -390,9 +419,12 @@ fun App(
                 // This phone's page, over Sync, as Choose what to sync after pairing opens it.
                 onChooseWhatToSync = { openDevice(THIS_DEVICE) },
                 column = column,
+                category = category,
               )
             } }
             Pane(panes.pages) {
+                // Nothing else is there until a page is open, with three panes.
+                if (threePanes) QuietPane()
                 PageLayers(
                     nav,
                     backEnabled = !smartOpen,

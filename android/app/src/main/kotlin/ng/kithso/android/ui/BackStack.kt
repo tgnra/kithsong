@@ -9,10 +9,17 @@ import java.net.URLEncoder
 
 /**
  * One page of a [BackStack]; [id] tells two openings of the same page apart. A [shifted] page moves
- * home's columns over by one while it's open: see [BackStack.besideHome].
+ * home's columns over by one while it's open, and a [still] one is simply there, not slid in:
+ * see [BackStack.besideHome].
  */
 @Immutable
-data class BackLayer<T>(val id: Int, val page: T, val leaving: Boolean = false, val shifted: Boolean = false)
+data class BackLayer<T>(
+    val id: Int,
+    val page: T,
+    val leaving: Boolean = false,
+    val shifted: Boolean = false,
+    val still: Boolean = false,
+)
 
 /**
  * Pages stacked over a screen, bottom first, as back goes through them: back goes to [top],
@@ -45,11 +52,11 @@ data class BackStack<T>(val layers: List<BackLayer<T>> = emptyList(), private va
      * straight home from it. They stay drawn beneath it until [settle], so it arrives over them,
      * not over a gap. A page opened from a page still goes through [push], and stacks.
      */
-    fun besideHome(page: T, shifted: Boolean = false): BackStack<T> {
+    fun besideHome(page: T, shifted: Boolean = false, still: Boolean = false): BackStack<T> {
         val current = top
         if (current?.page == page) return copy(layers = layers.filter { it.leaving || it.id == current.id })
         onPush(page)
-        return BackStack(layers.map { it.copy(leaving = true) } + BackLayer(nextId, page, shifted = shifted), nextId + 1)
+        return BackStack(layers.map { it.copy(leaving = true) } + BackLayer(nextId, page, shifted = shifted, still = still), nextId + 1)
     }
 
     /** Without the layers on their way out beneath [id], now it covers them or has gone. */

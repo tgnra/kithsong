@@ -115,6 +115,7 @@ internal fun PageLayers(
                 modifier = Modifier.coveredIf(layer.id != top?.id),
                 // Beneath a page shifting home is the column moving away from it, not a page it's over.
                 scrim = !layer.shifted || index > 0,
+                slideIn = !layer.still,
                 onShown = { onShown(layer.id) },
                 onSlide = { slides.set(layer.id, it) },
             ) { dismiss ->

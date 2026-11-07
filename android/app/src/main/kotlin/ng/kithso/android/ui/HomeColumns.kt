@@ -62,7 +62,7 @@ import kotlin.math.abs
 // page brought back by a rotation all reach it through DismissibleScreen.
 
 /** What a [MainScreen] shows of the library: all of it in one list, or one column of [HomeLayout]. */
-enum class HomeColumn { All, Left, Middle }
+enum class HomeColumn { All, Left, Middle, Category }
 
 /**
  * Where the strip's columns go, for [panes] that aren't exactly equal either side of a hinge.
@@ -122,19 +122,24 @@ internal class PageSlides {
  * so. [shift] is how far the strip has moved, 0 to 1; [shifted] says that it's moving or has moved
  * over, and [pagesOpen] that the pages' pane has something in it, which covers the middle column.
  *
+ * With three panes home is the one [category] instead.
+ *
  * Each arrangement's scroll positions are saved apart, so going to the other on a fold and back
- * finds them where they were.
+ * finds them where they were, and each category's, so choosing it again does.
  */
 @Composable
 internal fun HomeLayout(
     panes: Panes,
+    category: Section?,
     shift: () -> Float,
     shifted: Boolean,
     pagesOpen: Boolean,
     content: @Composable (HomeColumn) -> Unit,
 ) {
     val saved = rememberSaveableStateHolder()
-    if (!panes.columns) {
+    if (category != null) {
+        saved.SaveableStateProvider("category:$category") { content(HomeColumn.Category) }
+    } else if (!panes.columns) {
         saved.SaveableStateProvider("list") { content(HomeColumn.All) }
     } else {
         saved.SaveableStateProvider("columns") {
