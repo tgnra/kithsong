@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -371,7 +372,8 @@ fun MainScreen(
         PrefetchArt(listState, cellPx) { index -> items.getOrNull(index)?.art.orEmpty() }
         ArtBackdrop(
             rememberOnScreenArtColors(listState) { index -> items.getOrNull(index)?.art.orEmpty() },
-            Modifier.matchParentSize(),
+            // The middle column's list can be narrower than its pane, either side of an off-centre hinge.
+            Modifier.matchParentSize().then(if (column == HomeColumn.Middle) Modifier.requiredWidth(LocalPane.current.width) else Modifier),
         )
 
         LazyColumn(
