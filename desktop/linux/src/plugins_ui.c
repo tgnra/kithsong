@@ -96,20 +96,67 @@ static void set_enabled(const char *file_id, gboolean on) {
   rebuild_later();
 }
 
+/* --- Where the dialog was scrolled to --- */
+
+static GtkAdjustment *scroll_adjustment(void) {
+  GtkWidget *sw = g_pu.group ? gtk_widget_get_ancestor(g_pu.group, GTK_TYPE_SCROLLED_WINDOW) : NULL;
+  return sw ? gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(sw)) : NULL;
+}
+
+static double g_scroll_at = -1;
+static gboolean g_scroll_kept; /* saved before a question: the next rebuild keeps it */
+
+static void save_scroll(void) {
+  GtkAdjustment *adj = scroll_adjustment();
+  g_scroll_at = adj ? gtk_adjustment_get_value(adj) : -1;
+}
+
+static gboolean restore_scroll(gpointer data) {
+  (void)data;
+  GtkAdjustment *adj = scroll_adjustment();
+  if (adj && g_scroll_at >= 0) gtk_adjustment_set_value(adj, g_scroll_at);
+  return G_SOURCE_REMOVE;
+}
+
+/* Now, and once what's changing is laid out. */
+static void restore_scroll_soon(void) {
+  restore_scroll(NULL);
+  if (g_scroll_at >= 0) g_timeout_add(100, restore_scroll, NULL);
+}
+
+static void focus_row(const char *file_id) {
+  for (guint i = 0; g_pu.rows && file_id && i < g_pu.rows->len; i++) {
+    GtkWidget *row = g_ptr_array_index(g_pu.rows, i);
+    if (!g_strcmp0(g_object_get_data(G_OBJECT(row), "file-id"), file_id)) gtk_widget_grab_focus(row);
+  }
+}
+
+/* Closing the question puts the focus on the dialog's first control, which scrolls it there:
+ * back to the plugin's row. */
 static void on_turn_on_response(AdwAlertDialog *dialog, const char *response, gpointer data) {
   (void)data;
   const char *file_id = g_object_get_data(G_OBJECT(dialog), "file-id");
-  if (!strcmp(response, "on") && file_id) set_enabled(file_id, TRUE);
+  focus_row(file_id);
+  if (!strcmp(response, "on") && file_id) {
+    g_scroll_kept = TRUE;
+    set_enabled(file_id, TRUE);
+  } else {
+    restore_scroll_soon();
+  }
 }
 
 /* Turning on asks first, as it runs code with the app's rights; the row shows what is until
  * then. */
-static void toggled(const char *file_id, const char *name, const char *path, gboolean on) {
-  rebuild_later(); /* back to what is, unless it changes */
+static void toggled(GObject *row, const char *file_id, const char *name, const char *path, gboolean on) {
   if (!on) {
     set_enabled(file_id, FALSE);
     return;
   }
+  /* Off until it's confirmed; set back here rather than made again, so the focus stays. */
+  g_pu.filling = TRUE;
+  if (ADW_IS_SWITCH_ROW(row)) adw_switch_row_set_active(ADW_SWITCH_ROW(row), FALSE);
+  else adw_expander_row_set_enable_expansion(ADW_EXPANDER_ROW(row), FALSE);
+  g_pu.filling = FALSE;
   char *base = path ? g_path_get_basename(path) : g_strdup(file_id); /* the row has the whole path */
   char *heading = mc_format_alloc(mc_str(MC_STR_PLUGIN_TURN_ON_TITLE), MC_S(name));
   char *body = mc_format_alloc(mc_str(MC_STR_PLUGIN_TURN_ON_TEXT), MC_S(base));
@@ -124,6 +171,7 @@ static void toggled(const char *file_id, const char *name, const char *path, gbo
   adw_alert_dialog_set_close_response(alert, "cancel");
   g_object_set_data_full(G_OBJECT(dialog), "file-id", g_strdup(file_id), g_free);
   g_signal_connect(dialog, "response", G_CALLBACK(on_turn_on_response), NULL);
+  save_scroll();
   adw_dialog_present(dialog, g_pu.group);
 }
 
@@ -132,7 +180,7 @@ static void on_switch_active(GObject *row, GParamSpec *pspec, gpointer data) {
   if (g_pu.filling) return;
   gboolean on = ADW_IS_SWITCH_ROW(row) ? adw_switch_row_get_active(ADW_SWITCH_ROW(row))
                                        : adw_expander_row_get_enable_expansion(ADW_EXPANDER_ROW(row));
-  toggled(g_object_get_data(row, "file-id"), g_object_get_data(row, "name"), g_object_get_data(row, "path"), on);
+  toggled(row, g_object_get_data(row, "file-id"), g_object_get_data(row, "name"), g_object_get_data(row, "path"), on);
 }
 
 /* --- A plugin's settings --- */
@@ -279,7 +327,21 @@ static GtkWidget *plugin_row(const mc_plugin_info *p) {
 
 static void rebuild(void) {
   if (!g_pu.group) return;
+  /* Taking out a focused row scrolls the dialog to its first control: back to where it was, now
+   * and once the new rows are laid out (or to where it was before the question, if one was
+   * asked). */
+  if (!g_scroll_kept) save_scroll();
+  g_scroll_kept = FALSE;
   g_pu.filling = TRUE;
+  /* The focus goes back to the same plugin's row once it's made again, or the dialog would
+   * scroll back to its first control. */
+  char *focused = NULL;
+  GtkRoot *root = gtk_widget_get_root(g_pu.group);
+  GtkWidget *focus = root ? gtk_root_get_focus(root) : NULL;
+  for (guint i = 0; focus && !focused && i < g_pu.rows->len; i++) {
+    GtkWidget *row = g_ptr_array_index(g_pu.rows, i);
+    if (focus == row || gtk_widget_is_ancestor(focus, row)) focused = g_strdup(g_object_get_data(G_OBJECT(row), "file-id"));
+  }
   for (guint i = 0; i < g_pu.rows->len; i++)
     adw_preferences_group_remove(ADW_PREFERENCES_GROUP(g_pu.group), g_ptr_array_index(g_pu.rows, i));
   g_ptr_array_set_size(g_pu.rows, 0);
@@ -302,7 +364,10 @@ static void rebuild(void) {
     mc_free(text);
     g_free(dir);
   }
+  focus_row(focused);
+  g_free(focused);
   g_pu.filling = FALSE;
+  restore_scroll_soon();
 }
 
 static void on_group_destroy(GtkWidget *widget, gpointer data) {
