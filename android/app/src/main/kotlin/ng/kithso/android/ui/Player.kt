@@ -456,14 +456,12 @@ private fun PlayerControls(
             IconButton(onClick = playback::previous, modifier = Modifier.size(skipSize)) {
                 Icon(Icons.SkipPrevious, contentDescription = stringResource(R.string.previous_track), modifier = Modifier.size(skipIconSize))
             }
-            // Smaller, but still round, when the height is short (landscape with large text). A dense
-            // window has its size set, so that nothing squeezes it.
+            // Smaller, but still round, when the height is short (landscape with large text).
             val playIconSize = if (dense) 32.dp else 40.dp
+            val playSize = if (dense) densePlaySize else 80.dp
             FilledIconButton(
                 onClick = playback::toggle,
-                modifier = if (dense) Modifier.size(densePlaySize) else {
-                    Modifier.sizeIn(maxWidth = 80.dp, maxHeight = 80.dp).aspectRatio(1f, matchHeightConstraintsFirst = true)
-                },
+                modifier = Modifier.sizeIn(maxWidth = playSize, maxHeight = playSize).aspectRatio(1f, matchHeightConstraintsFirst = true),
             ) {
                 if (playback.isPlaying) Icon(Icons.Pause, contentDescription = stringResource(R.string.pause), modifier = Modifier.size(playIconSize))
                 else Icon(Icons.Play, contentDescription = stringResource(R.string.play), modifier = Modifier.size(playIconSize))
