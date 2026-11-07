@@ -97,8 +97,8 @@ fun SearchScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.statusBars)
-                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                    .windowInsetsPadding(WindowInsets.statusBars.inPane())
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal).inPane())
                     .padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -128,7 +128,7 @@ fun SearchScreen(
             }
             val found = results
             LazyColumn(
-                contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+                contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal).inPane()
                     .add(WindowInsets(bottom = bottomPadding))
                     .asPaddingValues(),
                 modifier = Modifier.fillMaxSize(),

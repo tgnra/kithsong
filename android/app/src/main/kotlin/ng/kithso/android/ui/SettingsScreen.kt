@@ -97,7 +97,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal).inPane()
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
             modifier = Modifier.fillMaxSize(),
@@ -286,9 +286,9 @@ fun ScreenHeader(title: String, onBack: () -> Unit, actions: @Composable RowScop
             modifier = modifier.semantics { heading() },
         )
     }
-    if (isShortWindow()) {
+    if (isShortPane()) {
         Row(
-            Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars),
+            Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars.inPane()),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             back()
@@ -296,7 +296,7 @@ fun ScreenHeader(title: String, onBack: () -> Unit, actions: @Composable RowScop
             actions()
         }
     } else {
-        Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) {
+        Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars.inPane())) {
             Row(Modifier.fillMaxWidth().padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 back()
                 Spacer(Modifier.weight(1f))

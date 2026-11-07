@@ -95,7 +95,7 @@ fun SyncScreen(
     var leaving by rememberSaveable { mutableStateOf(false) }
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal).inPane()
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
             modifier = Modifier.fillMaxSize(),
@@ -272,7 +272,7 @@ fun DeviceScreen(
 
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal).inPane()
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
             modifier = Modifier.fillMaxSize(),

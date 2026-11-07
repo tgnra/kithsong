@@ -21,6 +21,7 @@ import androidx.core.content.IntentCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import ng.kithso.android.importer.ImportSource
 import ng.kithso.android.ui.App
+import ng.kithso.android.ui.ProvideWindowLayout
 import ng.kithso.android.ui.theme.KithsongTheme
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.first
@@ -86,17 +87,19 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             KithsongTheme {
-                App(
-                    app.library,
-                    app.playback,
-                    app.syncer,
-                    app.importer,
-                    app.settings,
-                    app.libraryDir,
-                    onPlay = ::askForNotificationsOnce,
-                    onImportStarted = ::askForNotificationsOnce,
-                    onLeave = if (systemBack) null else ::leave,
-                )
+                ProvideWindowLayout {
+                    App(
+                        app.library,
+                        app.playback,
+                        app.syncer,
+                        app.importer,
+                        app.settings,
+                        app.libraryDir,
+                        onPlay = ::askForNotificationsOnce,
+                        onImportStarted = ::askForNotificationsOnce,
+                        onLeave = if (systemBack) null else ::leave,
+                    )
+                }
             }
         }
     }

@@ -193,7 +193,7 @@ internal fun FullPlayer(
                 .coveredIf(slide.open)
                 .queueDrag(slide, swipe)
                 .trackSwipe(swipe)
-                .windowInsetsPadding(WindowInsets.safeDrawing),
+                .windowInsetsPadding(WindowInsets.safeDrawing.inPane()),
         ) {
             val wide = maxWidth > maxHeight
             // Below about this, two lines and the controls don't fit, so a short title gives its space back.
@@ -242,7 +242,7 @@ internal fun FullPlayer(
                     .fillMaxSize()
                     .graphicsLayer { translationY = (1f - slide.progress) * slide.page }
                     .queueDrag(slide)
-                    .windowInsetsPadding(WindowInsets.safeDrawing),
+                    .windowInsetsPadding(WindowInsets.safeDrawing.inPane()),
             )
         }
     }

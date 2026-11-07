@@ -80,6 +80,8 @@ dependencies {
     // Colour schemes from album art. 5.x is built with Kotlin 2.4, so it needs the project on
     // 2.4 too (the Compose compiler plugin's version in the root build.gradle.kts).
     implementation("com.materialkolor:material-kolor:5.0.1")
+    // Window size and fold information, for the adaptive layouts (ui/WindowLayout.kt).
+    implementation("androidx.window:window:1.5.1")
     // Whether the app is on screen, for sync (KithsongApp.isVisible). The lifecycle libraries
     // keep their versions in step, so this follows the newer one the others bring.
     implementation("androidx.lifecycle:lifecycle-process:2.8.7")

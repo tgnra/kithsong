@@ -57,7 +57,7 @@ fun RecycleBinScreen(bin: RecycleBin, binCount: Int, bottomPadding: Dp, onBack: 
     val failed = stringResource(R.string.recycle_bin_restore_failed)
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal).inPane()
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
             modifier = Modifier.fillMaxSize(),

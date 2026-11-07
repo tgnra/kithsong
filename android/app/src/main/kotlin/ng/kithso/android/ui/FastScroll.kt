@@ -43,7 +43,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
@@ -331,7 +330,7 @@ fun FastScroller(
         }
     }
     if (screen <= 0 || entries.isEmpty()) return
-    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val screenHeight = LocalPane.current.height
     BoxWithConstraints(modifier) {
         val fits = with(density) { (stripHeight(maxHeight, screenHeight) / MinTickHeight).toInt() }.coerceAtLeast(1)
         val known = heights.toMap()
@@ -408,7 +407,7 @@ fun FastScroller(
         }
     }
     val alpha by animateFloatAsState(if (shown) 1f else 0f, label = "fast scroll")
-    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val screenHeight = LocalPane.current.height
     // The entry the list is at, for accessibility: the last at or above the first item on screen.
     val at by remember(entries) {
         derivedStateOf {

@@ -301,12 +301,12 @@ fun MainScreen(
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
         // The list is inset from a camera cutout or navigation bar at the side, in landscape.
-        val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+        val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal).inPane()
         val layoutDirection = LocalLayoutDirection.current
         val width = maxWidth - with(density) { (sides.getLeft(density, layoutDirection) + sides.getRight(density, layoutDirection)).toDp() }
         val columns = albumColumns(width)
         val cellPx = with(density) { ((width - Gutter * 2 - TileSpacing * (columns - 1)) / columns).roundToPx() }
-        val statusBarPx = WindowInsets.statusBars.getTop(density)
+        val statusBarPx = WindowInsets.statusBars.inPane().getTop(density)
 
         val hasBanner = banner != null
         val canMake = onNewList != null
@@ -484,7 +484,7 @@ private fun Header(
     Row(
         Modifier
             .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.statusBars)
+            .windowInsetsPadding(WindowInsets.statusBars.inPane())
             .height(HeaderHeight)
             .padding(start = Gutter, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,

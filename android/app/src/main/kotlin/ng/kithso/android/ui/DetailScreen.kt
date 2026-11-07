@@ -228,8 +228,8 @@ fun DetailScreen(
             val group = ref.kind == CollectionRef.Kind.AlbumGroup
             ArtBackdrop(rememberArtColors(picture ?: list?.art), Modifier.matchParentSize())
             val density = LocalDensity.current
-            val statusBarPx = WindowInsets.statusBars.getTop(density)
-            val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+            val statusBarPx = WindowInsets.statusBars.inPane().getTop(density)
+            val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal).inPane()
             // An artist's page jumps between its headings, and through its tracks by title.
             val scrollEntries = if (ref.kind == CollectionRef.Kind.Artist && list != null) {
                 val titles = listOf(
@@ -247,7 +247,7 @@ fun DetailScreen(
             }
             LazyColumn(
                 state = listState,
-                contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+                contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal).inPane()
                     .add(WindowInsets(bottom = bottomPadding))
                     .asPaddingValues(),
                 modifier = Modifier.fillMaxSize(),
@@ -576,7 +576,7 @@ private fun DetailHeader(
     onMenu: (() -> Unit)? = null,
     menuDescription: String = "",
 ) {
-    val short = isShortWindow()
+    val short = isShortPane()
     val back = @Composable {
         IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp, top = 4.dp)) {
             Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back))
@@ -594,13 +594,13 @@ private fun DetailHeader(
         }
     }
     if (short) {
-        Row(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) {
+        Row(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars.inPane())) {
             back()
             if (list != null) DetailTitle(kind, list, 96.dp, Modifier.weight(1f).padding(start = 4.dp, top = 12.dp))
             edit()
         }
     } else {
-        Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) {
+        Column(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars.inPane())) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 back()
                 Spacer(Modifier.weight(1f))

@@ -1,0 +1,224 @@
+package ng.kithso.android.ui
+
+import android.util.Log
+import androidx.activity.compose.LocalActivity
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.window.layout.FoldingFeature
+import androidx.window.layout.WindowInfoTracker
+
+/** Which of the app's layouts a window gets. See [windowLayoutClass]. */
+enum class WindowLayoutClass {
+    /** Today's phone UI. */
+    Compact,
+
+    /** Under [MediumMinWidth] wide, and narrow or short: a cover screen, a tiny phone. */
+    Small,
+
+    /** Two panes side by side, either side of any hinge. */
+    Medium,
+
+    /** Three panes, as on the desktops. Never across a fold. */
+    Large,
+}
+
+/** Narrower than this is [WindowLayoutClass.Small]. */
+val SmallBelowWidth = 340.dp
+
+/** Shorter than this is [WindowLayoutClass.Small] if under [MediumMinWidth], and dense at any width. */
+val ShortBelowHeight = 480.dp
+
+/** From here across a window has two panes, whatever its height. */
+val MediumMinWidth = 600.dp
+
+/** A 10 inch tablet in portrait is 800 wide (Store_Tablet_10), and a 7 inch in portrait 600. */
+val LargeMinWidth = 800.dp
+
+/** A 7 inch tablet in landscape is 600 tall (Store_Tablet_7). */
+val LargeMinHeight = 560.dp
+
+/** A fold or hinge across a window, in the window's own dp: [start] to [end] is what it covers, along x if [vertical]. */
+@Immutable
+data class WindowFold(val vertical: Boolean, val start: Dp, val end: Dp)
+
+/**
+ * How much smaller text and sizes are drawn. One setting for all of a window's screens, from
+ * [WindowLayout.dense] and not the layout class, as a Medium window can be dense too.
+ */
+@Immutable
+data class LayoutScale(val font: Float, val size: Float) {
+    companion object {
+        val Regular = LayoutScale(font = 1f, size = 1f)
+        val Dense = LayoutScale(font = 0.85f, size = 0.85f)
+    }
+}
+
+/**
+ * The layout for a window [width] by [height]. Any [fold] rules out Large, as a hinge would cut
+ * the middle pane in half. [foldKnown] is false until the system has said whether there is a
+ * fold, which also rules it out: an open foldable mustn't show Large for its first frames, and
+ * on a tablet Medium for those frames costs little.
+ */
+fun windowLayoutClass(width: Dp, height: Dp, fold: WindowFold? = null, foldKnown: Boolean = true): WindowLayoutClass = when {
+    width >= LargeMinWidth && height >= LargeMinHeight && fold == null && foldKnown -> WindowLayoutClass.Large
+    width >= MediumMinWidth -> WindowLayoutClass.Medium
+    width < SmallBelowWidth || height < ShortBelowHeight -> WindowLayoutClass.Small
+    else -> WindowLayoutClass.Compact
+}
+
+/** What the window is, for choosing a layout: read it from [LocalWindowLayout]. */
+@Immutable
+data class WindowLayout(
+    val layoutClass: WindowLayoutClass,
+    val width: Dp,
+    val height: Dp,
+    val fold: WindowFold? = null,
+) {
+    /** Space is tight: smaller text, a smaller header, the small mini player with no seekbar. */
+    val dense: Boolean get() = layoutClass == WindowLayoutClass.Small || height < ShortBelowHeight
+
+    /** The scaling that goes with [dense]. */
+    val scale: LayoutScale get() = if (dense) LayoutScale.Dense else LayoutScale.Regular
+
+    companion object {
+        fun of(width: Dp, height: Dp, fold: WindowFold? = null, foldKnown: Boolean = true) =
+            WindowLayout(windowLayoutClass(width, height, fold, foldKnown), width, height, fold)
+    }
+}
+
+/**
+ * A part of the window something is drawn in. [sides] are the window's edges it touches, the
+ * only ones whose insets are its to clear: see [inPane].
+ */
+@Immutable
+data class PaneArea(
+    val x: Dp,
+    val width: Dp,
+    val height: Dp,
+    val sides: WindowInsetsSides,
+    val whole: Boolean = false,
+)
+
+private val AllSides = WindowInsetsSides.Horizontal + WindowInsetsSides.Vertical
+
+/**
+ * Where each part of the app goes. App.kt calls [Pane] once for each, at the same place in every
+ * layout, and only these areas differ: that's what lets what's saved (a list's scroll position,
+ * say) find its way back after a fold or unfold, as rememberSaveable's keys come from the call's
+ * place in the composition. Keep it so: branching on the layout class around a [Pane] call
+ * loses them.
+ */
+@Immutable
+data class Panes(val main: PaneArea, val pages: PaneArea, val miniPlayer: PaneArea, val player: PaneArea) {
+    /** Pages open beside the main content rather than over it. */
+    val sideBySide: Boolean get() = main != pages
+}
+
+/** Large's main content takes this share of the window, for now. */
+private const val LARGE_MAIN_SHARE = 0.6f
+
+/** The one place that decides where everything goes, for each layout class. */
+fun panesFor(layout: WindowLayout): Panes = when (layout.layoutClass) {
+    WindowLayoutClass.Compact, WindowLayoutClass.Small -> {
+        val all = PaneArea(0.dp, layout.width, layout.height, AllSides, whole = true)
+        Panes(all, all, all, all)
+    }
+    // Either side of a hinge, which has a width on some devices; else halves.
+    WindowLayoutClass.Medium -> {
+        val fold = layout.fold?.takeIf { it.vertical }
+        split(layout, fold?.start ?: (layout.width / 2), fold?.end ?: (layout.width / 2))
+    }
+    WindowLayoutClass.Large -> (layout.width * LARGE_MAIN_SHARE).let { split(layout, it, it) }
+}
+
+private fun split(layout: WindowLayout, leftEnd: Dp, rightStart: Dp): Panes {
+    val left = PaneArea(0.dp, leftEnd, layout.height, WindowInsetsSides.Left + WindowInsetsSides.Vertical)
+    val right = PaneArea(
+        rightStart,
+        layout.width - rightStart,
+        layout.height,
+        WindowInsetsSides.Right + WindowInsetsSides.Vertical,
+    )
+    return Panes(left, right, right, right)
+}
+
+/** The window's layout. Set by [ProvideWindowLayout]. */
+val LocalWindowLayout = compositionLocalOf { WindowLayout.of(400.dp, 800.dp) }
+
+/** The area what's being drawn is in: the whole window, unless it's in a [Pane]. */
+val LocalPane = compositionLocalOf { PaneArea(0.dp, 400.dp, 800.dp, AllSides, whole = true) }
+
+/**
+ * These insets as far as they reach this pane: a pane away from a window edge has nothing to
+ * clear there. For what's drawn in a pane's composition, not in a dialog's or sheet's own window.
+ */
+@Composable
+fun WindowInsets.inPane(): WindowInsets = only(LocalPane.current.sides)
+
+/** Whether the pane is short, as a phone is in landscape: screens then put their headers' parts side by side. */
+@Composable
+fun isShortPane(): Boolean = LocalPane.current.height < ShortBelowHeight
+
+/** [content] in [area], which [LocalPane] then says, at the area's place in the window. */
+@Composable
+fun Pane(area: PaneArea, content: @Composable BoxScope.() -> Unit) {
+    CompositionLocalProvider(LocalPane provides area) {
+        Box(
+            if (area.whole) Modifier.fillMaxSize()
+            else Modifier.absoluteOffset(x = area.x).width(area.width).fillMaxHeight(),
+            content = content,
+        )
+    }
+}
+
+/** Provides [LocalWindowLayout] and a whole-window [LocalPane], kept up with the live window and its folds. */
+@Composable
+fun ProvideWindowLayout(content: @Composable () -> Unit) {
+    val activity = LocalActivity.current
+    val density = LocalDensity.current
+    // Null until the system has said, so that "no folds" can be told from "not known yet".
+    var folds by remember { mutableStateOf<List<WindowFold>?>(if (activity == null) emptyList() else null) }
+    LaunchedEffect(activity, density) {
+        if (activity == null) return@LaunchedEffect
+        WindowInfoTracker.getOrCreate(activity).windowLayoutInfo(activity).collect { info ->
+            folds = info.displayFeatures.filterIsInstance<FoldingFeature>().map { feature ->
+                val vertical = feature.orientation == FoldingFeature.Orientation.VERTICAL
+                val bounds = feature.bounds
+                with(density) {
+                    if (vertical) WindowFold(true, bounds.left.toDp(), bounds.right.toDp())
+                    else WindowFold(false, bounds.top.toDp(), bounds.bottom.toDp())
+                }
+            }
+        }
+    }
+    val size = LocalWindowInfo.current.containerSize
+    val layout = with(density) {
+        // A vertical fold first, as that's the one panes go either side of.
+        val fold = folds?.let { all -> all.firstOrNull { it.vertical } ?: all.firstOrNull() }
+        WindowLayout.of(size.width.toDp(), size.height.toDp(), fold, foldKnown = folds != null)
+    }
+    LaunchedEffect(layout) { Log.i("kithsong-layout", "$layout dense=${layout.dense} foldKnown=${folds != null}") }
+    val whole = PaneArea(0.dp, layout.width, layout.height, AllSides, whole = true)
+    CompositionLocalProvider(LocalWindowLayout provides layout, LocalPane provides whole, content = content)
+}

@@ -34,6 +34,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,13 +47,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.AppSettings
 import ng.kithso.android.data.Addition
 import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.CoreLibrarySource
+import ng.kithso.android.data.FoundTrack
 import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.data.PlaylistEditor
@@ -75,7 +76,8 @@ import java.io.File
 
 /**
  * The app's one screen: the main list, with settings, sync, search or track list screens stacked
- * over it, then the mini player, then the full player. Navigation is one [BackStack] of [Page]s,
+ * over it or beside it, then the mini player, then the full player, each in the [Pane] that
+ * [panesFor] gives it in this window. Navigation is one [BackStack] of [Page]s,
  * in the order they opened, so back goes up a page at a time, and the player, always on top,
  * closes first; each layer owns its slide-in, drag-to-dismiss and predictive back. With nothing
  * open back calls [onLeave]. A search result opens its track list over search. The players take
@@ -121,11 +123,16 @@ fun App(
     // back open with the next one.
     LaunchedEffect(track == null) { if (track == null) nav = nav.removeAll { it == Page.Player } }
 
-    // Lists end clear of the mini player, which sits above the navigation bar.
+    // Where everything goes in this window; every layout has the one nav and the same calls below.
+    val panes = panesFor(LocalWindowLayout.current)
+    val sideBySide by rememberUpdatedState(panes.sideBySide)
+
+    // Lists end clear of the mini player, which sits above the navigation bar, if it's over them.
     var miniPlayerHeight by remember { mutableIntStateOf(0) }
     val navigationBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val bottomPadding = if (track == null) navigationBar
     else navigationBar + with(LocalDensity.current) { miniPlayerHeight.toDp() } + MiniPlayerMargin * 2
+    val mainBottomPadding = if (panes.sideBySide) navigationBar else bottomPadding
 
     // Opening a list starts finding its art's colours at once, for art that wasn't on screen in
     // the main list, so they're there as its screen slides in rather than fading in after.
@@ -147,6 +154,11 @@ fun App(
             }
         }
     }
+    // The player is always the top page. Over everything it can't be tapped past, but beside the
+    // main content it can, and it makes way for what's opened there.
+    val push: (Page) -> Unit = remember {
+        { page -> nav = (if (sideBySide) nav.removeAll { it == Page.Player } else nav).push(page) }
+    }
     // A station has no page, so it never reaches the back stack: opening it plays it.
     val open: (CollectionRef) -> Unit = remember {
         { ref ->
@@ -154,7 +166,7 @@ fun App(
                 playStation(ref)
             } else {
                 library?.artOf(ref)?.let { art -> scope.launch { ArtColors.find(context, art) } }
-                nav = nav.push(Page.Collection(ref))
+                push(Page.Collection(ref))
             }
         }
     }
@@ -230,6 +242,34 @@ fun App(
             }
         }
     }
+    // A search result: its album, from the track on; a single by itself.
+    val playFound: (FoundTrack) -> Unit = { found ->
+        val album = found.albumUid?.let { CollectionRef(CollectionRef.Kind.Album, it) }
+        if (album != null) scope.launch {
+            val tracks = source.trackList(album)?.tracks.orEmpty()
+            if (tracks.isEmpty()) return@launch
+            playback.play(tracks, tracks.indexOfFirst { it.uid == found.uid }.coerceAtLeast(0), album.origin)
+            source.notePlayed(album)
+            onPlay()
+        } else if (found.track != null) {
+            playback.play(listOf(found.track), 0, CorePlayer.Origin(CorePlayer.PlayContext.Manual))
+            onPlay()
+        }
+    }
+    val host = PageHost(
+        source, playback, syncer, settings, libraryDir, actions, binCount,
+        push = push,
+        open = open,
+        playFrom = playFrom,
+        playList = playList,
+        playFound = playFound,
+        // Its menu, once its artists are looked up, for Go to album and artist.
+        foundTrackMenu = { found -> scope.launch { actions.foundTrackMenu(found, source.trackArtists(found.uid)) } },
+        runScrollTest = {
+            nav = nav.removeAll { it == Page.Settings }
+            ScrollTest.start()
+        },
+    )
 
     val top = nav.top
     val app = context.applicationContext as KithsongApp
@@ -297,14 +337,14 @@ fun App(
     // A Surface rather than a background, so text gets the surface's content colour.
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Box(Modifier.fillMaxSize()) {
-            MainScreen(
+            Pane(panes.main) { MainScreen(
                 library,
-                bottomPadding,
+                mainBottomPadding,
                 onOpen = open,
-                onSearch = { nav = nav.push(Page.Search) },
-                onSync = { nav = nav.push(Page.Sync) },
-                onSettings = { nav = nav.push(Page.Settings) },
-                onStats = { nav = nav.push(Page.Stats) },
+                onSearch = { push(Page.Search) },
+                onSync = { push(Page.Sync) },
+                onSettings = { push(Page.Settings) },
+                onStats = { push(Page.Stats) },
                 importPickers = importPickers,
                 importRunning = importProgress?.phase?.isOver == false,
                 // How an import is going, the merge after pairing by merging libraries, what's
@@ -322,7 +362,7 @@ fun App(
                         }
                     }
                 },
-                modifier = Modifier.coveredIf(top != null || smartOpen),
+                modifier = Modifier.coveredIf((top != null && !panes.sideBySide) || smartOpen),
                 onStationMenu = actions::stationMenu,
                 onRecentMenu = actions::recentMenu,
                 onPlaylistMenu = actions::playlistMenu,
@@ -334,128 +374,50 @@ fun App(
                 inGroup = inGroup,
                 // This phone's page, over Sync, as Choose what to sync after pairing opens it.
                 onChooseWhatToSync = { openDevice(THIS_DEVICE) },
-            )
-            // Every page but the player, which goes over the mini player.
-            nav.layers.forEach { layer ->
-                if (layer.page != Page.Player) key(layer.id) {
-                    DismissibleScreen(
-                        DismissDirection.Right,
-                        onLeaving = { nav = nav.leave(layer.id) },
-                        onDismissed = { nav = nav.remove(layer.id) },
-                        backEnabled = layer.id == top?.id && !smartOpen,
-                        modifier = Modifier.coveredIf(layer.id != top?.id),
-                    ) { dismiss ->
-                        when (val page = layer.page) {
-                            Page.Settings -> SettingsScreen(
-                                settings, libraryDir, bottomPadding,
-                                onLicenses = { nav = nav.push(Page.Licenses) },
-                                onBack = dismiss,
-                                binCount = binCount,
-                                onRecycleBin = { nav = nav.push(Page.RecycleBin) },
-                                onRunScrollTest = {
-                                    nav = nav.removeAll { it == Page.Settings }
-                                    ScrollTest.start()
-                                },
-                            )
-                            Page.Stats -> StatsScreen(source, bottomPadding, onBack = dismiss)
-                            Page.Licenses -> LicensesScreen(bottomPadding, onOpen = { nav = nav.push(Page.License(it)) }, onBack = dismiss)
-                            is Page.License -> LicenseTextScreen(page.asset, bottomPadding, onBack = dismiss)
-                            Page.Sync -> SyncScreen(
-                                syncer, bottomPadding, onOpenDevice = { nav = nav.push(Page.Device(it)) }, onBack = dismiss,
-                                onOpenBin = { nav = nav.push(Page.RecycleBin) },
-                            )
-                            Page.RecycleBin -> RecycleBinScreen(syncer, binCount ?: 0, bottomPadding, onBack = dismiss)
-                            is Page.Device -> DeviceScreen(syncer, page.uid, bottomPadding, onBack = dismiss, onRename = syncer::rename)
-                            Page.Search -> SearchScreen(
-                                source,
-                                bottomPadding,
-                                onOpen = open,
-                                onPlayTrack = { found ->
-                                    // Its album, from the track on; a single by itself.
-                                    val album = found.albumUid?.let { CollectionRef(CollectionRef.Kind.Album, it) }
-                                    if (album != null) scope.launch {
-                                        val tracks = source.trackList(album)?.tracks.orEmpty()
-                                        if (tracks.isEmpty()) return@launch
-                                        playback.play(tracks, tracks.indexOfFirst { it.uid == found.uid }.coerceAtLeast(0), album.origin)
-                                        source.notePlayed(album)
-                                        onPlay()
-                                    } else if (found.track != null) {
-                                        playback.play(listOf(found.track), 0, CorePlayer.Origin(CorePlayer.PlayContext.Manual))
-                                        onPlay()
-                                    }
-                                },
-                                // Its menu, once its artists are looked up, for Go to album and artist.
-                                onTrackMenu = { found ->
-                                    scope.launch { actions.foundTrackMenu(found, source.trackArtists(found.uid)) }
-                                },
-                                onBack = dismiss,
-                            )
-                            is Page.Collection -> DetailScreen(
-                                page.ref,
-                                source,
-                                actions,
-                                bottomPadding,
-                                onPlay = { tracks, index ->
-                                    // From an album, in order from the track, as the desktops do.
-                                    if (page.ref.kind == CollectionRef.Kind.Album && settings.albumInOrder) playback.setShuffle(false)
-                                    playFrom(page.ref, tracks, index)
-                                },
-                                onPlayAll = { tracks, shuffle -> playList(page.ref, tracks, shuffle) },
-                                onOpen = open,
-                                onBack = dismiss,
-                            )
-                            Page.Player -> Unit
-                        }
-                    }
-                }
+            ) }
+            Pane(panes.pages) {
+                PageLayers(
+                    nav,
+                    backEnabled = !smartOpen,
+                    onLeaving = { nav = nav.leave(it) },
+                    onDismissed = { nav = nav.remove(it) },
+                    host = host,
+                    bottomPadding = bottomPadding,
+                )
             }
             if (track != null) ArtTheme(track.art) {
                 // The track's menu, for Go to album and artist and Delete from library; it isn't
                 // from a playlist here.
                 val trackMenu = { actions.trackMenu(track, removable = false) }
-                MiniPlayer(
-                    playback,
-                    track,
-                    onOpen = { nav = nav.push(Page.Player) },
-                    onMenu = trackMenu,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .windowInsetsPadding(
-                            WindowInsets.navigationBars.union(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
-                        )
-                        .padding(MiniPlayerMargin)
-                        .widthIn(max = 640.dp)
-                        .fillMaxWidth()
-                        .onSizeChanged { miniPlayerHeight = it.height }
-                        .coveredIf(top?.page == Page.Player),
-                )
-                // Each opening is a layer of its own, so one tapped open while the last is still
-                // sliding out doesn't take that one over.
-                nav.layers.forEach { layer ->
-                    if (layer.page == Page.Player) key(layer.id) {
-                        // Back and dragging down are the queue's while it's open.
-                        val queue = rememberQueueSlide()
-                        val backHere = layer.id == top?.id && !smartOpen
-                        DismissibleScreen(
-                            DismissDirection.Down,
-                            onLeaving = { nav = nav.leave(layer.id) },
-                            onDismissed = { nav = nav.remove(layer.id) },
-                            backEnabled = backHere && !queue.open,
-                            draggable = !queue.shown,
-                        ) { dismiss ->
-                            FullPlayer(
-                                playback,
-                                track,
-                                queue,
-                                queueBackEnabled = backHere,
-                                onCollapse = dismiss,
-                                onAddToPlaylist = if (actions.editor == null) null else {
-                                    { actions.addToPlaylist(Addition.Tracks(listOf(track.uid))) }
-                                },
-                                onMenu = trackMenu,
+                Pane(panes.miniPlayer) {
+                    MiniPlayer(
+                        playback,
+                        track,
+                        onOpen = { nav = nav.push(Page.Player) },
+                        onMenu = trackMenu,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .windowInsetsPadding(
+                                WindowInsets.navigationBars.union(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)).inPane(),
                             )
-                        }
-                    }
+                            .padding(MiniPlayerMargin)
+                            .widthIn(max = 640.dp)
+                            .fillMaxWidth()
+                            .onSizeChanged { miniPlayerHeight = it.height }
+                            .coveredIf(top?.page == Page.Player),
+                    )
+                }
+                Pane(panes.player) {
+                    PlayerLayers(
+                        nav,
+                        backEnabled = !smartOpen,
+                        onLeaving = { nav = nav.leave(it) },
+                        onDismissed = { nav = nav.remove(it) },
+                        playback = playback,
+                        track = track,
+                        actions = actions,
+                        onMenu = trackMenu,
+                    )
                 }
             }
             val smart = actions.smart
@@ -512,16 +474,6 @@ private fun <T> Syncer.statusPart(part: (SyncStatus) -> T): State<T> {
     val parts = remember(this) { status.map(part).distinctUntilChanged() }
     return parts.collectAsState(remember(this) { part(status.value) })
 }
-
-/**
- * Whether the window is short, as a phone is in landscape: screens then put their headers'
- * parts side by side, to leave room for the content beneath.
- */
-@Composable
-fun isShortWindow(): Boolean =
-    with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() } < ShortWindowHeight
-
-private val ShortWindowHeight = 480.dp
 
 /** Hides a layer from accessibility services while another covers it. */
 internal fun Modifier.coveredIf(covered: Boolean) = if (covered) clearAndSetSemantics {} else this
