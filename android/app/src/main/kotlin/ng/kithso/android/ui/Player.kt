@@ -209,6 +209,8 @@ internal fun FullPlayer(
             // Below about this, two lines and the controls don't fit, so a short title gives its space back.
             val titleSpace = !dense && maxHeight >= 256.dp + 56.dp * fontScale
             val playSize = if (maxWidth - sidePadding * 2 >= MinDenseControlsWidth) 64.dp else 56.dp
+            // A pane narrower than the buttons at their full size, as beside another, has them at a dense window's.
+            val smallButtons = dense || maxWidth - sidePadding * 2 < MinControlsWidth
             val gap = if (dense) DenseControlsGap else ControlsGap
             Column(Modifier.fillMaxSize().padding(horizontal = sidePadding)) {
                 // Nudged so the icons, not their touch targets, line up with the art.
@@ -232,14 +234,14 @@ internal fun FullPlayer(
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(gap)) {
                             PlayerTitle(swipe, titleSpace, Alignment.CenterStart)
                             // Moved, not closed up, so this centred column keeps its height and the title stays put.
-                            PlayerControls(playback, track, onAddToPlaylist, playSize, Modifier.offset(y = -gap))
+                            PlayerControls(playback, track, onAddToPlaylist, playSize, smallButtons, Modifier.offset(y = -gap))
                         }
                     }
                 } else {
                     TallPlayerLayout(
                         art = { PlayerArt(swipe, onMenu, Modifier) },
                         title = { PlayerTitle(swipe, titleSpace, Alignment.TopStart) },
-                        controls = { PlayerControls(playback, track, onAddToPlaylist, playSize) },
+                        controls = { PlayerControls(playback, track, onAddToPlaylist, playSize, smallButtons) },
                         chevron = { if (dense) Spacer(Modifier) else QueueChevron(slide) },
                         dense = dense,
                         modifier = Modifier.weight(1f),
@@ -433,11 +435,12 @@ private fun PlayerControls(
     track: Track,
     onAddToPlaylist: (() -> Unit)?,
     densePlaySize: Dp,
+    smallButtons: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val dense = LocalWindowLayout.current.dense
-    val skipSize = if (dense) 48.dp else 56.dp
-    val skipIconSize = if (dense) 28.dp else 32.dp
+    val skipSize = if (smallButtons) 48.dp else 56.dp
+    val skipIconSize = if (smallButtons) 28.dp else 32.dp
     Column(modifier, verticalArrangement = Arrangement.spacedBy(if (dense) DenseControlsGap else ControlsGap)) {
         SeekbarWithTimes(
             positionMs = { playback.positionMs },
@@ -457,8 +460,8 @@ private fun PlayerControls(
                 Icon(Icons.SkipPrevious, contentDescription = stringResource(R.string.previous_track), modifier = Modifier.size(skipIconSize))
             }
             // Smaller, but still round, when the height is short (landscape with large text).
-            val playIconSize = if (dense) 32.dp else 40.dp
-            val playSize = if (dense) densePlaySize else 80.dp
+            val playIconSize = if (smallButtons) 32.dp else 40.dp
+            val playSize = if (smallButtons) densePlaySize else 80.dp
             FilledIconButton(
                 onClick = playback::toggle,
                 modifier = Modifier.sizeIn(maxWidth = playSize, maxHeight = playSize).aspectRatio(1f, matchHeightConstraintsFirst = true),
