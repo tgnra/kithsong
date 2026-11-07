@@ -31,3 +31,7 @@ else()
 endif()
 kithsong_warnings(kithipod)
 
+if(KITHSONG_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
+

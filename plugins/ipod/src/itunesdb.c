@@ -61,6 +61,7 @@ typedef struct mhip_raw {
 struct ipod_playlist_priv {
   raw chunk;  /* as read from the type 2 dataset */
   raw chunk3; /* the same playlist (by id) from the type 3 dataset, if there was one */
+  int not_in3; /* read when there was a type 3 dataset, and it wasn't in it: kept out of it */
   uint32_t header_len;
   mhod_slot name_slot; /* type 0 when there was none */
   mhod_slot *slots;    /* other mhods, except the library indexes (52, 53) */
@@ -321,12 +322,14 @@ static void write_track_header(const ipod_track *t, uint8_t *h, uint32_t hlen) {
   if ((off) + (bits) / 8 <= hlen) wrn(h + (off), bits, (uint64_t)t->f);
   TRACK_FIELDS(X)
 #undef X
-  if ((old_sr_fixed >> 16) != t->sample_rate) ipod_wr32(h + 0x3C, t->sample_rate << 16);
-  if (hlen >= 0x8C) {
-    float oldf = rdf32(h + 0x88);
-    if (oldf == (float)(old_sr_fixed >> 16) || oldf == 0.0f) wrf32(h + 0x88, (float)t->sample_rate);
+  if ((old_sr_fixed >> 16) != t->sample_rate) {
+    ipod_wr32(h + 0x3C, t->sample_rate << 16);
+    if (hlen >= 0x8C) {
+      float oldf = rdf32(h + 0x88);
+      if (oldf == (float)(old_sr_fixed >> 16) || oldf == 0.0f) wrf32(h + 0x88, (float)t->sample_rate);
+    }
   }
-  if (hlen >= 0xB0) {
+  if (hlen >= 0xB0 && t->dbid != old_dbid) {
     uint64_t d2 = ipod_rd64(h + 0xA8);
     if (d2 == old_dbid || d2 == 0) ipod_wr64(h + 0xA8, t->dbid);
   }
@@ -1034,6 +1037,8 @@ ipod_db *ipod_db_parse(const uint8_t *data, size_t len, ipod_error *err) {
         }
       }
     }
+    for (size_t j = 0; j < db->n_playlists; j++)
+      if (db->playlists[j]->priv && !db->playlists[j]->priv->chunk3.p) db->playlists[j]->priv->not_in3 = 1;
   }
   for (size_t k = 0; k < n_pl3; k++) ipod_playlist_free(pl3[k]);
   free(pl3);
@@ -1150,14 +1155,17 @@ int ipod_db_serialize(ipod_db *db, uint8_t **out, size_t *out_len, ipod_error *e
 
   /* Playlists, flat (type 2) and with the Podcasts playlist as iTunes grouped it (type 3). */
   ipod_buf pl2 = {0}, pl3 = {0};
+  uint32_t n_pl3 = 0;
   for (size_t i = 0; i < db->n_playlists; i++) {
     ipod_playlist *pl = db->playlists[i];
     int same = playlist_unchanged(pl) && (!pl->is_master || tracks_unchanged);
     size_t at = pl2.len;
     if (same) ipod_buf_put(&pl2, pl->priv->chunk.p, pl->priv->chunk.len);
     else emit_playlist(&pl2, pl, db);
-    if (pl->is_podcast && same && pl->priv->chunk3.p) ipod_buf_put(&pl3, pl->priv->chunk3.p, pl->priv->chunk3.len);
+    if (pl->priv && pl->priv->not_in3 && !pl->is_master) continue;
+    if (same && pl->priv->chunk3.p) ipod_buf_put(&pl3, pl->priv->chunk3.p, pl->priv->chunk3.len);
     else if (!pl2.oom) ipod_buf_put(&pl3, pl2.data + at, pl2.len - at);
+    n_pl3++;
   }
 
   ipod_buf b = {0};
@@ -1189,7 +1197,7 @@ int ipod_db_serialize(ipod_db *db, uint8_t **out, size_t *out_len, ipod_error *e
   if (fresh) {
     /* iTunes' order: tracks, the podcast-style playlists, then the flat ones. */
     emit_list(&b, 1, NULL, NULL, "mhlt", n_tr, &tracks);
-    emit_list(&b, 3, NULL, NULL, "mhlp", n_pl, &pl3);
+    emit_list(&b, 3, NULL, NULL, "mhlp", n_pl3, &pl3);
     emit_list(&b, 2, NULL, NULL, "mhlp", n_pl, &pl2);
     n_children = 3;
   } else {
@@ -1197,7 +1205,7 @@ int ipod_db_serialize(ipod_db *db, uint8_t **out, size_t *out_len, ipod_error *e
       const dataset *ds = &pv->ds[i];
       if (ds == t1) emit_list(&b, 1, &ds->mhsd_header, &ds->list_header, "mhlt", n_tr, &tracks);
       else if (ds == t2) emit_list(&b, 2, &ds->mhsd_header, &ds->list_header, "mhlp", n_pl, &pl2);
-      else if (ds == t3) emit_list(&b, 3, &ds->mhsd_header, &ds->list_header, "mhlp", n_pl, &pl3);
+      else if (ds == t3) emit_list(&b, 3, &ds->mhsd_header, &ds->list_header, "mhlp", n_pl3, &pl3);
       else if (ds->chunk.p) ipod_buf_put(&b, ds->chunk.p, ds->chunk.len);
       else continue;
       n_children++;
