@@ -47,7 +47,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.AppSettings
 import ng.kithso.android.data.Addition
@@ -124,8 +126,10 @@ fun App(
     LaunchedEffect(track == null) { if (track == null) nav = nav.removeAll { it == Page.Player } }
 
     // Where everything goes in this window; every layout has the one nav and the same calls below.
-    val panes = panesFor(LocalWindowLayout.current)
+    val panes = panesFor(LocalWindowLayout.current, LocalLayoutDirection.current == LayoutDirection.Rtl)
     val sideBySide by rememberUpdatedState(panes.sideBySide)
+    // How far each page has slid in, which home's columns follow.
+    val slides = remember { PageSlides() }
 
     // Lists end clear of the mini player, which sits above the navigation bar, if it's over them.
     var miniPlayerHeight by remember { mutableIntStateOf(0) }
@@ -159,17 +163,25 @@ fun App(
     val push: (Page) -> Unit = remember {
         { page -> nav = (if (sideBySide) nav.removeAll { it == Page.Player } else nav).push(page) }
     }
+    // From home, beside the pages, a page takes the place of what's open there; from its middle
+    // column it shifts home over. Over home there's nothing to replace, as home can't be tapped.
+    val openFromHome: (Page, Boolean) -> Unit = remember {
+        { page, fromMiddle ->
+            nav = if (sideBySide) nav.removeAll { it == Page.Player }.besideHome(page, fromMiddle) else nav.push(page)
+        }
+    }
     // A station has no page, so it never reaches the back stack: opening it plays it.
-    val open: (CollectionRef) -> Unit = remember {
-        { ref ->
+    val openWith: (CollectionRef, (Page) -> Unit) -> Unit = remember {
+        { ref, show ->
             if (ref.kind == CollectionRef.Kind.Station) {
                 playStation(ref)
             } else {
                 library?.artOf(ref)?.let { art -> scope.launch { ArtColors.find(context, art) } }
-                push(Page.Collection(ref))
+                show(Page.Collection(ref))
             }
         }
     }
+    val open: (CollectionRef) -> Unit = remember { { ref -> openWith(ref, push) } }
     // A device's page, over Sync, from wherever it's asked for; the player makes way for it.
     val openDevice: (String) -> Unit = { uid ->
         val under = nav.removeAll { it == Page.Player || it is Page.Device }
@@ -337,14 +349,17 @@ fun App(
     // A Surface rather than a background, so text gets the surface's content colour.
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Box(Modifier.fillMaxSize()) {
-            Pane(panes.main) { MainScreen(
+            Pane(panes.home) { HomeLayout(panes, { slides.shownOf(nav) }, nav.shifted, top != null) { column ->
+              val middle = column == HomeColumn.Middle
+              MainScreen(
                 library,
-                mainBottomPadding,
-                onOpen = open,
-                onSearch = { push(Page.Search) },
-                onSync = { push(Page.Sync) },
-                onSettings = { push(Page.Settings) },
-                onStats = { push(Page.Stats) },
+                // The mini player is over the middle column, wherever that's slid to.
+                if (middle) bottomPadding else mainBottomPadding,
+                onOpen = { ref -> openWith(ref) { openFromHome(it, middle) } },
+                onSearch = { openFromHome(Page.Search, middle) },
+                onSync = { openFromHome(Page.Sync, false) },
+                onSettings = { openFromHome(Page.Settings, false) },
+                onStats = { openFromHome(Page.Stats, false) },
                 importPickers = importPickers,
                 importRunning = importProgress?.phase?.isOver == false,
                 // How an import is going, the merge after pairing by merging libraries, what's
@@ -374,15 +389,20 @@ fun App(
                 inGroup = inGroup,
                 // This phone's page, over Sync, as Choose what to sync after pairing opens it.
                 onChooseWhatToSync = { openDevice(THIS_DEVICE) },
-            ) }
+                column = column,
+              )
+            } }
             Pane(panes.pages) {
                 PageLayers(
                     nav,
                     backEnabled = !smartOpen,
                     onLeaving = { nav = nav.leave(it) },
-                    onDismissed = { nav = nav.remove(it) },
+                    onDismissed = { nav = nav.settle(it).remove(it) },
+                    onShown = { nav = nav.settle(it) },
                     host = host,
                     bottomPadding = bottomPadding,
+                    slides = slides,
+                    from = if (panes.pages.x < panes.main.x) DismissDirection.Left else DismissDirection.Right,
                 )
             }
             if (track != null) ArtTheme(track.art) {

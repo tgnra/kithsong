@@ -2,6 +2,7 @@ package ng.kithso.android.ui
 
 import ng.kithso.android.data.CollectionRef
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -79,5 +80,83 @@ class BackStackTest {
             Page.Device("uid:1"), Page.Search, album, Page.Player,
         )
         for (page in pages) assertEquals(page, Page.decode(Page.encode(page)))
+    }
+
+    private val otherAlbum = Page.Collection(CollectionRef(CollectionRef.Kind.Album, "a:2"))
+
+    @Test
+    fun aSecondAlbumFromHomeReplacesThePageSoBackGoesHomeInOnePress() {
+        val stack = BackStack<Page>().besideHome(album, shifted = true).besideHome(otherAlbum, shifted = true)
+        assertEquals(listOf<Page>(otherAlbum), stack.pages)
+        assertTrue(stack.shifted)
+        assertNull(stack.back().top)
+    }
+
+    @Test
+    fun replacingTakesThePagesStackedInTheRightPaneToo() {
+        val stack = BackStack<Page>().besideHome(album).push(Page.Search).besideHome(otherAlbum)
+        assertEquals(listOf<Page>(otherAlbum), stack.pages)
+    }
+
+    @Test
+    fun aPageFromAPageStillStacks() {
+        val stack = BackStack<Page>().besideHome(album, shifted = true).push(otherAlbum)
+        assertEquals(listOf<Page>(album, otherAlbum), stack.pages)
+        assertTrue(stack.shifted)
+    }
+
+    @Test
+    fun aReplacedPageStaysDrawnUntilTheNewOneCoversIt() {
+        var stack = BackStack<Page>().besideHome(album).besideHome(otherAlbum)
+        assertEquals(2, stack.layers.size)
+        stack = stack.settle(stack.top!!.id)
+        assertEquals(listOf<Page>(otherAlbum), stack.layers.map { it.page })
+    }
+
+    @Test
+    fun aPageDismissedBeforeItArrivedTakesWhatItReplacedWithIt() {
+        val stack = BackStack<Page>().besideHome(album).besideHome(otherAlbum)
+        val id = stack.top!!.id
+        assertTrue(stack.settle(id).remove(id).layers.isEmpty())
+    }
+
+    @Test
+    fun settlingKeepsWhatsOpenAboveAndBeneath() {
+        val stack = BackStack.of(listOf(Page.Settings, Page.Licenses))
+        assertEquals(stack, stack.settle(stack.top!!.id))
+    }
+
+    @Test
+    fun theSamePageFromHomeOpensOnce() {
+        val stack = BackStack<Page>().besideHome(album, shifted = true)
+        assertEquals(stack, stack.besideHome(album, shifted = true))
+    }
+
+    @Test
+    fun theTopPageFromHomeDropsThoseBeneath() {
+        val stack = BackStack<Page>().besideHome(Page.Search).push(album)
+        val id = stack.top!!.id
+        val again = stack.besideHome(album)
+        assertEquals(listOf<Page>(album), again.pages)
+        assertEquals(id, again.top?.id)
+    }
+
+    @Test
+    fun homeIsShiftedOnlyWhileAShiftedPageIsOpen() {
+        val stack = BackStack<Page>().besideHome(album, shifted = true)
+        assertTrue(stack.shifted)
+        assertFalse(stack.back().shifted)
+        assertFalse(BackStack<Page>().besideHome(album).shifted)
+    }
+
+    @Test
+    fun whetherHomeIsShiftedSurvivesARotation() {
+        val saver = BackStack.saver(Page::encode, Page::decode)
+        val stack = BackStack<Page>().besideHome(album, shifted = true).push(Page.Player)
+        val scope = androidx.compose.runtime.saveable.SaverScope { true }
+        val saved = with(saver) { scope.save(stack) }!!
+        @Suppress("UNCHECKED_CAST")
+        val restored = (saver as androidx.compose.runtime.saveable.Saver<BackStack<Page>, Any>).restore(saved)!!
+        assertEquals(stack.layers, restored.layers)
     }
 }

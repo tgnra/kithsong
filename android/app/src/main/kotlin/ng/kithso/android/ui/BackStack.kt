@@ -7,9 +7,12 @@ import ng.kithso.android.data.CollectionRef
 import java.net.URLDecoder
 import java.net.URLEncoder
 
-/** One page of a [BackStack]; [id] tells two openings of the same page apart. */
+/**
+ * One page of a [BackStack]; [id] tells two openings of the same page apart. A [shifted] page moves
+ * home's columns over by one while it's open: see [BackStack.besideHome].
+ */
 @Immutable
-data class BackLayer<T>(val id: Int, val page: T, val leaving: Boolean = false)
+data class BackLayer<T>(val id: Int, val page: T, val leaving: Boolean = false, val shifted: Boolean = false)
 
 /**
  * Pages stacked over a screen, bottom first, as back goes through them: back goes to [top],
@@ -34,6 +37,27 @@ data class BackStack<T>(val layers: List<BackLayer<T>> = emptyList(), private va
         return BackStack(layers + BackLayer(nextId, page), nextId + 1)
     }
 
+    /** Whether a page open now has home's columns moved over. */
+    val shifted: Boolean get() = layers.any { it.shifted && !it.leaving }
+
+    /**
+     * [page], opened from home beside the pages: it takes the place of all of them, so back goes
+     * straight home from it. They stay drawn beneath it until [settle], so it arrives over them,
+     * not over a gap. A page opened from a page still goes through [push], and stacks.
+     */
+    fun besideHome(page: T, shifted: Boolean = false): BackStack<T> {
+        val current = top
+        if (current?.page == page) return copy(layers = layers.filter { it.leaving || it.id == current.id })
+        onPush(page)
+        return BackStack(layers.map { it.copy(leaving = true) } + BackLayer(nextId, page, shifted = shifted), nextId + 1)
+    }
+
+    /** Without the layers on their way out beneath [id], now it covers them or has gone. */
+    fun settle(id: Int): BackStack<T> {
+        val at = layers.indexOfFirst { it.id == id }
+        return copy(layers = layers.filterIndexed { i, layer -> i >= at || !layer.leaving })
+    }
+
     /** Off the stack for back, and still drawn until [remove]. */
     fun leave(id: Int): BackStack<T> = copy(layers = layers.map { if (it.id == id) it.copy(leaving = true) else it })
 
@@ -47,6 +71,8 @@ data class BackStack<T>(val layers: List<BackLayer<T>> = emptyList(), private va
     fun keep(count: Int): BackStack<T> = copy(layers = layers.filterNot { it.leaving }.take(count))
 
     companion object {
+        private const val SHIFTED = "s"
+
         /** Told of each page pushed. The app sets it, so this class and its tests need no core. */
         var onPush: (Any?) -> Unit = {}
 
@@ -54,9 +80,12 @@ data class BackStack<T>(val layers: List<BackLayer<T>> = emptyList(), private va
 
         /** Keeps the open pages, each with its id, so what they've saved finds them again. */
         fun <T> saver(encode: (T) -> String, decode: (String) -> T): Saver<BackStack<T>, *> = listSaver(
-            save = { stack -> stack.layers.filterNot { it.leaving }.map { "${it.id}:${encode(it.page)}" } },
+            save = { stack -> stack.layers.filterNot { it.leaving }.map { "${it.id}${if (it.shifted) SHIFTED else ""}:${encode(it.page)}" } },
             restore = { saved ->
-                val layers = saved.map { BackLayer(it.substringBefore(':').toInt(), decode(it.substringAfter(':'))) }
+                val layers = saved.map {
+                    val head = it.substringBefore(':')
+                    BackLayer(head.removeSuffix(SHIFTED).toInt(), decode(it.substringAfter(':')), shifted = head.endsWith(SHIFTED))
+                }
                 BackStack(layers, (layers.maxOfOrNull { it.id } ?: -1) + 1)
             },
         )

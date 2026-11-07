@@ -89,6 +89,8 @@ internal fun PageContent(page: Page, host: PageHost, bottomPadding: Dp, dismiss:
 /**
  * Every open page but the player, which goes over the mini player, each sliding in over the last
  * in the pane this is called in. [backEnabled] is false while something over them all has back.
+ * They slide in from [from], and [slides] follows each, for what moves with them. [onShown] is
+ * called with a layer's id once it's fully there.
  */
 @Composable
 internal fun PageLayers(
@@ -96,18 +98,25 @@ internal fun PageLayers(
     backEnabled: Boolean,
     onLeaving: (Int) -> Unit,
     onDismissed: (Int) -> Unit,
+    onShown: (Int) -> Unit,
     host: PageHost,
     bottomPadding: Dp,
+    slides: PageSlides,
+    from: DismissDirection,
 ) {
     val top = nav.top
-    nav.layers.forEach { layer ->
+    nav.layers.forEachIndexed { index, layer ->
         if (layer.page != Page.Player) key(layer.id) {
             DismissibleScreen(
-                DismissDirection.Right,
+                from,
                 onLeaving = { onLeaving(layer.id) },
                 onDismissed = { onDismissed(layer.id) },
                 backEnabled = layer.id == top?.id && backEnabled,
                 modifier = Modifier.coveredIf(layer.id != top?.id),
+                // Beneath a page shifting home is the column moving away from it, not a page it's over.
+                scrim = !layer.shifted || index > 0,
+                onShown = { onShown(layer.id) },
+                onSlide = { slides.set(layer.id, it) },
             ) { dismiss ->
                 PageContent(layer.page, host, bottomPadding, dismiss)
             }

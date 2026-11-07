@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.add
@@ -117,6 +118,12 @@ internal sealed interface MainItem {
         override val contentType get() = "banner"
     }
 
+    /** Where a column with no header starts, under the status bar. */
+    data object Top : MainItem {
+        override val key get() = "top"
+        override val contentType get() = "top"
+    }
+
     data object Empty : MainItem {
         override val key get() = "empty"
         override val contentType get() = "empty"
@@ -127,15 +134,15 @@ internal sealed interface MainItem {
         override val contentType get() = "heading"
     }
 
-    data class RadioRow(val stations: List<Station>) : MainItem {
-        override val key get() = RADIO_ROW_KEY
-        override val contentType get() = TILE_ROW_TYPE
+    data class RadioRow(val stations: List<Station>, val gridRow: Int? = null) : MainItem {
+        override val key get() = tilesKey(RADIO_ROW_KEY, gridRow)
+        override val contentType get() = tilesType(gridRow)
         override val art get() = stations.take(ROW_ART).map { it.art }
     }
 
-    data class RecentsRow(val recents: List<Recent>) : MainItem {
-        override val key get() = RECENTS_ROW_KEY
-        override val contentType get() = TILE_ROW_TYPE
+    data class RecentsRow(val recents: List<Recent>, val gridRow: Int? = null) : MainItem {
+        override val key get() = tilesKey(RECENTS_ROW_KEY, gridRow)
+        override val contentType get() = tilesType(gridRow)
         override val art get() = recents.take(ROW_ART).map { it.art }
     }
 
@@ -145,15 +152,15 @@ internal sealed interface MainItem {
         override val art get() = listOf(playlist.art)
     }
 
-    data class AlbumGroupsRow(val groups: List<AlbumGroup>) : MainItem {
-        override val key get() = ALBUM_GROUPS_ROW_KEY
-        override val contentType get() = TILE_ROW_TYPE
+    data class AlbumGroupsRow(val groups: List<AlbumGroup>, val gridRow: Int? = null) : MainItem {
+        override val key get() = tilesKey(ALBUM_GROUPS_ROW_KEY, gridRow)
+        override val contentType get() = tilesType(gridRow)
         override val art get() = groups.take(ROW_ART).map { it.art }
     }
 
     data class AlbumRow(val albums: List<Album>) : MainItem {
         override val key get() = "albums:${albums.first().uid}"
-        override val contentType get() = "albums"
+        override val contentType get() = ALBUM_ROW_TYPE
         override val art get() = albums.map { it.art }
     }
 
@@ -168,6 +175,13 @@ private const val RADIO_ROW_KEY = "row:radio"
 private const val RECENTS_ROW_KEY = "row:recents"
 private const val ALBUM_GROUPS_ROW_KEY = "row:album-groups"
 private const val TILE_ROW_TYPE = "tiles"
+private const val ALBUM_ROW_TYPE = "albums"
+
+/** A sideways row's key, or with a [gridRow], that of one row of a grid of the same tiles. */
+private fun tilesKey(rowKey: String, gridRow: Int?) = if (gridRow == null) rowKey else "$rowKey:$gridRow"
+
+/** A grid's rows are as tall as album rows, as their tiles are as wide. */
+private fun tilesType(gridRow: Int?) = if (gridRow == null) TILE_ROW_TYPE else ALBUM_ROW_TYPE
 
 /** How many of a row's tiles count towards art prefetching and the backdrop: about a screen's. */
 private const val ROW_ART = 6
@@ -257,7 +271,7 @@ private val Gutter = BrowseGutter
 private val ListArtSize = 56.dp
 
 /** The header's height under the status bar. */
-private val HeaderHeight = 64.dp
+internal val HeaderHeight = 64.dp
 
 /** An album tile's or [TileRow] tile's title and artist, under its art and with the space below the row. */
 private val AlbumLabelsHeight = 58.dp
@@ -269,7 +283,8 @@ private val AlbumLabelsHeight = 58.dp
  * The header's menu and the empty library's button open [importPickers], and what's picked joins an
  * import that's [importRunning]. [onSearch] is the header's menu's Search, and pulling the list down
  * from its top (see [pullToSearch]). With [onNewList], the Playlists and Album groups headings
- * have a + for a new playlist or (with true) album group.
+ * have a + for a new playlist or (with true) album group. [column] is the part of the library this
+ * is, when home is columns.
  */
 @Composable
 fun MainScreen(
@@ -297,6 +312,7 @@ fun MainScreen(
     onNewList: ((isAlbums: Boolean) -> Unit)? = null,
     // A red dot on the header's menu and its Sync: deletes wait in the recycle bin while a member is online.
     syncDot: Boolean = false,
+    column: HomeColumn = HomeColumn.All,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -310,7 +326,13 @@ fun MainScreen(
 
         val hasBanner = banner != null
         val canMake = onNewList != null
-        val items = remember(library, columns, hasBanner, canMake) { mainItems(library, columns, hasBanner, canMake) }
+        val items = remember(library, columns, hasBanner, canMake, column) {
+            when (column) {
+                HomeColumn.All -> mainItems(library, columns, hasBanner, canMake)
+                HomeColumn.Left -> leftColumnItems(library, columns, hasBanner, canMake)
+                HomeColumn.Middle -> middleColumnItems(library, columns)
+            }
+        }
         val sections = remember(items) {
             items.mapIndexedNotNull { i, item -> (item as? MainItem.Heading)?.let { SectionStart(it.section, i) } }
         }
@@ -322,7 +344,8 @@ fun MainScreen(
         val scrollStep = scrollStepPx()
         LaunchedEffect(listState) {
             ScrollTest.step.collect { step ->
-                if (step == ScrollTest.Step.Main) {
+                // The albums are what's scrolled, in whichever list they're in.
+                if (step == ScrollTest.Step.Main && column != HomeColumn.Left) {
                     runScrollScript(listState, scrollStep, "main")
                     ScrollTest.step.value = ScrollTest.Step.OpenTracks
                 }
@@ -361,7 +384,12 @@ fun MainScreen(
         ) {
             items(items, key = { it.key }, contentType = { it.contentType }) { item ->
                 when (item) {
-                    MainItem.Header -> Header(onSearch, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
+                    MainItem.Header -> if (column == HomeColumn.All) {
+                        Header(onSearch, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
+                    } else {
+                        WideHeader(onSearch, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
+                    }
+                    MainItem.Top -> Spacer(Modifier.height(with(density) { statusBarPx.toDp() }))
                     MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
                     MainItem.Empty -> EmptyLibrary(importPickers, inGroup, onSync, onChooseWhatToSync)
                     is MainItem.Heading -> SectionHeading(
@@ -377,7 +405,9 @@ fun MainScreen(
                             }
                         },
                     )
-                    is MainItem.RadioRow -> TileRow(
+                    is MainItem.RadioRow -> Tiles(
+                        item.gridRow,
+                        columns,
                         item.stations.map { station ->
                             val subtitle = station.subtitle()
                             Tile(
@@ -392,7 +422,9 @@ fun MainScreen(
                         },
                         state = radioRow,
                     )
-                    is MainItem.RecentsRow -> TileRow(
+                    is MainItem.RecentsRow -> Tiles(
+                        item.gridRow,
+                        columns,
                         item.recents.map { recent ->
                             val subtitle = recent.subtitle()
                             val station = recent.ref.kind == CollectionRef.Kind.Station
@@ -419,7 +451,9 @@ fun MainScreen(
                         RoundedCornerShape(8.dp),
                         onLongClick = { onPlaylistMenu(item.playlist) },
                     ) { onOpen(CollectionRef(CollectionRef.Kind.Playlist, item.playlist.uid)) }
-                    is MainItem.AlbumGroupsRow -> TileRow(
+                    is MainItem.AlbumGroupsRow -> Tiles(
+                        item.gridRow,
+                        columns,
                         item.groups.map { group ->
                             Tile(
                                 group.uid,
@@ -442,6 +476,8 @@ fun MainScreen(
                 }
             }
         }
+        // With no albums or artists there's nothing to go in the column, but it mustn't look broken.
+        if (column == HomeColumn.Middle && library != null && items.size == 1) QuietPane()
         FastScroller(
             listState,
             scrollEntries,
@@ -452,7 +488,7 @@ fun MainScreen(
             // Known before the list reaches them, from the width of their tiles.
             estimate = { kind ->
                 when (kind) {
-                    "albums" -> cellPx + with(density) { AlbumLabelsHeight.roundToPx() }
+                    ALBUM_ROW_TYPE -> cellPx + with(density) { AlbumLabelsHeight.roundToPx() }
                     TILE_ROW_TYPE -> with(density) { (tileWidth(width) + AlbumLabelsHeight).roundToPx() }
                     else -> null
                 }

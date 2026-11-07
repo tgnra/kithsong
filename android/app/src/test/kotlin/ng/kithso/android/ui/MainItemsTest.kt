@@ -121,4 +121,59 @@ class MainItemsTest {
             assertEquals(entry.label.first(), artist.artist.sortName.first())
         }
     }
+
+    @Test
+    fun theLeftColumnHasNoSidewaysRowsAndNoAlbums() {
+        val stations = List(3) { Station("s$it", "Station $it", "Station", "Seed", art) }
+        val library = library(recents = 3, playlists = 1, albums = 5, artists = 2, groups = 3).copy(stations = stations)
+        val items = leftColumnItems(library, columns = 2, banner = true, canMake = false)
+        assertEquals(
+            listOf(
+                MainItem.Header,
+                MainItem.Banner,
+                MainItem.Heading(Section.Radio),
+                MainItem.RadioRow(stations.take(2), 0),
+                MainItem.RadioRow(stations.drop(2), 1),
+                MainItem.Heading(Section.Recents),
+                MainItem.RecentsRow(recents(3).take(2), 0),
+                MainItem.RecentsRow(recents(3).drop(2), 1),
+                MainItem.Heading(Section.Playlists),
+                MainItem.PlaylistItem(playlists(1).first()),
+                MainItem.Heading(Section.AlbumGroups),
+                MainItem.AlbumGroupsRow(groups(3).take(2), 0),
+                MainItem.AlbumGroupsRow(groups(3).drop(2), 1),
+            ),
+            items,
+        )
+        assertEquals(items.size, items.map { it.key }.toSet().size)
+    }
+
+    @Test
+    fun aGridsRowsAreEstimatedAsAlbumRowsAre() {
+        val items = leftColumnItems(library(recents = 2), columns = 2, banner = false, canMake = false)
+        assertEquals(MainItem.AlbumRow(albums(1)).contentType, items.last().contentType)
+    }
+
+    @Test
+    fun theMiddleColumnIsAlbumsThenArtists() {
+        val items = middleColumnItems(library(recents = 3, albums = 3, artists = 1), columns = 2)
+        assertEquals(
+            listOf(
+                MainItem.Top,
+                MainItem.Heading(Section.Albums),
+                MainItem.AlbumRow(albums(3).take(2)),
+                MainItem.AlbumRow(albums(3).drop(2)),
+                MainItem.Heading(Section.Artists),
+                MainItem.ArtistItem(artists(1).first()),
+            ),
+            items,
+        )
+    }
+
+    @Test
+    fun anEmptyLibraryIsInTheLeftColumnAndTheMiddleOneHasNothing() {
+        val empty = library()
+        assertTrue(MainItem.Empty in leftColumnItems(empty, columns = 2, banner = false, canMake = true))
+        assertEquals(listOf<MainItem>(MainItem.Top), middleColumnItems(empty, columns = 2))
+    }
 }

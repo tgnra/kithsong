@@ -187,4 +187,64 @@ class WindowLayoutTest {
         assertEquals(panes.main.width, panes.pages.x)
         assertEquals(1000.dp, panes.pages.x + panes.pages.width)
     }
+
+    @Test
+    fun rightToLeftMirrorsThePanes() {
+        val hinged = layout(1000, 800, hinge(450.dp))
+        val panes = panesFor(hinged, rtl = true)
+        assertEquals(450.dp, panes.main.x)
+        assertEquals(550.dp, panes.main.width)
+        assertEquals(0.dp, panes.pages.x)
+        assertEquals(450.dp, panes.pages.width)
+        assertEquals(panes.pages, panes.miniPlayer)
+        assertEquals(WindowInsetsSides.Right + WindowInsetsSides.Vertical, panes.main.sides)
+    }
+
+    @Test
+    fun onlyMediumsHomeIsColumns() {
+        assertTrue(panesFor(layout(915, 412)).columns)
+        assertFalse(panesFor(layout(412, 915)).columns)
+        assertFalse(panesFor(layout(1422, 800)).columns)
+    }
+
+    @Test
+    fun theStripsColumnsMoveByTheirPanes() {
+        val strip = homeStrip(panesFor(layout(700, 800)))
+        assertEquals(350.dp, strip.middle.x)
+        assertEquals(350.dp, strip.middle.width)
+        assertEquals(350.dp, strip.middleContent)
+        assertEquals((-350).dp, strip.leftMove)
+        assertEquals((-350).dp, strip.middleMove)
+    }
+
+    @Test
+    fun anOffCentreHingeKeepsTheMiddleColumnInsideBothPanes() {
+        val panes = panesFor(layout(1000, 800, hinge(450.dp)))
+        val strip = homeStrip(panes)
+        // The same width in either pane, so what was tapped stays put.
+        assertEquals(450.dp, strip.middleContent)
+        // At rest, centred in the right pane.
+        assertEquals(450.dp, strip.middle.x)
+        assertEquals(550.dp, strip.middle.width)
+        // Moved, centred in the left one, which it just fits.
+        val centre = strip.middle.x + strip.middle.width / 2 + strip.middleMove
+        assertEquals(225.dp, centre)
+        assertEquals((-450).dp, strip.leftMove)
+    }
+
+    @Test
+    fun rightToLeftTheStripGoesTheOtherWay() {
+        val strip = homeStrip(panesFor(layout(700, 800), rtl = true))
+        assertEquals(0.dp, strip.middle.x)
+        assertEquals(350.dp, strip.leftMove)
+        assertEquals(350.dp, strip.middleMove)
+    }
+
+    @Test
+    fun theWordmarkGivesWayToKeepTheIcons() {
+        assertEquals(HeaderMark.Wordmark(48.dp), headerMark(201.dp))
+        // A 7 inch tablet's 300 dp column has 40 dp left beside the five icons.
+        assertEquals(HeaderMark.Tile(44.dp), headerMark(40.dp))
+        assertEquals(HeaderMark.None, headerMark(10.dp))
+    }
 }
