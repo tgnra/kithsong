@@ -24,6 +24,11 @@
  *   |  | Signed in as tania                         | |
  *   |  |                 Sign Out                   | |
  *   |  | Scrobble what I play on this device   [==] | |
+ *   |  Plugins (plugins_ui.h)                          |
+ *   |  Plugins add what Kithsong doesn't come with...  |
+ *   |  | iPod sync                            [==]  v | |
+ *   |  | Version 1.0 · /path/to/kithsong-ipod.so    | |
+ *   |  | On                                         | |
  *   |  Reset                                           |
  *   |  Clears Kithsong's settings on this device...    |
  *   |  |              Reset Kithsong...             | |

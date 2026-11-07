@@ -7,6 +7,7 @@
 #include "kithcore/kithcore.h"
 #include "kithcore/source_run.h"
 #include "playback.h"
+#include "plugins_ui.h"
 
 #if !ADW_CHECK_VERSION(1, 5, 0)
 #error "settings_view.c needs libadwaita 1.5 or later (AdwPreferencesDialog)"
@@ -971,6 +972,7 @@ void settings_view_present(GtkWidget *parent, const char *settings_dir,
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_playback_group(s)));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_analysis_group(s)));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_scrobble_group(s)));
+  adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(plugins_ui_group()));
   adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(testing_view_group(s->user)));
   if (s->reset) adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(build_reset_group(s)));
 

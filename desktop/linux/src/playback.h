@@ -42,6 +42,11 @@ mc_scrobbler *playback_scrobbler(void);
 void playback_on_scrobbler_closing(void (*closing)(void));
 /* Whether this device scrobbles (mc_settings_scrobble(); on to begin with). */
 void playback_set_scrobble(gboolean on);
+/* The scrobbler plays should go to: playback_scrobbler() while this device scrobbles, else NULL;
+ * for tethered devices, whose plays are scrobbled too. changed is called after
+ * playback_set_scrobble(). */
+mc_scrobbler *playback_scrobble_target(void);
+void playback_on_scrobble_changed(void (*changed)(void));
 /* changed is called, with playback_init()'s user, when a play just logged has changed the
  * recents: a station goes in them once its first track ends (mc_play_event_starts_station()). */
 void playback_on_recents_changed(void (*changed)(void *user));

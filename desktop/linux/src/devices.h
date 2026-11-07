@@ -16,7 +16,9 @@
  * events and every 10 seconds (a rename elsewhere fires no event). This computer is listed
  * in a group or not. A warning triangle marks this computer when other devices can't
  * connect to it, and an online or nearby device this computer can't connect to; its tooltip
- * says which (device_view_reach_text()). Picking a paired device
+ * says which (device_view_reach_text()). Tethered devices (tethered_bridge.c), such as an iPod,
+ * come after the group's, with or without a group, "Plugged in" or not under their names.
+ * Picking a paired or tethered device
  * shows its page (device_view.c) in the main stack's "device" page; picking a nearby one
  * asks it to pair (pair_dialog.c), as does the + (add_device.c, by address). */
 #ifndef KITHSONG_DEVICES_H
