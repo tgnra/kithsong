@@ -285,6 +285,15 @@ fun Pane(area: PaneArea, content: @Composable BoxScope.() -> Unit) {
 }
 
 /**
+ * A [Pane] for what only some layouts have, in [area] if there is one. It's always called, so what's
+ * after it keeps its place in the composition: see [Panes].
+ */
+@Composable
+fun SomePane(area: PaneArea?, content: @Composable BoxScope.() -> Unit) {
+    if (area != null) Pane(area, content)
+}
+
+/**
  * [content] at the window's [LayoutScale], for inside a bottom sheet: it has a view of its own,
  * which goes back to the system's density, as a dialog's and a menu's do. Those are left at that,
  * as they fit and what's in them is short, and sheets' lists are what get long.

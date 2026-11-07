@@ -74,6 +74,15 @@ private val Section.icon: ImageVector
         Section.Artists -> Icons.Person
     }
 
+/**
+ * What the pages' pane shows beneath its pages if [shown], which it is with three panes, as there's
+ * nothing else there. Always called, so the pages after it keep their place in the composition.
+ */
+@Composable
+internal fun NoPages(shown: Boolean) {
+    if (shown) QuietPane()
+}
+
 private val PanelHeaderHeight = 56.dp
 
 /**

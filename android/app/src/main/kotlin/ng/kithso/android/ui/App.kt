@@ -360,23 +360,21 @@ fun App(
     // A Surface rather than a background, so text gets the surface's content colour.
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Box(Modifier.fillMaxSize()) {
-            panes.categories?.let { area ->
-                Pane(area) {
-                    CategoriesPanel(
-                        library,
-                        category,
-                        onChoose = { chosenCategory = it },
-                        onSearch = { openFromHome(Page.Search, false) },
-                        onSync = { openFromHome(Page.Sync, false) },
-                        onSettings = { openFromHome(Page.Settings, false) },
-                        onStats = { openFromHome(Page.Stats, false) },
-                        onNewList = if (actions.editor != null) actions::newList else null,
-                        importPickers = importPickers,
-                        importRunning = importProgress?.phase?.isOver == false,
-                        syncDot = binDot,
-                        modifier = Modifier.coveredIf(smartOpen),
-                    )
-                }
+            SomePane(panes.categories) {
+                CategoriesPanel(
+                    library,
+                    category,
+                    onChoose = { chosenCategory = it },
+                    onSearch = { openFromHome(Page.Search, false) },
+                    onSync = { openFromHome(Page.Sync, false) },
+                    onSettings = { openFromHome(Page.Settings, false) },
+                    onStats = { openFromHome(Page.Stats, false) },
+                    onNewList = if (actions.editor != null) actions::newList else null,
+                    importPickers = importPickers,
+                    importRunning = importProgress?.phase?.isOver == false,
+                    syncDot = binDot,
+                    modifier = Modifier.coveredIf(smartOpen),
+                )
             }
             Pane(panes.home) { HomeLayout(panes, category.takeIf { threePanes }, { slides.shownOf(nav) }, nav.shifted, top != null) { column ->
               val middle = column == HomeColumn.Middle
@@ -423,8 +421,7 @@ fun App(
               )
             } }
             Pane(panes.pages) {
-                // Nothing else is there until a page is open, with three panes.
-                if (threePanes) QuietPane()
+                NoPages(shown = threePanes)
                 PageLayers(
                     nav,
                     backEnabled = !smartOpen,
