@@ -36,6 +36,9 @@ target_sources(kithsong_jni PRIVATE jni_analysis.c)
 # The Home page's radio stations (RadioNatives), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_radio.c)
 
+# The Home page's rows (HomeNatives), apart from jni_bridge.c.
+target_sources(kithsong_jni PRIVATE jni_home.c)
+
 # The player's up next (CorePlayer), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_up_next.c)
 

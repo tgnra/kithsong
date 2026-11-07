@@ -11,6 +11,9 @@ import ng.kithso.core.CorePlayer
 import ng.kithso.core.CoreSync
 import ng.kithso.core.DeleteKind
 import ng.kithso.core.DeviceKind
+import ng.kithso.core.HomePick
+import ng.kithso.core.HomePicks
+import ng.kithso.core.HomeRowId
 import ng.kithso.core.ItemKind
 import ng.kithso.core.KithCoreException
 import ng.kithso.core.LibraryStats
@@ -34,6 +37,7 @@ import ng.kithso.core.deletePermanently
 import ng.kithso.core.deleteToBin
 import ng.kithso.core.deletePlaylist
 import ng.kithso.core.deletePreview
+import ng.kithso.core.homePicks
 import ng.kithso.core.deleteTakesAny
 import ng.kithso.core.moveInAlbumGroup
 import ng.kithso.core.movePlaylistEntry
@@ -75,10 +79,13 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Calendar
+import kotlin.random.Random
 
 /**
  * The library as kithcore has it, in library folder [dir]. A library handle isn't
@@ -111,6 +118,14 @@ import java.util.Calendar
  * and library connection of their own ([radio]), and [library] is updated if they've changed.
  * Meanwhile the Radio row shows those last found. Results arriving by themselves, as analysis
  * finishing does, and a new day change them too ([refreshStations], [onShown]).
+ *
+ * The Home page's rows ([home]) go through every album, smart list and analysis result and the
+ * play log, so they too are read on a thread and library connection of their own ([homeReader]),
+ * and only while something is collecting them: a read, a play or a change to Recents while
+ * nothing is marks them stale, to be read again when something next collects them. What the core
+ * picks is matched to what's listed here, for the art and to leave out what isn't on this phone,
+ * and matched again when the pictures change. Random's selection comes from [homeSeed], picked
+ * once, so it holds until the app next starts.
  *
  * Manual playlists and album groups are edited here too ([PlaylistEditor]), smart lists made
  * and edited ([SmartListEditor]), and albums, artists and tracks deleted ([LibraryDeleter]),
@@ -149,6 +164,16 @@ class CoreLibrarySource(
     private val art = Dispatchers.IO.limitedParallelism(1)
     private var artLib: CoreLibrary? = null // only touched on [art]
 
+    private val homeState = MutableStateFlow<Home?>(null)
+    override val home: StateFlow<Home?> = homeState
+    private val homeReader = Dispatchers.IO.limitedParallelism(1)
+    private var homeLib: CoreLibrary? = null // only touched on [homeReader]
+    private var homeRead: Job? = null
+    @Volatile private var homeStale = true
+    private val homeSeed = Random.nextInt()
+    private var homePicks: HomePicks? = null // only touched on [core]
+    private var homeStarts: Map<String, String> = emptyMap() // seed to start, only touched on [core]
+
     // The smart list editor's counts and previews, likewise ([SmartListEditor]).
     private val counting = Dispatchers.IO.limitedParallelism(1)
     private var countLib: CoreLibrary? = null // only touched on [counting]
@@ -174,6 +199,12 @@ class CoreLibrarySource(
     init {
         refresh()
         scope.launch(art) { pruneArt() }
+        // The rows are read when something starts collecting them, if they've changed since.
+        scope.launch {
+            homeState.subscriptionCount.map { it > 0 }.distinctUntilChanged().collect { watched ->
+                if (watched && homeStale) refreshHome()
+            }
+        }
     }
 
     /** Reads the library again, e.g. after a sync. */
@@ -197,6 +228,7 @@ class CoreLibrarySource(
         }
         lookUpArt(contents.playlists.keys + contents.albumGroups.keys, ++artLookups)
         refreshStations()
+        refreshHome()
     }
 
     /** Finds the stations again, in the background: analysis has added results, say. */
@@ -230,9 +262,43 @@ class CoreLibrarySource(
         }
     }
 
+    /**
+     * Reads the Home page's rows again, in the background, if something is collecting them, and
+     * otherwise marks them to be read when something next does.
+     */
+    @Synchronized
+    fun refreshHome() {
+        if (homeState.subscriptionCount.value == 0) {
+            homeStale = true
+            return
+        }
+        homeStale = false
+        homeRead?.cancel() // waiting its turn, or it'd read everything only to be read again
+        homeRead = scope.launch(homeReader) {
+            val start = SystemClock.elapsedRealtime()
+            val picks = try {
+                val lib = homeLib ?: CoreLibrary(dir.path).also { homeLib = it }
+                lib.homePicks(homeSeed)
+            } catch (e: KithCoreException) {
+                Log.e(TAG, "Couldn't read the Home page's rows", e)
+                return@launch
+            }
+            Log.i(TAG, "Read the Home page's rows in ${SystemClock.elapsedRealtime() - start} ms")
+            withContext(core) {
+                homePicks = picks
+                homeStarts = picks.rows[HomeRowId.Radio].orEmpty()
+                    .mapNotNull { pick -> pick.seedUid?.let { seed -> pick.startUid?.let { seed to it } } }.toMap()
+                homeState.value = home(picks)
+            }
+        }
+    }
+
     /** The app came on screen: stations can move to other tracks from one day to the next. */
     fun onShown() {
-        if (stationsDay != 0 && stationsDay != today()) refreshStations()
+        if (stationsDay != 0 && stationsDay != today()) {
+            refreshStations()
+            refreshHome()
+        }
     }
 
     private fun today(): Int = Calendar.getInstance().let { it.get(Calendar.YEAR) * 1000 + it.get(Calendar.DAY_OF_YEAR) }
@@ -260,6 +326,7 @@ class CoreLibrarySource(
                 if (playlists == contents.playlists && albumGroups == contents.albumGroups) return@withContext
                 contents = contents.copy(playlists = playlists, albumGroups = albumGroups)
                 state.value = contents.library(recents(), stations)
+                homePicks?.let { homeState.value = home(it) }
             }
         }
     }
@@ -375,11 +442,12 @@ class CoreLibrarySource(
         }
     }
 
-    // A station of the Radio row has a start drawn for it, and any other starts from its seed.
+    // A station of the Radio row, the main screen's or Home's, has a start drawn for it, and any
+    // other starts from its seed.
     override suspend fun stationSeed(seedUid: String): Track? = withContext(core) {
         try {
             val lib = open() ?: return@withContext null
-            listOfNotNull(stationStarts[seedUid], seedUid).firstNotNullOfOrNull { stationTrack(lib, it) }
+            listOfNotNull(stationStarts[seedUid], homeStarts[seedUid], seedUid).firstNotNullOfOrNull { stationTrack(lib, it) }
         } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't check station $seedUid", e)
             null
@@ -439,6 +507,7 @@ class CoreLibrarySource(
             }
             state.value = state.value?.copy(recents = recents())
             if (ref.kind == CollectionRef.Kind.Station) refreshStations() // each listing draws new starts
+            refreshHome()
             onChanged()
         }
     }
@@ -459,6 +528,7 @@ class CoreLibrarySource(
                 return@launch
             }
             state.value = state.value?.copy(recents = recents())
+            refreshHome()
             onChanged()
         }
     }
@@ -484,6 +554,8 @@ class CoreLibrarySource(
                     state.value = state.value?.copy(recents = recents())
                     onChanged()
                 }
+                // The rows that go by plays read the log, whether or not Recents changed.
+                refreshHome()
             } catch (e: KithCoreException) {
                 Log.w(TAG, "Couldn't log a play of ${event.trackUid}", e)
             }
@@ -1036,6 +1108,34 @@ class CoreLibrarySource(
         CollectionRef.Kind.Station -> null
     }
 
+    // On [core]. The Home page's rows from [picks], each tile as it's listed here: the core's
+    // rows have albums and playlists with nothing on this phone, which [recent] leaves out. A
+    // station is as Recents has one, with the art it has in the Radio row.
+    private fun home(picks: HomePicks): Home {
+        val covers = Covers()
+        val rows = HomeRowId.entries.mapNotNull { id ->
+            val items = picks.rows[id].orEmpty()
+                .mapNotNull { pick -> if (pick.isStation) homeStation(pick, covers) else recent(CollectionRef(pick.kind.refKind, pick.uid)) }
+                .distinctBy { it.ref }
+            if (items.isEmpty()) null else HomeRow(id.kind, items)
+        }
+        return Home(rows, hasMusic = rows.any { it.kind != HomeRow.Kind.Radio }, hasPlays = picks.hasPlays)
+    }
+
+    private fun homeStation(pick: HomePick, covers: Covers): Recent? {
+        val seed = pick.seedUid ?: return null
+        val artist = pick.uid.ifEmpty { null }
+        return Recent(
+            CollectionRef(CollectionRef.Kind.Station, seed),
+            pick.title,
+            null,
+            covers.station(seed, pick.title, pick.coverDir, artist),
+            pick.sub,
+            pick.seedTitle,
+            artist,
+        )
+    }
+
     // The tracks with a file on this phone.
     private fun List<TrackInfo>.here() = filter { it.path != null }
 
@@ -1143,6 +1243,15 @@ class CoreLibrarySource(
                 CollectionRef.Kind.Playlist -> ItemKind.Playlist
                 CollectionRef.Kind.AlbumGroup -> ItemKind.AlbumGroup
                 CollectionRef.Kind.Station -> ItemKind.Station
+            }
+
+        val HomeRowId.kind: HomeRow.Kind
+            get() = when (this) {
+                HomeRowId.Radio -> HomeRow.Kind.Radio
+                HomeRowId.Recents -> HomeRow.Kind.Recents
+                HomeRowId.PlayedLately -> HomeRow.Kind.PlayedLately
+                HomeRowId.NotPlayedLately -> HomeRow.Kind.NotPlayedLately
+                HomeRowId.Random -> HomeRow.Kind.Random
             }
 
         val ItemKind.refKind: CollectionRef.Kind

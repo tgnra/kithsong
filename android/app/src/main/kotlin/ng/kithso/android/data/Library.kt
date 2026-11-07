@@ -150,6 +150,29 @@ data class Library(
 }
 
 /**
+ * The Home page's rows (the core's home_picks.h), top to bottom, leaving out those with nothing
+ * here. Each tile is a [Recent], as Recents' are: something to open or play, with its title, art
+ * and, for a station, what tells it apart. Like the main screen's lists, a row only has what's on
+ * this phone. [hasMusic] is a library with an album or playlist to show, and [hasPlays] one with
+ * something in it played, without which the rows that go by plays have nothing in them yet.
+ */
+@Immutable
+data class Home(val rows: List<HomeRow>, val hasMusic: Boolean, val hasPlays: Boolean) {
+    companion object {
+        val Empty = Home(emptyList(), hasMusic = false, hasPlays = false)
+    }
+}
+
+/**
+ * A row of the Home page: [kind] says which, and so its heading. A Radio row's tiles are
+ * stations, as some in Recents are too.
+ */
+@Immutable
+data class HomeRow(val kind: Kind, val items: List<Recent>) {
+    enum class Kind { Radio, Recents, PlayedLately, NotPlayedLately, Random }
+}
+
+/**
  * A track list screen's contents. An album has its [artist] and [year] (0 if unknown), an
  * artist its [albumCount] and [singles] (its tracks alone on their album or on none, which
  * aren't among its [albums]). An artist and an album group have their [albums] here too; a
@@ -238,6 +261,14 @@ data class ProfileChoices(
 interface LibrarySource {
     /** The library, or null until it has been read for the first time. */
     val library: StateFlow<Library?>
+
+    /**
+     * The Home page's rows, or null until they've been read. Reading them goes through the whole
+     * library and its play log, so a source may keep them up to date only while something
+     * collects this, and read them again when something next does; what was read last stays
+     * meanwhile.
+     */
+    val home: StateFlow<Home?>
 
     /** The tracks of [ref], or null if it no longer exists. */
     suspend fun trackList(ref: CollectionRef): TrackList?

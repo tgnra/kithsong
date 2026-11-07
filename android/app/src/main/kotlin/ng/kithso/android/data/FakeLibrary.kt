@@ -17,6 +17,25 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
 
     override val library: StateFlow<Library?> = state
 
+    // Its stations, its recents, and its albums and playlists for Random, as if nothing in it
+    // had been played but what's in Recents.
+    override val home: StateFlow<Home?> = MutableStateFlow(
+        state.value.let { lib ->
+            val random = lib.albums.filterIndexed { i, _ -> i % 3 == 1 }.map {
+                Recent(CollectionRef(CollectionRef.Kind.Album, it.uid), it.title, it.artist, it.art)
+            } + lib.playlists.map { Recent(CollectionRef(CollectionRef.Kind.Playlist, it.uid), it.name, null, it.art) }
+            val rows = listOf(
+                HomeRow(
+                    HomeRow.Kind.Radio,
+                    lib.stations.map { Recent(CollectionRef(CollectionRef.Kind.Station, it.seedUid), it.name, null, it.art, it.sub, it.seedTitle) },
+                ),
+                HomeRow(HomeRow.Kind.Recents, lib.recents),
+                HomeRow(HomeRow.Kind.Random, random),
+            ).filter { it.items.isNotEmpty() }
+            Home(rows, hasMusic = !lib.isEmpty, hasPlays = lib.recents.isNotEmpty())
+        },
+    )
+
     override suspend fun trackList(ref: CollectionRef): TrackList? {
         val lib = state.value
         return when (ref.kind) {
