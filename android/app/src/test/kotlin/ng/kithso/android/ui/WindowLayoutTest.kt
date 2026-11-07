@@ -111,6 +111,19 @@ class WindowLayoutTest {
     }
 
     @Test
+    fun aFoldOutlastsItsReportUntilTheWindowResizes() {
+        val memory = FoldMemory<String>()
+        val fold = hinge(466.dp)
+        assertEquals(null, memory.resolve("open", null))
+        assertEquals(fold, memory.resolve("open", fold))
+        // Folding: the report goes first, while the window is still as wide as a tablet.
+        assertEquals(fold, memory.resolve("open", null))
+        assertEquals(null, memory.resolve("cover", null))
+        // Back at that size it has the fold still, until a report says otherwise.
+        assertEquals(fold, memory.resolve("open", null))
+    }
+
+    @Test
     fun compactAndSmallDrawEverythingOverTheWholeWindow() {
         for (window in listOf(layout(412, 915), layout(240, 427))) {
             val panes = panesFor(window)

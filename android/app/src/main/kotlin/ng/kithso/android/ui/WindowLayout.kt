@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
@@ -192,6 +193,25 @@ fun Pane(area: PaneArea, content: @Composable BoxScope.() -> Unit) {
     }
 }
 
+/**
+ * Keeps a fold for as long as the window stays the size it was seen at. On folding, the system
+ * stops reporting the fold more than a second before the window shrinks, and in between an open
+ * foldable would look like a tablet, and go Large.
+ */
+internal class FoldMemory<S> {
+    private var size: S? = null
+    private var fold: WindowFold? = null
+
+    /** The fold for a window of [size], given the one the system [reported]. */
+    fun resolve(size: S, reported: WindowFold?): WindowFold? {
+        if (reported != null) {
+            this.size = size
+            fold = reported
+        }
+        return fold.takeIf { this.size == size }
+    }
+}
+
 /** Provides [LocalWindowLayout] and a whole-window [LocalPane], kept up with the live window and its folds. */
 @Composable
 fun ProvideWindowLayout(content: @Composable () -> Unit) {
@@ -213,9 +233,10 @@ fun ProvideWindowLayout(content: @Composable () -> Unit) {
         }
     }
     val size = LocalWindowInfo.current.containerSize
+    val memory = remember { FoldMemory<IntSize>() }
     val layout = with(density) {
         // A vertical fold first, as that's the one panes go either side of.
-        val fold = folds?.let { all -> all.firstOrNull { it.vertical } ?: all.firstOrNull() }
+        val fold = memory.resolve(size, folds?.let { all -> all.firstOrNull { it.vertical } ?: all.firstOrNull() })
         WindowLayout.of(size.width.toDp(), size.height.toDp(), fold, foldKnown = folds != null)
     }
     LaunchedEffect(layout) { Log.i("kithsong-layout", "$layout dense=${layout.dense} foldKnown=${folds != null}") }
