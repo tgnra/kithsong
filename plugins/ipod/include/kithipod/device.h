@@ -11,16 +11,18 @@
  *                         Play Counts and On-The-Go files (mapped to keys right away, while
  *                         they still match the database's track order)
  *   ipod_device_plays() / ipod_device_otg_playlists()
- *   ipod_device_done()    marks plays and/or playlists as taken in
+ *   ipod_device_done()    deletes Play Counts and/or the OTG files, once they're taken in
  *   ipod_device_put() / _update() / _remove()
  *   ipod_device_commit()  writes ArtworkDB, iTunesDB, kithsong.json (repeatable)
  *   ipod_device_close()   doesn't commit
  *
- * Writing a new iTunesDB always clears Play Counts and the OTG files, because their indexes
- * would point at the wrong tracks afterwards. If they haven't been taken in (no
- * ipod_device_done()), commit folds them into the database first so nothing is lost on the
- * iPod itself: plays are added to each track's play_count and last_played, and On-The-Go
- * lists become ordinary playlists named "On-The-Go 1", "On-The-Go 2"... */
+ * Plays are never lost. Play Counts and the OTG files are deleted by ipod_device_done() and
+ * by nothing else. Until then (nobody took them in: an older caller, or one that failed
+ * before it got to them) they stay on the iPod as they are, and stay true for the new
+ * database: its track order keeps every track they index where it was. Tracks are only
+ * ever added at the end or changed in place, and ipod_device_remove() of a track is put off
+ * (the track and its file stay, still listed in kithsong.json, so the next sync removes it
+ * again) while either file is waiting. */
 #ifndef KITHIPOD_DEVICE_H
 #define KITHIPOD_DEVICE_H
 
@@ -90,6 +92,7 @@ typedef struct ipod_put_info {
   int rating;               /* 0-100 (stars * 20) */
   /* For kithsong.json; track_uid NULL means not recorded there. */
   const char *track_uid, *file_uid, *format, *sha256;
+  const char *setting;      /* the encoder setting, for kithsong.json; NULL for none */
   /* Replace this track (same key, playlists and play history) instead of adding one. */
   const char *replace_key;
 } ipod_put_info;
@@ -101,6 +104,7 @@ int ipod_device_put(ipod_device *dev, const char *src_path, const ipod_put_info 
 
 typedef struct ipod_update_info {
   const ipod_tags *tags;    /* NULL: leave tags and cover alone */
+  int keep_cover;           /* with tags: leave the cover as it is (tags' cover is ignored) */
   int set_plays;            /* replace play_count and last_played */
   uint32_t play_count;
   int64_t last_played;      /* Unix time */
@@ -109,13 +113,31 @@ typedef struct ipod_update_info {
 } ipod_update_info;
 
 int ipod_device_update(ipod_device *dev, const char *key, const ipod_update_info *info, ipod_error *err);
-/* Deletes the file, the track, its artwork and its kithsong.json entry. */
+/* Deletes the file, the track, its artwork and its kithsong.json entry; or, while Play
+ * Counts or OTG files wait to be taken in, marks it to go once they're done (see the top). */
 int ipod_device_remove(ipod_device *dev, const char *key, ipod_error *err);
+/* Whether key's removal is put off (it's gone as far as the caller is concerned). */
+int ipod_device_removal_deferred(const ipod_device *dev, const char *key);
 
-/* Kithsong's own playlists: replaces (or creates) the playlist called name with these keys,
- * skipping unknown ones. NULL keys with n = 0 deletes it. */
+/* Replaces (or creates) the playlist called name with these keys, skipping unknown ones.
+ * NULL keys with n = 0 deletes it. Never the master or podcast playlist. */
 int ipod_device_set_playlist(ipod_device *dev, const char *name, const char *const *keys, size_t n,
                              ipod_error *err);
+
+/* A playlist of Kithsong's for ipod_device_set_kith_playlists(). */
+typedef struct ipod_kith_playlist_in {
+  const char *uid;          /* the library's */
+  const char *name;
+  const char *const *keys;
+  size_t n;
+} ipod_kith_playlist_in;
+
+/* Makes Kithsong's playlists on the iPod exactly these: earlier ones (recorded in
+ * kithsong.json) not among them are deleted, renamed ones renamed, and the rest replaced.
+ * Playlists Kithsong didn't make are never touched; a new one whose name one of those has
+ * already is written as "<name> (Kithsong)". */
+int ipod_device_set_kith_playlists(ipod_device *dev, const ipod_kith_playlist_in *lists, size_t n,
+                                   ipod_error *err);
 
 typedef struct ipod_play {
   char key[IPOD_KEY_LEN];
@@ -136,14 +158,27 @@ typedef struct ipod_otg_playlist {
 } ipod_otg_playlist;
 
 const ipod_otg_playlist *ipod_device_otg_playlists(const ipod_device *dev, size_t *n);
+/* The OTG files' bytes as read at open, one after another (each after its file number as a
+ * little-endian u32), for an "already imported" hash; NULL when there are none. */
+const uint8_t *ipod_device_otg_bytes(const ipod_device *dev, size_t *len);
+
+/* A random value that changes each time ipod_device_done() has cleared everything waiting,
+ * kept on the iPod (iPod_Control/kithsong-records), "" before the first time. Hashed into
+ * "already imported" tokens, so On-The-Go lists made again later with the same tracks (the
+ * same bytes) aren't taken for ones already imported. It never changes while anything
+ * still waits, so a token for that comes out the same after an unplug. */
+const char *ipod_device_records_nonce(const ipod_device *dev);
 
 enum { IPOD_DONE_PLAYS = 1, IPOD_DONE_PLAYLISTS = 2 };
-/* Marks what core has taken in; the files are deleted at the next commit. */
-void ipod_device_done(ipod_device *dev, unsigned what);
+/* What the caller has taken in, safely: deletes Play Counts (IPOD_DONE_PLAYS) and the OTG
+ * files (IPOD_DONE_PLAYLISTS) now; once neither is waiting, renews the records nonce and
+ * carries out the removals that were put off. Plays and playlists read at open are gone
+ * afterwards. */
+int ipod_device_done(ipod_device *dev, unsigned what, ipod_error *err);
 
 /* Writes what changed: the ArtworkDB and .ithmb files, the iTunesDB (the first commit of a
- * session keeps a copy as iTunesDB.kithsong-backup), kithsong.json, and clears Play Counts
- * and OTG files as described above. */
+ * session keeps a copy as iTunesDB.kithsong-backup) and kithsong.json. Never touches Play
+ * Counts or the OTG files (see the top). */
 int ipod_device_commit(ipod_device *dev, ipod_error *err);
 
 #ifdef __cplusplus

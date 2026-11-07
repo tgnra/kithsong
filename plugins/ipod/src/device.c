@@ -8,16 +8,8 @@
 #include "kithipod/playcounts.h"
 #include "util.h"
 
-/* A play recorded on the iPod, by dbid, kept for folding into the database if it isn't
- * taken in before the next commit. */
-typedef struct pending_play {
-  uint64_t dbid;
-  uint32_t count;
-  uint32_t last_played; /* Mac */
-} pending_play;
-
 struct ipod_device {
-  char *mount, *itunes_dir, *db_path, *kith_path, *pc_path, *backup_path;
+  char *mount, *itunes_dir, *db_path, *kith_path, *pc_path, *backup_path, *nonce_path;
   ipod_sysinfo si;
   const ipod_model *model;
   int music_dirs;
@@ -25,20 +17,29 @@ struct ipod_device {
   ipod_kith_map kith;
   ipod_artdb *art;
 
+  /* Play Counts, as read at open. */
   ipod_play *plays;
-  pending_play *pending;
   size_t n_plays;
   uint8_t *pc_bytes;
   size_t pc_len;
-  int has_playcounts;
+  int has_playcounts; /* the file is there */
+  int pc_unreadable;  /* ... and couldn't be parsed: kept until taken in, all the same */
 
+  /* The OTG files, as read at open. */
   ipod_otg_playlist *otg;
   size_t n_otg;
+  ipod_buf otg_bytes;
   int has_otg;
+  int otg_unreadable;
+
+  char nonce[40];
+
+  /* Removals put off while Play Counts or OTG files wait (dbids). */
+  uint64_t *deferred;
+  size_t n_deferred, cap_deferred;
 
   unsigned done;
   int db_dirty, kith_dirty, backed_up;
-  int folded; /* pending plays and OTG lists are already in the database */
 };
 
 static int empty_str(const char *s) { return !s || !*s; }
@@ -137,11 +138,46 @@ static void free_otg(ipod_device *dev) {
   dev->n_otg = 0;
 }
 
+/* The OTG files' raw bytes, for the import token. */
+static void read_otg_bytes(ipod_device *dev) {
+  int misses = 0;
+  for (int i = 0; i <= 100 && misses < 5; i++) {
+    char name[32];
+    if (i == 0) snprintf(name, sizeof name, "OTGPlaylistInfo");
+    else snprintf(name, sizeof name, "OTGPlaylistInfo_%d", i);
+    char *path = ipod_path_join(dev->itunes_dir, name);
+    size_t len = 0;
+    uint8_t *data = path && ipod_file_exists(path) ? ipod_read_file(path, &len) : NULL;
+    free(path);
+    if (!data) {
+      if (i > 0) misses++;
+      continue;
+    }
+    misses = 0;
+    ipod_buf_le32(&dev->otg_bytes, (uint32_t)i);
+    ipod_buf_put(&dev->otg_bytes, data, len);
+    free(data);
+  }
+}
+
+static void read_nonce(ipod_device *dev) {
+  dev->nonce[0] = 0;
+  size_t len = 0;
+  uint8_t *data = ipod_file_exists(dev->nonce_path) ? ipod_read_file(dev->nonce_path, &len) : NULL;
+  if (!data) return;
+  size_t k = 0;
+  for (size_t i = 0; i < len && k + 1 < sizeof dev->nonce; i++)
+    if (isxdigit(data[i])) dev->nonce[k++] = (char)tolower(data[i]);
+  dev->nonce[k] = 0;
+  free(data);
+}
+
 /* Reads Play Counts and OTG files and maps their indexes to keys while the database still
  * has the order they were recorded against. */
 static int read_device_records(ipod_device *dev, ipod_error *err) {
   ipod_db *db = dev->db;
   size_t len;
+  read_nonce(dev);
   dev->pc_bytes = ipod_file_exists(dev->pc_path) ? ipod_read_file(dev->pc_path, &len) : NULL;
   if (dev->pc_bytes) {
     dev->pc_len = len;
@@ -151,8 +187,7 @@ static int read_device_records(ipod_device *dev, ipod_error *err) {
     if (ipod_playcounts_parse(dev->pc_bytes, len, &pc, &perr) == 0) {
       size_t n = pc.n < db->n_tracks ? pc.n : db->n_tracks;
       dev->plays = calloc(n ? n : 1, sizeof *dev->plays);
-      dev->pending = calloc(n ? n : 1, sizeof *dev->pending);
-      if (!dev->plays || !dev->pending) {
+      if (!dev->plays) {
         ipod_playcounts_free(&pc);
         return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
       }
@@ -160,22 +195,23 @@ static int read_device_records(ipod_device *dev, ipod_error *err) {
       for (size_t i = 0; i < n; i++) {
         const ipod_playcount *e = &pc.entries[i];
         if (e->play_count == 0) continue;
-        ipod_play *p = &dev->plays[dev->n_plays];
+        ipod_play *p = &dev->plays[dev->n_plays++];
         ipod_track_key(db->tracks[i], p->key);
         p->count = e->play_count;
         p->last_played = ipod_mac_to_unix(e->last_played, tz);
         p->rating = e->rating;
-        dev->pending[dev->n_plays].dbid = db->tracks[i]->dbid;
-        dev->pending[dev->n_plays].count = e->play_count;
-        dev->pending[dev->n_plays].last_played = e->last_played;
-        dev->n_plays++;
       }
       ipod_playcounts_free(&pc);
+    } else {
+      /* Kept until it's taken in like any other (it yields no plays), never deleted
+       * unread. */
+      dev->pc_unreadable = 1;
     }
-    /* A file we can't parse is still cleared at the next commit (it can't be valid for the
-     * database we write), but yields no plays. */
   }
 
+  read_otg_bytes(dev);
+  if (dev->otg_bytes.oom) return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
+  dev->has_otg = dev->otg_bytes.len > 0;
   ipod_otg otg;
   if (ipod_otg_read_all(dev->itunes_dir, &otg, NULL) == 0) {
     dev->otg = calloc(otg.n ? otg.n : 1, sizeof *dev->otg);
@@ -198,13 +234,23 @@ static int read_device_records(ipod_device *dev, ipod_error *err) {
       dev->n_otg++;
     }
     ipod_otg_free(&otg);
+  } else if (dev->has_otg) {
+    dev->otg_unreadable = 1;
   }
-  /* Whether any OTG file exists, even an empty one: they're all cleared at commit. */
-  char *base = ipod_path_join(dev->itunes_dir, "OTGPlaylistInfo");
-  dev->has_otg = dev->n_otg > 0 || (base && ipod_file_exists(base));
-  free(base);
   return 0;
 }
+
+/* Whether Play Counts holds something not yet taken in (an unreadable file counts: it isn't
+ * ours to throw away). A file of nothing but zeros holds nothing to lose. */
+static int plays_waiting(const ipod_device *dev) {
+  return dev->has_playcounts && (dev->n_plays > 0 || dev->pc_unreadable);
+}
+
+static int otg_waiting(const ipod_device *dev) {
+  return dev->has_otg && (dev->n_otg > 0 || dev->otg_unreadable);
+}
+
+static int records_waiting(const ipod_device *dev) { return plays_waiting(dev) || otg_waiting(dev); }
 
 void ipod_device_close(ipod_device *dev) {
   if (!dev) return;
@@ -214,13 +260,15 @@ void ipod_device_close(ipod_device *dev) {
   free(dev->kith_path);
   free(dev->pc_path);
   free(dev->backup_path);
+  free(dev->nonce_path);
   ipod_db_free(dev->db);
   ipod_kith_free(&dev->kith);
   ipod_artdb_free(dev->art);
   free(dev->plays);
-  free(dev->pending);
   free(dev->pc_bytes);
   free_otg(dev);
+  ipod_buf_free(&dev->otg_bytes);
+  free(dev->deferred);
   free(dev);
 }
 
@@ -236,7 +284,9 @@ ipod_device *ipod_open(const char *mount, unsigned flags, ipod_error *err) {
   dev->kith_path = ipod_path_join(mount, "iPod_Control/kithsong.json");
   dev->pc_path = ipod_path_join(mount, "iPod_Control/iTunes/Play Counts");
   dev->backup_path = ipod_path_join(mount, "iPod_Control/iTunes/iTunesDB.kithsong-backup");
-  if (!dev->mount || !dev->itunes_dir || !dev->db_path || !dev->kith_path || !dev->pc_path || !dev->backup_path) {
+  dev->nonce_path = ipod_path_join(mount, "iPod_Control/kithsong-records");
+  if (!dev->mount || !dev->itunes_dir || !dev->db_path || !dev->kith_path || !dev->pc_path || !dev->backup_path ||
+      !dev->nonce_path) {
     ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
     goto fail;
   }
@@ -521,7 +571,8 @@ int ipod_device_put(ipod_device *dev, const char *src_path, const ipod_put_info 
   ipod_track_key(t, key);
   if (key_out) memcpy(key_out, key, IPOD_KEY_LEN);
   if (info->track_uid) {
-    if (ipod_kith_set(&dev->kith, key, info->track_uid, info->file_uid, info->format, info->sha256) != 0)
+    if (ipod_kith_set2(&dev->kith, key, info->track_uid, info->file_uid, info->format, info->setting,
+                       info->sha256) != 0)
       return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
     dev->kith_dirty = 1;
   } else if (ipod_kith_remove(&dev->kith, key) == 0) {
@@ -536,8 +587,10 @@ int ipod_device_update(ipod_device *dev, const char *key, const ipod_update_info
   int32_t tz = ipod_local_tz_offset();
   if (info->tags) {
     if (apply_tags(t, info->tags) != 0) return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
-    int r = apply_cover(dev, t, info->tags, err);
-    if (r != 0) return r;
+    if (!info->keep_cover) {
+      int r = apply_cover(dev, t, info->tags, err);
+      if (r != 0) return r;
+    }
   }
   if (info->set_plays) {
     t->play_count = info->play_count;
@@ -549,21 +602,87 @@ int ipod_device_update(ipod_device *dev, const char *key, const ipod_update_info
   return 0;
 }
 
-int ipod_device_remove(ipod_device *dev, const char *key, ipod_error *err) {
-  ipod_track *t = ipod_device_find(dev, key);
-  if (!t) return ipod_seterr(err, IPOD_ERR_NOT_FOUND, "no track %s", key);
+static int deferred_index(const ipod_device *dev, uint64_t dbid) {
+  for (size_t i = 0; i < dev->n_deferred; i++)
+    if (dev->deferred[i] == dbid) return (int)i;
+  return -1;
+}
+
+int ipod_device_removal_deferred(const ipod_device *dev, const char *key) {
+  uint64_t dbid;
+  return parse_key(key, &dbid) == 0 && deferred_index(dev, dbid) >= 0;
+}
+
+static void remove_now(ipod_device *dev, ipod_track *t) {
+  char key[IPOD_KEY_LEN];
+  ipod_track_key(t, key);
   remove_track_file(dev, t);
   ipod_artdb_remove(dev->art, t->dbid);
   ipod_db_remove_track(dev->db, t->id);
   if (ipod_kith_remove(&dev->kith, key) == 0) dev->kith_dirty = 1;
   dev->db_dirty = 1;
+}
+
+int ipod_device_remove(ipod_device *dev, const char *key, ipod_error *err) {
+  ipod_track *t = ipod_device_find(dev, key);
+  if (!t) return ipod_seterr(err, IPOD_ERR_NOT_FOUND, "no track %s", key);
+  if (records_waiting(dev)) {
+    /* Removing it would move every track after it, and Play Counts and the OTG files
+     * index tracks by position: it goes once they're taken in. */
+    if (deferred_index(dev, t->dbid) >= 0) return 0;
+    if (dev->n_deferred == dev->cap_deferred) {
+      size_t cap = dev->cap_deferred ? dev->cap_deferred * 2 : 16;
+      uint64_t *d = realloc(dev->deferred, cap * sizeof *d);
+      if (!d) return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
+      dev->deferred = d;
+      dev->cap_deferred = cap;
+    }
+    dev->deferred[dev->n_deferred++] = t->dbid;
+    return 0;
+  }
+  remove_now(dev, t);
+  return 0;
+}
+
+static void remove_deferred(ipod_device *dev) {
+  for (size_t i = 0; i < dev->n_deferred; i++) {
+    ipod_track *t = ipod_db_find_dbid(dev->db, dev->deferred[i]);
+    if (t) remove_now(dev, t);
+  }
+  dev->n_deferred = 0;
+}
+
+/* A playlist by name that isn't the master or the podcasts one. */
+static ipod_playlist *find_named(ipod_db *db, const char *name) {
+  for (size_t i = 0; i < db->n_playlists; i++) {
+    ipod_playlist *p = db->playlists[i];
+    if (p->is_master || p->is_podcast) continue;
+    if (p->name && strcmp(p->name, name) == 0) return p;
+  }
+  return NULL;
+}
+
+static ipod_playlist *find_id(ipod_db *db, uint64_t id) {
+  for (size_t i = 0; i < db->n_playlists; i++) {
+    ipod_playlist *p = db->playlists[i];
+    if (!p->is_master && !p->is_podcast && p->id == id) return p;
+  }
+  return NULL;
+}
+
+static int fill_playlist(ipod_device *dev, ipod_playlist *pl, const char *const *keys, size_t n) {
+  ipod_playlist_clear(pl);
+  for (size_t i = 0; i < n; i++) {
+    ipod_track *t = keys && keys[i] ? ipod_device_find(dev, keys[i]) : NULL;
+    if (t && ipod_playlist_add(pl, t->id) != 0) return IPOD_ERR_NOMEM;
+  }
   return 0;
 }
 
 int ipod_device_set_playlist(ipod_device *dev, const char *name, const char *const *keys, size_t n,
                              ipod_error *err) {
   if (!name || !*name) return ipod_seterr(err, IPOD_ERR_ARG, "playlist without a name");
-  ipod_playlist *pl = ipod_db_find_playlist(dev->db, name);
+  ipod_playlist *pl = find_named(dev->db, name);
   if (!keys && n == 0) {
     if (pl) {
       ipod_db_remove_playlist(dev->db, pl);
@@ -578,12 +697,65 @@ int ipod_device_set_playlist(ipod_device *dev, const char *name, const char *con
       return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
     }
   }
-  ipod_playlist_clear(pl);
-  for (size_t i = 0; i < n; i++) {
-    ipod_track *t = ipod_device_find(dev, keys[i]);
-    if (t && ipod_playlist_add(pl, t->id) != 0) return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
-  }
   dev->db_dirty = 1;
+  if (fill_playlist(dev, pl, keys, n) != 0) return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
+  return 0;
+}
+
+/* Whether name is taken by a playlist Kithsong didn't make, or by the iPod's own name. */
+static int name_taken(ipod_device *dev, const char *name) {
+  for (size_t i = 0; i < dev->db->n_playlists; i++) {
+    ipod_playlist *p = dev->db->playlists[i];
+    if (!p->name || strcmp(p->name, name) != 0) continue;
+    int ours = 0;
+    for (size_t k = 0; k < dev->kith.n_playlists && !ours; k++) ours = dev->kith.playlists[k].id == p->id;
+    if (!ours || p->is_master || p->is_podcast) return 1;
+  }
+  return 0;
+}
+
+int ipod_device_set_kith_playlists(ipod_device *dev, const ipod_kith_playlist_in *lists, size_t n,
+                                   ipod_error *err) {
+  /* Ours that are no longer wanted. */
+  for (size_t k = dev->kith.n_playlists; k-- > 0;) {
+    const ipod_kith_playlist *kp = &dev->kith.playlists[k];
+    int wanted = 0;
+    for (size_t i = 0; i < n && !wanted; i++) wanted = lists[i].uid && strcmp(lists[i].uid, kp->uid) == 0;
+    if (wanted) continue;
+    ipod_playlist *p = find_id(dev->db, kp->id);
+    if (p) ipod_db_remove_playlist(dev->db, p);
+    char *uid = ipod_strdup(kp->uid);
+    if (!uid) return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
+    ipod_kith_playlist_remove(&dev->kith, uid);
+    free(uid);
+    dev->db_dirty = dev->kith_dirty = 1;
+  }
+  for (size_t i = 0; i < n; i++) {
+    const ipod_kith_playlist_in *in = &lists[i];
+    if (!in->uid || !*in->uid || !in->name || !*in->name) continue;
+    char *name = name_taken(dev, in->name) ? ipod_asprintf("%s (Kithsong)", in->name) : ipod_strdup(in->name);
+    if (!name) return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
+    const ipod_kith_playlist *kp = ipod_kith_playlist_find(&dev->kith, in->uid);
+    ipod_playlist *pl = kp ? find_id(dev->db, kp->id) : NULL;
+    /* A rename makes a new playlist, rather than editing a name kept in the file's bytes. */
+    if (pl && (!pl->name || strcmp(pl->name, name) != 0)) {
+      ipod_db_remove_playlist(dev->db, pl);
+      pl = NULL;
+    }
+    if (!pl) {
+      pl = ipod_playlist_new(name);
+      if (!pl || ipod_db_add_playlist(dev->db, pl) != 0) {
+        ipod_playlist_free(pl);
+        free(name);
+        return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
+      }
+    }
+    free(name);
+    if (fill_playlist(dev, pl, in->keys, in->n) != 0 ||
+        ipod_kith_playlist_set(&dev->kith, in->uid, pl->name, pl->id) != 0)
+      return ipod_seterr(err, IPOD_ERR_NOMEM, "out of memory");
+    dev->db_dirty = dev->kith_dirty = 1;
+  }
   return 0;
 }
 
@@ -595,8 +767,9 @@ const ipod_play *ipod_device_plays(const ipod_device *dev, size_t *n) {
 }
 
 const uint8_t *ipod_device_playcounts_bytes(const ipod_device *dev, size_t *len) {
-  *len = dev->pc_len;
-  return dev->pc_bytes;
+  int w = plays_waiting(dev);
+  *len = w ? dev->pc_len : 0;
+  return w ? dev->pc_bytes : NULL;
 }
 
 const ipod_otg_playlist *ipod_device_otg_playlists(const ipod_device *dev, size_t *n) {
@@ -604,72 +777,77 @@ const ipod_otg_playlist *ipod_device_otg_playlists(const ipod_device *dev, size_
   return dev->otg;
 }
 
-void ipod_device_done(ipod_device *dev, unsigned what) { dev->done |= what; }
-
-/* Before a new database is written: whatever the iPod recorded and nobody took in goes into
- * the database itself, so it isn't lost when the files are cleared. */
-static int fold_pending(ipod_device *dev) {
-  if (dev->folded) return 0;
-  if (dev->has_playcounts && !(dev->done & IPOD_DONE_PLAYS)) {
-    for (size_t i = 0; i < dev->n_plays; i++) {
-      ipod_track *t = ipod_db_find_dbid(dev->db, dev->pending[i].dbid);
-      if (!t) continue;
-      t->play_count += dev->pending[i].count;
-      if (dev->pending[i].last_played > t->last_played) t->last_played = dev->pending[i].last_played;
-    }
-  }
-  if (dev->has_otg && !(dev->done & IPOD_DONE_PLAYLISTS)) {
-    for (size_t i = 0; i < dev->n_otg; i++) {
-      const ipod_otg_playlist *o = &dev->otg[i];
-      ipod_playlist *pl = ipod_playlist_new(o->name);
-      if (!pl) return IPOD_ERR_NOMEM;
-      for (size_t k = 0; k < o->n; k++) {
-        ipod_track *t = ipod_device_find(dev, o->keys[k]);
-        if (t && ipod_playlist_add(pl, t->id) != 0) {
-          ipod_playlist_free(pl);
-          return IPOD_ERR_NOMEM;
-        }
-      }
-      if (ipod_db_add_playlist(dev->db, pl) != 0) {
-        ipod_playlist_free(pl);
-        return IPOD_ERR_NOMEM;
-      }
-    }
-  }
-  dev->folded = 1;
-  return 0;
+const uint8_t *ipod_device_otg_bytes(const ipod_device *dev, size_t *len) {
+  int w = otg_waiting(dev);
+  *len = w ? dev->otg_bytes.len : 0;
+  return w ? dev->otg_bytes.data : NULL;
 }
 
-static void clear_records(ipod_device *dev, int plays, int otg) {
-  if (plays && dev->has_playcounts) {
-    ipod_remove(dev->pc_path);
-    dev->has_playcounts = 0;
-    dev->n_plays = 0;
-    free(dev->pc_bytes);
-    dev->pc_bytes = NULL;
-    dev->pc_len = 0;
+const char *ipod_device_records_nonce(const ipod_device *dev) { return dev->nonce; }
+
+static void forget_plays(ipod_device *dev) {
+  dev->has_playcounts = 0;
+  dev->pc_unreadable = 0;
+  dev->n_plays = 0;
+  free(dev->pc_bytes);
+  dev->pc_bytes = NULL;
+  dev->pc_len = 0;
+}
+
+static void forget_otg(ipod_device *dev) {
+  dev->has_otg = 0;
+  dev->otg_unreadable = 0;
+  free_otg(dev);
+  ipod_buf_free(&dev->otg_bytes);
+}
+
+/* A new nonce, written at once: best effort, as the files it guards are already gone. */
+static void renew_nonce(ipod_device *dev) {
+  uint8_t rnd[16];
+  ipod_random_bytes(rnd, sizeof rnd);
+  for (size_t i = 0; i < sizeof rnd; i++) snprintf(dev->nonce + 2 * i, 3, "%02x", rnd[i]);
+  ipod_write_file_atomic(dev->nonce_path, dev->nonce, strlen(dev->nonce), NULL);
+}
+
+int ipod_device_done(ipod_device *dev, unsigned what, ipod_error *err) {
+  int r = 0, cleared = 0;
+  if ((what & IPOD_DONE_PLAYS) && dev->has_playcounts) {
+    if (ipod_remove(dev->pc_path) != 0) {
+      r = ipod_seterr(err, IPOD_ERR_IO, "can't delete %s", dev->pc_path);
+    } else {
+      forget_plays(dev);
+      cleared = 1;
+    }
   }
-  if (otg && dev->has_otg) {
-    ipod_otg_clear(dev->itunes_dir);
-    dev->has_otg = 0;
-    free_otg(dev);
+  if ((what & IPOD_DONE_PLAYLISTS) && dev->has_otg) {
+    if (ipod_otg_clear(dev->itunes_dir) != 0) {
+      r = ipod_seterr(err, IPOD_ERR_IO, "can't delete the On-The-Go files in %s", dev->itunes_dir);
+    } else {
+      forget_otg(dev);
+      cleared = 1;
+    }
   }
+  if (r == 0) dev->done |= what;
+  /* Renewed only once nothing waits: a token made this session for what still waits must
+   * come out the same if the iPod is unplugged before that is cleared too. */
+  if (cleared && !records_waiting(dev)) renew_nonce(dev);
+  if (!records_waiting(dev)) remove_deferred(dev);
+  return r;
 }
 
 int ipod_device_commit(ipod_device *dev, ipod_error *err) {
   int r;
   if (ipod_artdb_dirty(dev->art)) dev->db_dirty = 1;
   if (dev->db_dirty) {
-    if ((r = fold_pending(dev)) != 0) return ipod_seterr(err, r, "out of memory");
     if ((r = ipod_artdb_write(dev->art, dev->db, err)) != 0) return r;
     const char *backup = dev->backed_up ? NULL : dev->backup_path;
     if ((r = ipod_db_write(dev->db, dev->db_path, backup, err)) != 0) return r;
     dev->backed_up = 1;
     dev->db_dirty = 0;
-    /* The new database's order no longer matches what the iPod recorded. */
-    clear_records(dev, 1, 1);
-  } else {
-    clear_records(dev, (dev->done & IPOD_DONE_PLAYS) != 0, (dev->done & IPOD_DONE_PLAYLISTS) != 0);
+    /* Files that hold nothing to take in would be stale for the new database: they go. Ones
+     * that do hold something stay, still true for it (see device.h). */
+    if (dev->has_playcounts && !plays_waiting(dev) && ipod_remove(dev->pc_path) == 0) forget_plays(dev);
+    if (dev->has_otg && !otg_waiting(dev) && ipod_otg_clear(dev->itunes_dir) == 0) forget_otg(dev);
   }
   if (dev->kith_dirty) {
     if ((r = ipod_kith_write(dev->kith_path, &dev->kith, err)) != 0) return r;

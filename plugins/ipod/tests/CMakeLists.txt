@@ -22,3 +22,19 @@ if(UNIX)
   find_package(Threads REQUIRED)
   target_link_libraries(test_ipod_encode PRIVATE Threads::Threads m)
 endif()
+
+# The plugin as the app runs it: kithsong-ipod loaded through core's loader from the folder
+# it's built into, and a fake iPod synced through mc_tethered (tethered devices' tests in
+# core/tests share their helpers with it).
+add_executable(test_ipod_plugin test_ipod_plugin.c "${PROJECT_SOURCE_DIR}/core/tests/safe_trash.c")
+target_compile_definitions(test_ipod_plugin PRIVATE
+  MC_TEST_TRASH_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-trash/test_ipod_plugin"
+  IPOD_PLUGIN_DIR="${KITH_PLUGIN_OUTPUT_DIR}")
+target_include_directories(test_ipod_plugin PRIVATE
+  "${PROJECT_SOURCE_DIR}/core/src" "${PROJECT_SOURCE_DIR}/core/tests")
+# kithipod makes the MP3 source and reads the iPod back; libopusenc makes the Opus one.
+target_link_libraries(test_ipod_plugin PRIVATE kithcore mc_sqlite3 mbedcrypto kithipod mc_opusenc)
+add_dependencies(test_ipod_plugin kithsong-ipod)
+kithsong_warnings(test_ipod_plugin)
+add_test(NAME test_ipod_plugin COMMAND test_ipod_plugin "${CMAKE_CURRENT_BINARY_DIR}/scratch/test_ipod_plugin")
+set_tests_properties(test_ipod_plugin PROPERTIES TIMEOUT 300)

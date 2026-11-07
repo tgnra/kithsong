@@ -121,7 +121,8 @@ int main(int argc, char **argv) {
   put.last_played = 1700000000;
   put.track_uid = "track-uid-1";
   put.file_uid = "file-uid-1";
-  put.format = "mp3-v0";
+  put.format = "mp3";
+  put.setting = "v0";
   put.sha256 = "aa11";
   char k1[IPOD_KEY_LEN], k2[IPOD_KEY_LEN];
   CHECK_EQ(ipod_device_put(dev, f1, &put, k1, &err), 0);
@@ -133,6 +134,7 @@ int main(int argc, char **argv) {
   put.track_uid = "track-uid-2";
   put.file_uid = "file-uid-2";
   put.format = "alac";
+  put.setting = NULL;
   put.sha256 = "bb22";
   CHECK_EQ(ipod_device_put(dev, f2, &put, k2, &err), 0);
   CHECK(strcmp(k1, k2) != 0 && strlen(k1) == 16);
@@ -186,7 +188,8 @@ int main(int argc, char **argv) {
   }
   const ipod_kith_entry *ke = ipod_device_kith_entry(dev, k1);
   CHECK(ke && strcmp(ke->track_uid, "track-uid-1") == 0 && strcmp(ke->sha256, "aa11") == 0);
-  CHECK(ke && strcmp(ke->format, "mp3-v0") == 0 && strcmp(ke->file_uid, "file-uid-1") == 0);
+  CHECK(ke && strcmp(ke->format, "mp3") == 0 && ke->setting && strcmp(ke->setting, "v0") == 0);
+  CHECK(ke && strcmp(ke->file_uid, "file-uid-1") == 0);
   ipod_playlist *fp = ipod_db_find_playlist(db, "Favourites");
   CHECK(fp && fp->n_items == 2 && t2 && fp->items[0] == t2->id);
 
