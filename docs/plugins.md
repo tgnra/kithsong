@@ -38,7 +38,8 @@ KITH_PLUGIN_EXPORT const kith_plugin *kith_plugin_init(const kith_host *host);
 - The header, `core/include/kithcore/plugin.h`, uses only C types: no kithcore handles cross
   the boundary. Strings are UTF-8. Memory a plugin returns is freed by that plugin's own
   `free` callback, and memory core returns by `host->free`, because the two may use
-  different C runtimes.
+  different C runtimes. Most data is lent rather than returned: lists (a device's tracks, its
+  plays) are handed over one item at a time through visitor callbacks, valid during the call.
 - Why a host table rather than exported kithcore symbols: core is linked statically into
   each frontend, so it has no symbols to export without becoming a shared library. A table
   also keeps the API plugins see small and deliberate.
@@ -75,16 +76,18 @@ The plugin provides:
 |----------|--------------|
 | `probe(mount_path)` | Whether this volume is one of its devices: for the iPod, whether `iPod_Control/iTunes/iTunesDB` exists and `iPod_Control/Device/SysInfo` names a model without the hash. Cheap, no writes. |
 | `open(mount_path) → target` | Opens it. Reports a stable id (the iPod's FireWire GUID from SysInfo, falling back to its serial number), a name (the iPod's own name, from its master playlist), capacity, free space, and the formats it plays, with their limits (below). |
-| `list(target)` | What it holds: for each track, the plugin's own key, the `track_uid` it was written for (if Kithsong wrote it), format, bitrate and size. |
-| `put(target, track, file_path)` | Adds or replaces one track from an encoded file, with its tags, cover, and play count and last played time. |
+| `list(target)` | What it holds: for each track, the plugin's own key, the `track_uid` and `file_uid` it was written for (if Kithsong wrote it), format, encoder setting, bitrate, size and hash, plus the title, artist, album, length and play count core matches and compares by. |
+| `put(target, track, file_path, key)` | Adds one track from an encoded file, or replaces the one under `key`, with its tags, cover, and play count and last played time, and reports the key it is under. |
 | `update(target, key, track)` | Rewrites a track's tags, play count and last played time without copying its file again. |
 | `remove(target, key)` | Removes one track. |
+| `file_path(target, key)` | The path of a track's file on the volume, for verification. |
 | `plays_read(target)` *(optional)* | Plays made on the device since the last sync: for each track key, how many and when the last one was (see Plays from the device). |
 | `playlists_read(target)` *(optional)* | Playlists made on the device: for the iPod, its On-The-Go playlists, each a name and a list of track keys. |
+| `playlists_write(target, playlists)` *(optional)* | Makes the device's Kithsong playlists the ones the profile selects, leaving playlists made on the device alone. |
 | `device_done(target, what)` | Clears what core has taken in (`plays`, `playlists`), once it is safely in the library: for the iPod, deletes `Play Counts` and the `OTGPlaylistInfo` files at the next `commit()`. |
 | `commit(target)` | Writes the device's database. Core calls it every 50 tracks or 2 minutes during a sync, and at the end, so unplugging loses little. |
 | `close(target)` | Closes it. |
-| `eject(target)` *(optional)* | Flushes and ejects, if the device needs more than the OS's own eject. |
+| `eject(mount_path)` *(optional)* | Flushes and ejects, if the device needs more than the OS's own eject. |
 
 Core does everything else, as for a Kithsong device:
 
@@ -181,7 +184,7 @@ An **encoder** turns a decoded source into a file of one format. The plugin prov
 | Callback | What it does |
 |----------|--------------|
 | `formats` | What it writes: an id (`alac`, `mp3`), a file extension, whether it's lossless, and its quality settings (bitrates or VBR levels). |
-| `encode(source, settings, out_path)` | Reads PCM from `source` and writes `out_path`. |
+| `encode(source, format, setting, out_path, job)` | Reads PCM from `source` and writes `out_path`, checking `host->cancelled(job)` now and then. |
 
 `source` comes from core (`host->decode_open(path)`): PCM frames at a sample rate, bit depth
 and channel count core can convert to what the encoder asks for, plus the track's tags and
@@ -199,10 +202,12 @@ Version 1 offers only what device targets and encoders need:
 
 - `log(level, message)`, which goes to the app's log;
 - `free(ptr)`;
-- `decode_open`, `decode_read`, `decode_close`, `decode_tags`, `decode_cover` (above);
+- `decode_open`, `decode_info`, `decode_set_format`, `decode_read`, `decode_close`, `decode_tags`,
+  `decode_cover` (above);
 - `settings_get` and `settings_set` for the plugin's own settings, stored under its id in
   `settings.json`;
-- `string(key)`: the UI language, so a plugin can pick its own translated strings;
+- `string(key)`: for now only `string("language")`, the UI language, so a plugin can pick its
+  own translated strings;
 - `cancelled(job)`: whether the user stopped the sync, for long callbacks to check.
 
 A plugin's settings are declared rather than drawn: a list of options, each a switch, a
