@@ -134,11 +134,8 @@ jobs:
   # Each architecture builds on its own CPU: the container's image has an arm64 build, so no
   # QEMU. ubuntu-24.04-arm is free for public repositories.
   #
-  # Both upload a .flatpak bundle, but the signed repo stays x86_64 only. The site unpacks one
-  # kithsong-flatpak-repo.tar.gz, and each build's repo holds that build alone, so a second leg
-  # writing it would collide with the first and the site could lose x86_64. Only the leg with
-  # signed-repo gets the key, and without one release-linux.sh doesn't write the file. Merging
-  # the architectures into one repo is separate work; until then, keep signed-repo on x86_64.
+  # Each uploads a .flatpak bundle and its own unsigned repo, which holds that architecture
+  # alone. linux-repo merges them into the one the website serves, so no leg needs the key.
   linux:
     needs: version
     strategy:
@@ -147,10 +144,8 @@ jobs:
         include:
           - arch: x86_64
             runner: ubuntu-latest
-            signed-repo: true
           - arch: aarch64
             runner: ubuntu-24.04-arm
-            signed-repo: false
     runs-on: ${{ matrix.runner }}
     # The tag tracks runtime-version in packaging/flatpak/ng.kithso.Kithsong.yml.
     container:
@@ -158,8 +153,45 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@v7
+      - name: Build
+        run: bash scripts/release-linux.sh
+      # The script names the bundle by flatpak --default-arch. Asking for this leg's arch fails
+      # here if that's ever not it, before two legs' files can collide in the release's dist/.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*-linux-${{ matrix.arch }}.flatpak
+          if-no-files-found: error
+      # One tar, as an OSTree repo is thousands of small files. In build/, not dist/: it's for
+      # linux-repo, and the release job leaves it out.
+      - name: Pack the repo
+        shell: bash
+        run: tar -cf "build/flatpak-repo-${{ matrix.arch }}.tar" -C build flatpak-repo
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}-repo
+          path: build/flatpak-repo-${{ matrix.arch }}.tar
+          if-no-files-found: error
+
+  # Merges the architectures' repos into the one at kithso.ng/repo, signs it and writes the
+  # flatpakref: kithsong-flatpak-repo.tar.gz, which the website unpacks. Flatpak picks each
+  # user's architecture from the repo. Without the key (not on a tag) it still merges, as a
+  # check, but writes nothing for the website.
+  linux-repo:
+    needs: linux
+    runs-on: ubuntu-latest
+    # The same image as linux, for the same flatpak.
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: linux-*-repo
+          path: build
+          merge-multiple: true
       - name: Import the Flatpak repo's signing key
-        if: matrix.signed-repo
         shell: bash
         env:
           KITHSONG_FLATPAK_GPG_KEY: ${{ secrets.KITHSONG_FLATPAK_GPG_KEY }}
@@ -178,27 +210,30 @@ jobs:
           key_id="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')"
           echo "GNUPGHOME=$GNUPGHOME" >>"$GITHUB_ENV"
           echo "KITHSONG_FLATPAK_GPG_KEY_ID=$key_id" >>"$GITHUB_ENV"
-      - name: Build
-        run: bash scripts/release-linux.sh
+      # Every architecture by name, so a missing one fails here rather than leave its users
+      # without updates.
+      - name: Merge and sign the repos
+        shell: bash
+        run: |
+          repos=()
+          for arch in x86_64 aarch64; do
+            mkdir "build/flatpak-repo-$arch"
+            tar -xf "build/flatpak-repo-$arch.tar" -C "build/flatpak-repo-$arch" --strip-components=1
+            repos+=("build/flatpak-repo-$arch")
+          done
+          bash scripts/release-linux.sh repo "${repos[@]}"
       - name: Remove the signing key
-        if: always() && matrix.signed-repo
+        if: always()
         shell: bash
         run: |
           gpgconf --kill all || true
           rm -rf "$RUNNER_TEMP/gnupg"
-      # The script names the bundle by flatpak --default-arch. Asking for this leg's arch fails
-      # here if that's ever not it, before two legs' files can collide in the release's dist/.
+      # Without the key the script writes nothing for the website, so there's nothing to upload.
       - uses: actions/upload-artifact@v7
-        with:
-          name: linux-${{ matrix.arch }}
-          path: dist/*-linux-${{ matrix.arch }}.flatpak
-          if-no-files-found: error
-      # Its own artifact, for the same reason as the MSIX's. x86_64 only, as above.
-      - uses: actions/upload-artifact@v7
-        if: matrix.signed-repo && env.KITHSONG_FLATPAK_GPG_KEY_ID != ''
+        if: env.KITHSONG_FLATPAK_GPG_KEY_ID != ''
         with:
           name: linux-flatpak-repo
-          path: dist/*.tar.gz
+          path: dist/kithsong-flatpak-repo.tar.gz
           if-no-files-found: error
 
   # For people who don't want the Flatpak. Its own job, as the binary only runs on systems at
@@ -280,7 +315,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [version, windows, windows-bundle, linux, linux-tarball, android]
+    needs: [version, windows, windows-bundle, linux, linux-repo, linux-tarball, android]
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -290,6 +325,10 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # The architectures' unsigned repos, which linux-repo has merged into
+      # kithsong-flatpak-repo.tar.gz.
+      - name: Leave out the per-architecture repos
+        run: rm -f dist/flatpak-repo-*.tar
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
