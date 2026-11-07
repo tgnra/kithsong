@@ -1,7 +1,8 @@
 # Release builds. Pushing a v<VERSION> tag (or v<VERSION>-<suffix> for a prerelease) builds
-# every platform with the scripts in scripts/ and attaches the results to a draft GitHub
-# release. Running it by hand (Actions > Release > Run workflow) builds the same files as
-# workflow artifacts without making a release.
+# every platform with the scripts in scripts/ and publishes the results as a GitHub release,
+# then deploys the website, which brings its Flatpak repo up to date. Running it by hand
+# (Actions > Release > Run workflow) builds the same files as workflow artifacts without
+# making a release.
 name: Release
 
 on:
@@ -282,18 +283,27 @@ jobs:
     needs: [version, windows, windows-bundle, linux, linux-tarball, android]
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
-      - name: Create the draft release
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
-          flags=(--draft --generate-notes --verify-tag --title "Kithsong $GITHUB_REF_NAME")
-          [[ "$PRERELEASE" == true ]] && flags+=(--prerelease)
+          flags=(--generate-notes --verify-tag --title "Kithsong $GITHUB_REF_NAME")
+          if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); else flags+=(--latest); fi
           gh release create "$GITHUB_REF_NAME" "${flags[@]}" dist/*
+      # A prerelease is never the latest, so it doesn't reach flatpak update. On master, as the
+      # github-pages environment only takes that.
+      - name: Deploy the website
+        if: needs.version.outputs.prerelease != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run site.yml --ref master
