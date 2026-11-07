@@ -341,7 +341,7 @@ typedef struct kith_track {
   char sha256[KITH_SHA256_LEN]; /* of the file put() is given; "" in update() */
   int64_t size_bytes;           /* of that file; 0 in update() */
   int bitrate_kbps;             /* nominal; 0 if unknown */
-  int sample_rate;
+  int sample_rate;              /* 0: unknown (core doesn't fill it yet) */
   int duration_ms;
   kith_tags tags;
   kith_cover cover;             /* the album's; data NULL if none */
@@ -400,7 +400,8 @@ typedef struct kith_device_target {
   int (*put)(kith_target *t, const kith_track *track, const char *file_path, char key[KITH_KEY_LEN],
              const kith_job *job);
   /* Rewrites key's tags, play count and last played time from track, without copying the
-   * file again (track's sha256 and size_bytes are empty). */
+   * file again (track's sha256 and size_bytes are empty, and its cover's data is NULL:
+   * keep the cover the track has). */
   int (*update)(kith_target *t, const char *key, const kith_track *track);
   /* Removes key's track and its file. */
   int (*remove)(kith_target *t, const char *key);

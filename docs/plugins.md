@@ -99,20 +99,28 @@ Core does everything else, as for a Kithsong device:
   with its own kind (`tethered`).
 - **What it holds** comes from a sync profile like every device's: everything or a
   selection, edited in the same What to sync editor. The format choice is the target's own
-  (see Format policy). A budget works as it does now, from the free space the plugin reports.
+  (see Format policy). A budget has no format ladder to step down, as Kithsong devices'
+  does: everything the profile wants must fit in the budget (or, with none set, in the free
+  space the plugin reports plus what Kithsong's tracks there take up), or the sync writes and
+  removes nothing and the card says by how much it's over.
+- **The list.** Frontends get tethered devices from `mc_tethered_list()`
+  (`kithcore/tethered.h`), beside the group's from `mc_sync`, and show them in one list.
 - **The plan** is `plan.c`'s wanted set, worked out from that profile, less what `list()`
   reports. Core then calls `put()` and `remove()` and shows progress as it does for a session.
 - **Encoding** goes through the encoders plugins provide (below), cached the same way as Opus
   transcodes.
 - **Verification**: after `put()`, core asks the plugin for the file's path on the volume,
   hashes it, and compares it with the encoded file's hash. A mismatch is retried once, then
-  reported on the card.
+  the bad copy is removed (so the next sync tries again) and counted as failed on the card.
 
 #### Where a target's profile lives
 
 A tethered device belongs to **the computer it's plugged into**. Its profile goes in tables
 of that computer's `sync.db` that are never replicated (`tethered_devices`,
-`tethered_profile_items`), keyed by the target's stable id. Consequences:
+`tethered_profile_items`). Each device gets a uid of its own there, made the first time it's
+seen, and is found again by its plugin, target and the stable id `open()` reports; that uid,
+not the plugin's id, is the device's uid everywhere else (the device list, the play log's
+`context_uid`, `tethered_imports`). Consequences:
 
 - It works with no sync group, straight from the library.
 - In a group, it can only receive tracks this computer has a file for (an original, or an
@@ -143,7 +151,11 @@ from the profile's policy:
 Limits the target declares are applied while encoding. 4th-generation iPods play ALAC at
 16 bits and 44.1 or 48 kHz, so a 24-bit/96 kHz FLAC is resampled to 44.1 kHz and dithered to
 16 bits. The iPod also doesn't play files with more than two channels, so multichannel
-sources are downmixed to stereo, as Opus transcodes already are.
+sources are downmixed to stereo, as Opus transcodes already are. The library doesn't record
+sample rates or bit depths, so a lossless original already in the device's lossless format
+is copied as it is only when the target declares no limits for that format; otherwise it
+goes through the encoder, which copies sample for sample whatever is within them. Lossy
+copies are checked against the policy's cap and the format's `max_kbps` only.
 
 #### Plays from the device
 
@@ -155,25 +167,30 @@ writes the library's counts back:
    library tracks by artist, album, title and duration within 2 seconds. A track that matches
    nothing is skipped and counted on the card as "plays of tracks not in the library".
 2. Each play becomes a play log row (`mc_library_log_play()`) with context `device`, the
-   tethered device's id as `context_uid`, end `finished` and `listened_ms` set to the track's
+   tethered device's uid as `context_uid`, end `finished` and `listened_ms` set to the track's
    length. The device records only the last play's time, so with several plays the last one
    gets that time and each earlier one is placed one track length (plus 30 seconds) before
    the one after it. That's a guess, but it keeps the times in order and believable.
 3. Each play is also scrobbled (`mc_scrobbler_scrobble()`) if a scrobbling account is signed
-   in on this computer. Last.fm drops scrobbles older than 14 days, so those plays are only
-   logged, and the card says how many weren't scrobbled.
+   in on this computer: the frontend, which owns the scrobbler, hands it over with
+   `mc_tethered_set_scrobbler()` while scrobbling is on. Last.fm drops scrobbles older than
+   14 days, so those plays are only logged, and the card says how many weren't scrobbled.
+   The play count goes up by the device's count too (`track_plays`, this computer's row).
 4. Plays are taken in exactly once. Before `device_done(plays)`, core records the import in
-   `sync.db` (`tethered_imports`: device id, a hash of the `Play Counts` file, and the time).
+   `sync.db` (`tethered_imports`: device uid, the token `plays_read()` gives, which for the
+   iPod is a hash of the `Play Counts` file, and the time).
    A `Play Counts` file whose hash was already imported is cleared without being read again,
    so an unplug between the import and the commit never doubles anything.
-5. Then every track Kithsong wrote gets the library's play count and last played time (from
-   the play log, the device's own plays included) through `update()`, so the iPod shows the
-   same totals as the app.
+5. Then every track Kithsong wrote gets the library's play count and last played time (the
+   totals of `track_plays` across devices, the device's own plays included) through
+   `update()` wherever they, or its title, artist or album, differ from what `list()`
+   reported, so the iPod shows the same totals as the app.
 
 #### Playlists from the device
 
 On-The-Go playlists made on the iPod become manual playlists in the library, named
-"On-The-Go 1" and so on, plus the iPod's name if the library already has one by that name.
+"On-The-Go 1" and so on, or "On-The-Go 1 (Walkman)", with the iPod's name, if the library
+already has one by that name (counting on past numbers taken both ways).
 Their tracks are matched as for plays. Once the playlists are created, `device_done(playlists)`
 clears them from the iPod. A playlist is created only once, guarded like plays by
 `tethered_imports`. If the profile selects that playlist, it then goes back to the iPod as an
