@@ -1,8 +1,14 @@
-/* Transcoding originals to Opus for devices that request lossy copies. Output is cached by
- * (file uid, bitrate) so repeated syncs don't re-encode:
+/* Transcoding originals to Opus for devices that request lossy copies, and to a plugin's
+ * encoders for tethered devices (kithcore/plugin.h). Output is cached by file uid, format
+ * and setting so repeated syncs don't re-encode:
  *
- *   <cache_dir>/<file_uid>/opus-<kbps>.opus
- *   <cache_dir>/<file_uid>/opus-<kbps>.sha256   its sidecar: "<sha256> <size> <mtime_ms>"
+ *   <cache_dir>/<file_uid>/<format>-<setting>.<ext>
+ *   <cache_dir>/<file_uid>/<format>-<setting>.sha256   its sidecar: "<sha256> <size> <mtime_ms>"
+ *
+ * For Opus that's opus-<kbps>.opus. For an encoder it's <encoder>-<setting>, or <encoder>
+ * alone for a format with no settings, then -max<bits>b<rate>r<channels>c when the device
+ * has limits (0 for each it has none of): alac-max16b48000r2c.m4a. The extension is the
+ * encoder's.
  *
  * The sidecar holds the file's SHA-256 (hashed from the bytes as they were written) and the
  * size and mtime the file had then, so a sender needn't read the file twice. One whose size
@@ -23,17 +29,29 @@ extern "C" {
 typedef enum mc_format {
   MC_FORMAT_ORIGINAL,
   MC_FORMAT_OPUS,
-  MC_FORMAT_AUTO /* sync profiles only: what the size budget picks (see mc_sync_profile);
-                  * never a transcode's format */
+  MC_FORMAT_AUTO, /* sync profiles only: what the size budget picks (see mc_sync_profile);
+                   * never a transcode's format */
+  MC_FORMAT_ENCODER /* a plugin's encoder (kithcore/plugin.h), for tethered devices: never in
+                     * a sync profile, and never sent to another Kithsong device */
 } mc_format;
 
 /* The Opus bitrates offered, highest first: the ladder a size budget walks down. */
 #define MC_OPUS_BITRATE_COUNT 6
 extern const int mc_opus_bitrates[MC_OPUS_BITRATE_COUNT]; /* 256, 192, 160, 128, 96, 64 */
 
+/* Longest encoder format or setting id, NUL included. */
+#define MC_ENCODER_ID_LEN 16
+
 typedef struct mc_transcode_opts {
   mc_format format;
   int bitrate_kbps; /* for MC_FORMAT_OPUS: one of mc_opus_bitrates; else 0 */
+  /* MC_FORMAT_ENCODER: a loaded plugin's encoder format ("alac", "mp3") and one of its
+   * settings ("v0"; "" for a format that has none), and the limits of the device it's for,
+   * applied while encoding (0 for none: see kith_pcm_format). Ids are [a-z0-9]+. Zero for
+   * the other formats. */
+  char encoder[MC_ENCODER_ID_LEN];
+  char setting[MC_ENCODER_ID_LEN];
+  int max_sample_rate, max_bits, max_channels;
 } mc_transcode_opts;
 
 #ifdef __cplusplus
@@ -55,9 +73,12 @@ extern "C" {
  * passes a transcode, which would be encoded twice (see "Lossy copies" in
  * docs/sync-protocol.md).
  *
- * Encoding: the source is decoded (FLAC, MP3, WAV, AIFF or Opus), downmixed to stereo if it
- * has more than two channels, resampled to 48 kHz and encoded as constrained-VBR Opus at the
- * bitrate.
+ * Encoding: the source is decoded (FLAC, MP3, WAV, AIFF or Opus). For Opus it's downmixed
+ * to stereo if it has more than two channels, resampled to 48 kHz and encoded as
+ * constrained-VBR Opus at the bitrate. For MC_FORMAT_ENCODER it's converted to the encoder
+ * format's input and the device's limits (kithcore/plugin.h) and handed to the plugin's
+ * encoder, which writes the part file; MC_ERR_NOT_FOUND if no plugin that's loaded and on
+ * has that format, MC_ERR_INVALID_ARG for a setting it doesn't have.
  * Tags are copied, and the album's cover (the image file beside the source) is embedded. The
  * file appears atomically; on failure nothing is left behind. */
 mc_status mc_transcode_cached(const char *cache_dir, const char *file_uid, const char *src_path,

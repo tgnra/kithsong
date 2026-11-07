@@ -193,8 +193,10 @@ decoder plugin, later) feeds every encoder.
 
 Core generalises the transcode cache from Opus to any encoder:
 `<config>/transcode-cache/<file_uid>/<format>-<setting>.<ext>`, with the same sidecars,
-part files, LRU trim and encode pool. An encoder must be safe to call from several threads at
-once on different files.
+part files, LRU trim and encode pool. A device's limits are part of the name, since they change
+what's encoded: `alac-max16b48000r2c.m4a` is ALAC capped at 16 bits, 48 kHz and two channels
+(a format with no quality settings has no `-<setting>`). An encoder must be safe to call from
+several threads at once on different files.
 
 ## What the host table offers
 

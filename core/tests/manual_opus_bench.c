@@ -342,7 +342,7 @@ static int cmd_stages(const char *arg, int kbps, int complexity, int reps) {
     if (real) {
       snprintf(tmp, sizeof tmp, "%s.bench-cache", arg);
       snprintf(uid, sizeof uid, "u%d", r);
-      mc_transcode_opts o = {MC_FORMAT_OPUS, kbps};
+      mc_transcode_opts o = {.format = MC_FORMAT_OPUS, .bitrate_kbps = kbps};
       char *path = NULL;
       s = span_start();
       mc_transcode_cached(tmp, uid, arg, &o, &path);
@@ -466,7 +466,7 @@ static void pool_worker(void *arg) {
     if (job < 0) break;
     char uid[32];
     snprintf(uid, sizeof uid, "j%d-%d", r->pass_tag, job);
-    mc_transcode_opts o = {MC_FORMAT_OPUS, r->kbps};
+    mc_transcode_opts o = {.format = MC_FORMAT_OPUS, .bitrate_kbps = r->kbps};
     char *path = NULL;
     if (mc_transcode_cached(r->cache, uid, r->files[job % r->count].path, &o, &path) == MC_OK) {
       int64_t size = 0, mtime = 0;

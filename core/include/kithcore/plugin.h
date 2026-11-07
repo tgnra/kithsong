@@ -199,8 +199,8 @@ struct kith_host {
 
   /* Decoding. Opens path (any format core reads: FLAC, MP3, WAV, AIFF, Opus) for reading as
    * PCM in the format want asks for (NULL: as the file is, as F32). The source also has the
-   * track's tags and cover: the library's, when core opened it for an encode; the file's
-   * own, when a plugin opened it. */
+   * file's tags and the album's cover (the image file beside it, as Kithsong keeps covers).
+   * The library's own tags, which may be newer, reach a device target through put(). */
   int (*decode_open)(const char *path, const kith_pcm_format *want, kith_source **out);
   /* What the source delivers and came from. */
   int (*decode_info)(kith_source *src, kith_source_info *out);

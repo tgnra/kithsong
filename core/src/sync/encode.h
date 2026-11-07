@@ -1,8 +1,10 @@
-/* The encode pool: Opus encodes into the transcode cache on a few worker threads, shared by
- * every session (FILE_REQ, encode-ahead and PREPARE_REQ). See "Lossy copies" in
- * docs/sync-protocol.md. Internal to core.
+/* The encode pool: encodes into the transcode cache on a few worker threads, shared by
+ * every session (FILE_REQ, encode-ahead and PREPARE_REQ), Opus for sync and a plugin's
+ * encoders for tethered devices. See "Lossy copies" in docs/sync-protocol.md. Internal to
+ * core.
  *
- * A job is one (file uid, kbps). Asking for one already queued or running joins it, so a
+ * A job is one (file uid, format): for Opus, a kbps; for an encoder, its format, setting
+ * and limits (mc_transcode_opts). Asking for one already queued or running joins it, so a
  * file is never encoded twice at once. Jobs run by priority, then in the order asked for.
  * A job holds its own copies of what it needs: workers never touch a session's state, and
  * an owner is only ever compared, so a job may outlive the session that queued it.
@@ -15,6 +17,7 @@
 #include <stdint.h>
 
 #include "kithcore/kithcore.h"
+#include "kithcore/transcode.h"
 
 typedef enum mc_encode_prio {
   MC_ENCODE_NOW,       /* a FILE_REQ waits for it */
@@ -43,6 +46,10 @@ void mc_encode_pool_set_size(mc_encode_pool *p, int n);
  * mc_encode_pool_drop() (NULL otherwise). */
 mc_status mc_encode_pool_queue(mc_encode_pool *p, const char *file_uid, const char *src,
                                int kbps, mc_encode_prio prio, const void *owner);
+/* The same for any format mc_transcode_cached() makes. */
+mc_status mc_encode_pool_queue_as(mc_encode_pool *p, const char *file_uid, const char *src,
+                                  const mc_transcode_opts *opts, mc_encode_prio prio,
+                                  const void *owner);
 /* Drops owner's queued jobs that nobody waits for; one also queued as MC_ENCODE_BACKGROUND
  * goes back to that. Running jobs finish. */
 void mc_encode_pool_drop(mc_encode_pool *p, const void *owner);
@@ -52,6 +59,12 @@ void mc_encode_pool_drop(mc_encode_pool *p, const void *owner);
  * idle, unless NULL, runs now and then during the wait. */
 mc_status mc_encode_pool_encode(mc_encode_pool *p, const char *file_uid, const char *src,
                                 int kbps, void (*idle)(void *user), void *user, char **out);
+/* The same for any format, and idle may give up: once it returns non-zero, this returns
+ * MC_ERR_CANCELLED without waiting for the job, which still runs if it has started (or
+ * another wants it). */
+mc_status mc_encode_pool_encode_as(mc_encode_pool *p, const char *file_uid, const char *src,
+                                   const mc_transcode_opts *opts, int (*idle)(void *user),
+                                   void *user, char **out);
 /* Keeps the trim from running until the matching release (waiting for one that runs). */
 void mc_encode_pool_hold(mc_encode_pool *p);
 void mc_encode_pool_release(mc_encode_pool *p);
