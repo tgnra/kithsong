@@ -57,30 +57,7 @@ dependency is added.
 
 ## Plugins
 
-Plugins ship separately from the app (they're built with `-DKITH_BUILD_PLUGINS=ON`), so what
-they bundle isn't in the app's own binaries. Each plugin package carries these texts itself.
-
-### iPod sync (`plugins/ipod`)
-
-| Dependency | Version | License | How it's included |
-|------------|---------|---------|-------------------|
-| Apple Lossless (ALAC) encoder and decoder | commit `c38887c` ([macosforge/alac](https://github.com/macosforge/alac)) | Apache-2.0 | fetched, static (the decoder only in tests) |
-| LAME (libmp3lame) | 3.100 | LGPL-2.0-or-later | fetched, static, without its assembly, vector code and mpglib |
-| yyjson | 0.10.0 | MIT | the app's copy, static |
-| stb_image | 2.30 (commit `f58f558`) | Public domain / MIT | the app's copy, static |
-| Mbed TLS (crypto only: SHA-256) | 3.6.2 | Apache-2.0 | the app's copy, static |
-
-The build copies LAME's `COPYING` and ALAC's `LICENSE` next to the plugin, as
-`kithsong-ipod.LAME-COPYING.txt` and `kithsong-ipod.ALAC-LICENSE.txt`, and installs them with
-it (the `kithsong-ipod` install component).
-
-- **ALAC**: every source file carries an Apache-2.0 header and the repository's LICENSE is
-  Apache-2.0. The `codec` folder also holds an old `APPLE_LICENSE.txt` (APSL 2.0) from before
-  Apple relicensed it; we go by the file headers. No NOTICE file; no changes to Apple's files
-  (the C wrapper is ours, in `src/alac_shim.cpp`).
-- **LAME** is under the LGPL, and statically linked. The LGPL asks that users can relink the
-  plugin against a changed LAME: the plugin's whole source and build are in this repository,
-  which covers that. Ship LAME's `COPYING` with the plugin, and say in its About text that it
-  uses LAME. `plugins/ipod/third_party/lame/config.h` is ours (LAME's build normally makes it);
-  LAME's own files aren't changed.
-- MP3 patents have expired everywhere, so LAME needs no patent licence. ALAC is royalty-free.
+Plugins (docs/plugins.md) are built and shipped separately from the app, so nothing they
+bundle is in the app's own binaries, and each plugin carries its own notices. The iPod sync
+plugin lives in its own repository, kithsong-ipod, with what it bundles (LAME, Apple's ALAC)
+listed in that repository's LICENSES.md.

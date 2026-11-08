@@ -39,7 +39,6 @@ endif()
 option(KITHSONG_BUILD_WINDOWS "Build the Win32 desktop frontend" ${_default_windows})
 option(KITHSONG_BUILD_GTK     "Build the GTK4/libadwaita desktop frontend" ${_default_gtk})
 option(KITHSONG_BUILD_TESTS   "Build core unit tests" ${PROJECT_IS_TOP_LEVEL})
-option(KITH_BUILD_PLUGINS     "Build the plugins in plugins/ (iPod sync); they ship separately" OFF)
 set(KITHSONG_LASTFM_KEY "" CACHE STRING "Last.fm API key, for scrobbling (never commit this)")
 set(KITHSONG_LASTFM_SECRET "" CACHE STRING "Last.fm API shared secret (never commit this)")
 set(KITHSONG_LASTFM_FILE "${CMAKE_CURRENT_SOURCE_DIR}/last.fm.api" CACHE FILEPATH
@@ -58,9 +57,6 @@ endif()
 
 add_subdirectory(third_party)
 add_subdirectory(core)
-if(KITH_BUILD_PLUGINS)
-  add_subdirectory(plugins)
-endif()
 
 if(KITHSONG_BUILD_WINDOWS)
   add_subdirectory(desktop/windows)
