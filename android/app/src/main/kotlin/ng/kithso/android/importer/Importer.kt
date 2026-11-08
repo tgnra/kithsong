@@ -58,6 +58,8 @@ data class ReviewDetails(
     val files: List<CoreImport.ItemFile>,
     /** Other items from its folder, not busy, whose files may be its missing tracks. */
     val related: List<RelatedItem>,
+    /** Its folder as it was picked: the path under the copies' batch folder, or a zip's. */
+    val folder: String = "",
 )
 
 /** Another item from an item's folder, in the review: its album, or a single's title. */
@@ -359,17 +361,32 @@ class Importer(
                 val info = session.itemInfo(item)
                 RelatedItem(item, info.album, session.files(item))
             }
+            val info = session.itemInfo(key.item)
             ReviewDetails(
                 key,
                 session.itemName(key.item),
-                session.itemInfo(key.item),
+                info,
                 session.matches(key.item),
                 session.files(key.item),
                 related,
+                shownFolder(info.folder),
             )
         } catch (e: KithCoreException) {
             null
         }
+    }
+
+    // The copy's path less [root] and the batch's own folder (b<N>, a<N>/<i>, or the zip's
+    // kithsong-import-* under unzip/), so it reads as what was picked.
+    private fun shownFolder(folder: String): String {
+        val inRoot = folder.removePrefix(root.path).takeIf { it != folder }?.trimStart('/') ?: return folder
+        val parts = inRoot.split('/')
+        val skip = when {
+            parts.first() == "unzip" -> 2
+            parts.first().startsWith("a") -> 2
+            else -> 1
+        }
+        return parts.drop(skip).joinToString("/").ifEmpty { folder }
     }
 
     /** Stops the import. What has been imported stays. */

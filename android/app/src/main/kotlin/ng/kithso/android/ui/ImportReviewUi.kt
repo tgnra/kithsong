@@ -269,9 +269,9 @@ private fun ItemHeader(d: ReviewDetails, busy: Boolean, onBack: () -> Unit) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (d.info.folder.isNotEmpty()) {
+        if (d.folder.isNotEmpty()) {
             Text(
-                d.info.folder,
+                d.folder,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
