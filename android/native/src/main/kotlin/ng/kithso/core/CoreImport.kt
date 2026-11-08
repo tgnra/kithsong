@@ -75,6 +75,10 @@ class CoreImport(
         val isSingle: Boolean,
         /** A single's track title; empty for a release. */
         val track: String,
+        /** "Album", "Single", "EP", ...; empty when unknown. */
+        val releaseType: String = "",
+        /** The label's catalogue number; empty when unknown. */
+        val catalog: String = "",
         /** In release order; for a single, just it. */
         val tracks: List<MatchTrack> = emptyList(),
     )
@@ -160,6 +164,8 @@ class CoreImport(
                 label = f[at + 8],
                 isSingle = f[at + 9] != "0",
                 track = f[at + 10],
+                releaseType = f[at + 11],
+                catalog = f[at + 12],
                 tracks = tracks[i].orEmpty(),
             )
         }
@@ -238,7 +244,7 @@ class CoreImport(
 
     private companion object {
         // jni_bridge.c
-        const val MATCH_FIELDS = 11
+        const val MATCH_FIELDS = 13
         const val TRACK_FIELDS = 7
         const val FILE_FIELDS = 6
 

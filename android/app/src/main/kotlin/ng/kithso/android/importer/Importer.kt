@@ -35,9 +35,18 @@ sealed interface ImportSource {
 @Immutable
 data class ItemKey(val batch: Int, val item: Int)
 
-/** An item waiting for a decision, as the review list shows it. */
+/**
+ * An item of a session still open, as the import's list shows it: [state] and [outcome] say how
+ * it's going, [reason] why it failed or waits, if the core says.
+ */
 @Immutable
-data class ReviewEntry(val key: ItemKey, val name: String, val reason: String?)
+data class ImportEntry(
+    val key: ItemKey,
+    val name: String,
+    val state: CoreImport.State,
+    val reason: String?,
+    val outcome: CoreImport.Outcome = CoreImport.Outcome.None,
+)
 
 /** An item open in the review: what it is and its candidates on MusicBrainz. */
 @Immutable
@@ -84,8 +93,12 @@ data class ImportProgress(
     val unreachable: Int = 0,
     /** Tagging was skipped, so everything is imported with the tags it has. */
     val taggingSkipped: Boolean = false,
-    /** The items waiting for a decision, in order. */
-    val reviewItems: List<ReviewEntry> = emptyList(),
+    /**
+     * The items of the sessions still open, in order: those waiting for a decision, and those
+     * imported, skipped or failed beside them, which can be opened again until their session
+     * closes. Items whose files all went to another item are left out.
+     */
+    val entries: List<ImportEntry> = emptyList(),
     /** "Name: why" for each item that failed, and for what couldn't be copied. */
     val problems: List<String> = emptyList(),
     /** "Name: what happened" for each item the library already had some of. */
@@ -105,6 +118,9 @@ data class ImportProgress(
     }
 
     val settled: Int get() = imported + review + skipped + failed
+
+    /** The items waiting for a decision, in order. */
+    val reviewItems: List<ImportEntry> get() = entries.filter { it.state == CoreImport.State.Review }
 }
 
 /**
@@ -160,6 +176,8 @@ class Importer(
         /** Events that arrived before [session] was set. */
         val early = mutableListOf<Event>()
         val names = HashMap<Int, String>()
+        /** What writing each finished item did, as [noteOutcome] found it. */
+        val outcomes = HashMap<Int, CoreImport.Outcome>()
         /** Picks being applied, one at a time, as the core renumbers files at each. */
         val assigns = ArrayDeque<Assign>()
     }
@@ -332,7 +350,7 @@ class Importer(
         }
     }
 
-    /** What the review shows of [key], or null once it's gone. */
+    /** What an item's page shows of [key], whatever its state, or null once its session is gone. */
     suspend fun details(key: ItemKey): ReviewDetails? = withContext(thread) {
         val batch = batches.getOrNull(key.batch) ?: return@withContext null
         val session = batch.session ?: return@withContext null
@@ -629,7 +647,9 @@ class Importer(
 
     // What's said of an item the library already had some of, kept for when its session is closed.
     private fun noteOutcome(batch: Batch, session: CoreImport, item: Int) {
-        val text = when (session.itemInfo(item).outcome) {
+        val outcome = session.itemInfo(item).outcome
+        batch.outcomes[item] = outcome
+        val text = when (outcome) {
             CoreImport.Outcome.Moved -> {
                 moved += ItemKey(batch.id, item)
                 return
@@ -647,6 +667,7 @@ class Importer(
         if (batch.closed || batch.assigns.isNotEmpty()) return
         batch.closed = true
         batch.names.clear()
+        batch.outcomes.clear()
         batch.idle.complete(Unit)
         batch.session?.close()
         batch.session = null
@@ -716,7 +737,7 @@ class Importer(
             offline = !skipTagging && batches.any { !it.closed && it.offline },
             unreachable = if (skipTagging) 0 else unreachableCount(),
             taggingSkipped = skipTagging,
-            reviewItems = reviewEntries(),
+            entries = entries(),
             problems = copyProblems + failures(),
             outcomes = outcomes.values.toList(),
         )
@@ -727,11 +748,19 @@ class Importer(
         batch.states.indices.count { batch.states[it] == CoreImport.State.Review && session.itemUnreachable(it) }
     }
 
-    private fun reviewEntries(): List<ReviewEntry> = batches.flatMap { batch ->
+    private fun entries(): List<ImportEntry> = batches.flatMap { batch ->
         val session = batch.session ?: return@flatMap emptyList()
-        batch.states.indices.filter { batch.states[it] == CoreImport.State.Review }.map { item ->
+        batch.states.indices.mapNotNull { item ->
+            val key = ItemKey(batch.id, item)
+            if (key in moved) return@mapNotNull null
+            val state = batch.states[item]
             val name = batch.names.getOrPut(item) { session.itemName(item) }
-            ReviewEntry(ItemKey(batch.id, item), name, session.itemError(item))
+            // Done and skipped items say what they are by their state and outcome.
+            val reason = when (state) {
+                CoreImport.State.Review, CoreImport.State.Failed, CoreImport.State.Pending -> session.itemError(item)
+                else -> null
+            }
+            ImportEntry(key, name, state, reason, batch.outcomes[item] ?: CoreImport.Outcome.None)
         }
     }
 
@@ -780,7 +809,7 @@ class Importer(
         source.refresh()
         source.onChanged()
         val p = state.value
-        state.value = p?.copy(phase = phase, reviewItems = emptyList(), offline = false)
+        state.value = p?.copy(phase = phase, entries = emptyList(), offline = false)
         failedNames.clear()
         outcomes.clear()
         moved.clear()

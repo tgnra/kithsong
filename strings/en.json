@@ -1315,7 +1315,7 @@
     "import_copy_failed": { "text": "{0}: couldn't be read", "note": "A picked file that couldn't be copied for the import. {0} is its name." },
     "import_read_failed": "Couldn't read everything that was picked",
     "import_no_space": { "text": "{0}: not enough free space ({1} needed twice over)", "note": "A picked folder or zip that was left out. {0} is its name, {1} its size, e.g. \"1.2 GB\": it's copied in, then into the library." },
-    "import_review_open": { "text": "Review", "note": "Button on the import card: opens the list of items waiting for a decision." },
+    "import_review_open": { "text": "Review", "note": "Button on the import card: opens the page of the import's albums and tracks, those waiting for a decision first." },
     "import_skip_all": "Skip all",
     "import_tags_all": { "text": "Keep tags for all", "note": "Imports every item waiting for a decision with the tags its files already have." },
     "import_review_empty": "Nothing is waiting for a decision.",
@@ -1324,6 +1324,8 @@
     "import_search_artist": "Artist",
     "import_search_title": { "text": "Album, or track for a single", "note": "Field of the import's search: what to search MusicBrainz for." },
     "import_files_count": { "one": "{0:d} file", "other": "{0:d} files" },
+    "import_matches_empty": { "text": "No matches yet. Search again, or keep the existing tags.", "note": "On the page of an imported album or track, under Matches, when MusicBrainz (the online music database) gave no candidates." },
+    "import_unpick": { "text": "Don't use this file", "note": "Menu item of a track on the page of an imported album, after a file was chosen for it with Choose file: takes the file back, so the track is missing again." },
 
     "settings_permissions": "Permissions",
     "permission_notifications": "Notifications",

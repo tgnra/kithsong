@@ -67,6 +67,7 @@ import ng.kithso.android.data.SmartListEditor
 import ng.kithso.android.data.TagTarget
 import ng.kithso.android.data.Track
 import ng.kithso.android.importer.Importer
+import ng.kithso.android.importer.ItemKey
 import ng.kithso.android.playback.Playback
 import ng.kithso.android.playback.origin
 import ng.kithso.android.sync.SyncStatus
@@ -460,6 +461,8 @@ fun App(
                 onOpen = pageOpen,
                 onBack = dismiss,
             )
+            Page.Import -> ImportScreen(importer, pagePadding, onOpen = { nav = nav.push(Page.ImportItem(it.batch, it.item)) }, onBack = dismiss)
+            is Page.ImportItem -> ImportItemScreen(importer, ItemKey(page.batch, page.item), pagePadding, onBack = dismiss)
             Page.Player -> Unit
         }
     }
@@ -472,7 +475,7 @@ fun App(
             { modifier ->
                 Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (stress) StressCard()
-                    importProgress?.let { ImportCard(it, importer) }
+                    importProgress?.let { ImportCard(it, importer, onReview = { nav = nav.push(Page.Import) }) }
                     merge?.let { MergeCard(it, onDismiss = syncer::dismissMerge) }
                     if (problems.text.isNotEmpty() && !stress) ProblemsCard(problems, onRemove = syncer::removeLost)
                     if (waiting.tracks > 0) WaitingCard(waiting)

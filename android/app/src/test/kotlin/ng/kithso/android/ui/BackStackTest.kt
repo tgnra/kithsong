@@ -76,7 +76,7 @@ class BackStackTest {
         val pages = listOf(
             albumInGroup,
             Page.Settings, Page.Licenses, Page.License("licenses/a:b.txt"), Page.Sync, Page.RecycleBin,
-            Page.Device("uid:1"), Page.Search, album, Page.Player,
+            Page.Device("uid:1"), Page.Search, album, Page.Import, Page.ImportItem(2, 13), Page.Player,
         )
         for (page in pages) assertEquals(page, Page.decode(Page.encode(page)))
     }

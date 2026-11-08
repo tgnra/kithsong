@@ -82,6 +82,11 @@ sealed interface Page {
 
     /** A track list, over the main list or the search it was found in. */
     data class Collection(val ref: CollectionRef) : Page
+    /** The import's items, from its card's Review. */
+    data object Import : Page
+
+    /** One of the import's items, over [Import], to look at and settle: [batch] and [item] as in an ItemKey. */
+    data class ImportItem(val batch: Int, val item: Int) : Page
     data object Player : Page
 
     companion object {
@@ -96,6 +101,8 @@ sealed interface Page {
             Stats -> "stats"
             is Collection -> page.ref.group?.let { "grouplist:${URLEncoder.encode(it, "UTF-8")}:${page.ref.uid}" }
                 ?: "list:${page.ref.kind.name}:${page.ref.uid}"
+            Import -> "import"
+            is ImportItem -> "importitem:${page.batch}:${page.item}"
             Player -> "player"
         }
 
@@ -110,6 +117,8 @@ sealed interface Page {
                 "device" -> Device(rest)
                 "search" -> Search
                 "stats" -> Stats
+                "import" -> Import
+                "importitem" -> ImportItem(rest.substringBefore(':').toInt(), rest.substringAfter(':').toInt())
                 "list" -> Collection(
                     CollectionRef(CollectionRef.Kind.valueOf(rest.substringBefore(':')), rest.substringAfter(':')),
                 )

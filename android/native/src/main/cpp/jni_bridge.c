@@ -702,11 +702,12 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemInfo(JNI
   return out;
 }
 
-#define MATCH_FIELDS 11
+#define MATCH_FIELDS 13
 
 /* The item's candidates, best first, flattened MATCH_FIELDS strings each, in
  * CoreImport.Match's order: album, album artist, release, year, confidence in thousandths,
- * track count, format, country, label, whether it's a single, and a single's track title. */
+ * track count, format, country, label, whether it's a single, a single's track title, release
+ * type and catalogue number. */
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemMatches(JNIEnv *env, jclass cls,
                                                                               jlong handle, jint item) {
   (void)cls;
@@ -728,7 +729,8 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemMatches(
           put_int(env, out, at + 5, m->track_count) && put_string(env, out, at + 6, m->format) &&
           put_string(env, out, at + 7, m->country) && put_string(env, out, at + 8, m->label) &&
           put_int(env, out, at + 9, m->is_single) &&
-          put_string(env, out, at + 10, m->is_single && m->track_count ? m->tracks[0].title : NULL)))
+          put_string(env, out, at + 10, m->is_single && m->track_count ? m->tracks[0].title : NULL) &&
+          put_string(env, out, at + 11, m->release_type) && put_string(env, out, at + 12, m->catalog)))
       out = NULL;
   }
   mc_import_item_free(it);
