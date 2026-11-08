@@ -315,7 +315,9 @@ int main(int argc, char **argv) {
    * device list carries both. */
   if (pair(a, b)) {
     uint64_t before = mc_mono_ms();
-    mc_sleep_ms(5);
+    /* Past a tick of the clock: it moves in 15.6 ms steps on Windows, and b stamps out_ok
+     * the moment its loopback connect lands. */
+    mc_sleep_ms(32);
     int sa = a->ndone;
     CHECK(mc_sync_now(b->sync, a->uid) == MC_OK);
     uint64_t end = mc_mono_ms() + WAIT_MS;
