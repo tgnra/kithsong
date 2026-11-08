@@ -113,8 +113,11 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * earliest), looked up in full when it's written: that release's album, album artist, ids,
  * track and disc numbers and date, under Artist/Album (Year)/ like any album track. A loose
  * track with no album tag imported as-is, or a recording on no release, gets no album and
- * goes in Artist/. An album with one track in the library is a single: the album listings
- * leave it out, and mc_library_list_artist_singles() lists it (library.h).
+ * goes in Artist/, unless it's long enough to be a mix or embeds a picture: then it gets an
+ * album of its title, in Artist/Title/, the picture being its cover. A single's own embedded
+ * picture comes before a cover in the folder it came from; with neither, the release's
+ * cover is downloaded as for an album. An album with one track in the library is a single:
+ * the album listings leave it out, and mc_library_list_artist_singles() lists it (library.h).
  *
  * Offline: before matching, and whenever a lookup fails with a network error, the session
  * checks whether MusicBrainz is reachable (mc_musicbrainz_reachable). While it isn't, items

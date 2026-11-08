@@ -381,8 +381,10 @@ A single is filed as what it is on MusicBrainz: a track of a release, like any a
   file goes in `<artist>/<title>.<ext>`. Unless it's long enough to be a continuous mix (30
   minutes, see [Album flags](schema.md#album-flags)), when it gets an album of its title,
   under `<artist>/<title>/`, for the flag to be on: a mix with no match on MusicBrainz is
-  usually such a file. A recording on no release of that length gets one the same way, and a
-  shorter one no album.
+  usually such a file. So does one with a picture embedded, for the picture to be its cover
+  (see [Cover art](#cover-art)): art is an album's, and a track with no album has none. A
+  recording on no release that's that long or embeds a picture gets one the same way, and
+  any other no album.
 - a single of that length, with an album of its own or the one just made, is a mix unless the
   user says otherwise: an album to the listings and search, and not a single.
 - there's no "&lt;artist&gt; Singles" album any more. Albums and files made as one before
@@ -625,16 +627,22 @@ where the local art is missing or low resolution:
      JPEG or PNG up to 16 MB): the first file that has one, in disc and track order. So
      where only some tracks embed art, the first of those gives it; where each disc embeds
      its own, disc 1's is the album's.
+
+   For a single (a loose track, see Group) the order is the other way round: the picture
+   embedded in it comes first, then the folder's cover. The picture is the file's own,
+   where a folder of loose files (Downloads, say) may have a cover belonging to any of
+   them, or to none.
 3. a local cover whose shorter side is at least **500 px** (`MC_COVER_LOW_RES` in
    `coverart.h`) is used, with no request. Its size comes from the JPEG or PNG header
    (`stbi_info`), nothing is decoded; a header that can't be read counts as big enough, so
    the cover is kept as before rather than replaced on a guess.
-4. a local cover below 500 px, or none, and the item is matched (as-is imports have no
-   release to look up) and downloading is on (`mc_import_options.fetch_art`): one download
-   is tried, the first of
+4. a local cover below 500 px, or none, and the item is matched, or imported as-is with a
+   `MUSICBRAINZ_ALBUMID` or `MUSICBRAINZ_RELEASEGROUPID` tag, and downloading is on
+   (`mc_import_options.fetch_art`): one download is tried, the first of
    1. Cover Art Archive `release/<id>/front-1200`,
    2. Cover Art Archive `release-group/<id>/front-1200`,
-   3. iTunes Search (`entity=album`). A result is used only if its album and artist names
+   3. for a match only (as-is tags could say anything), iTunes Search (`entity=album`). A
+      result is used only if its album and artist names
       are both close (combined distance below 0.25). The 100 px artwork URL is rewritten to
       1200 px.
 

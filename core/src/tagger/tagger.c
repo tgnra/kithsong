@@ -1551,13 +1551,16 @@ static const char *chosen_cover(mc_library *lib, const char *dir, const char *ui
  * folder of a whole release that moves, files moved within the library). Otherwise the
  * local cover, the one in the folder the files came from (source_cover()), else the first
  * picture embedded in one of the files (p, n of them), is used unless it's low resolution
- * (MC_COVER_LOW_RES) and a download is bigger; with no local cover, a download is. Nothing
- * is downloaded for local art that's big enough, or whose size its header doesn't give.
- * Returns the cover's hash in hash, or NULL if the album has none. Failures here never fail
- * the import. */
+ * (MC_COVER_LOW_RES) and a download is bigger; with no local cover, a download is. For a
+ * single (a loose file), the picture embedded in it comes before the folder's cover: the
+ * picture is the file's own, where the folder may hold any number of loose files. A match
+ * downloads by its release; an item imported as-is by the MusicBrainz ids in its tags, if it
+ * has any. Nothing is downloaded for local art that's big enough, or whose size its header
+ * doesn't give. Returns the cover's hash in hash, or NULL if the album has none. Failures
+ * here never fail the import. */
 static const char *ensure_cover(mc_import *imp, mc_library *lib, const mc_db_album *album,
                                 const char *album_rel, const char *source_dir, const placement *p,
-                                int n, const mb_release *rel, char hash[MC_ART_HASH_LEN]) {
+                                int n, int single, const mb_release *rel, char hash[MC_ART_HASH_LEN]) {
   char *dir = mc_library_abspath(lib, album_rel);
   if (!dir) return NULL;
   char chosen_uid[MC_UID_STRLEN], chosen[MC_ART_HASH_LEN];
@@ -1576,6 +1579,10 @@ static const char *ensure_cover(mc_import *imp, mc_library *lib, const mc_db_alb
     /* The embedded picture, or the source file's bytes (only to measure them). */
     mc_buffer image = {NULL, 0};
     const char *ext = NULL;
+    if (single && n > 0 && mc_coverart_read_embedded(p[0].dest_abs, &image, &ext) == MC_OK) {
+      free(source);
+      source = NULL;
+    }
     if (source) mc_coverart_read_file(source, &image);
     for (int i = 0; i < n && !source && !image.data; i++)
       mc_coverart_read_embedded(p[i].dest_abs, &image, &ext);
@@ -1583,11 +1590,15 @@ static const char *ensure_cover(mc_import *imp, mc_library *lib, const mc_db_alb
     int side = image.data ? mc_coverart_short_side(&image) : 0;
     if (source) mc_buffer_free(&image);
 
-    if ((!local || (side > 0 && side < MC_COVER_LOW_RES)) && rel && imp->fetch_art && !cancelled(imp)) {
+    int ids = album->mb_albumid || album->mb_releasegroupid;
+    if ((!local || (side > 0 && side < MC_COVER_LOW_RES)) && (rel || ids) && imp->fetch_art &&
+        !cancelled(imp)) {
+      /* Names (for iTunes, which matches by name) only for a match: as-is tags could say
+       * anything. album's ids are the release's for a match. */
       mc_buffer img;
       const char *img_ext;
-      if (mc_coverart_fetch(rel->id, rel->releasegroup_id, rel->artist, rel->title, &img, &img_ext,
-                            &imp->http_cancel) == MC_OK) {
+      if (mc_coverart_fetch(album->mb_albumid, album->mb_releasegroupid, rel ? rel->artist : NULL,
+                            rel ? rel->title : NULL, &img, &img_ext, &imp->http_cancel) == MC_OK) {
         /* Never swapped for one that isn't bigger. */
         if (!local || mc_coverart_short_side(&img) > side) {
           free(source);
@@ -1757,6 +1768,21 @@ static void finish_swaps(mc_library *lib, placement *p, int n) {
   }
 }
 
+/* Whether a lone track that would have no album gets one of its title instead: a mix and a
+ * cover are an album's, so one long enough to be a mix gets one for the flag to be on, and
+ * one with a picture embedded for the picture to be its cover (see "Singles" in
+ * docs/tagging-rules.md). */
+static int needs_own_album(mc_import *imp, const item *it) {
+  if (it->file_count != 1) return 0;
+  const file_entry *f = &imp->files[it->files[0]];
+  if (f->tags.duration_ms >= MC_MIX_MIN_MS) return 1;
+  mc_buffer pic;
+  const char *ext;
+  if (mc_coverart_read_embedded(f->path, &pic, &ext) != MC_OK) return 0;
+  mc_buffer_free(&pic);
+  return 1;
+}
+
 /* Applies a candidate (or the existing tags, if match < 0): files are copied or moved into
  * place, tagged, given a cover, and only then recorded in the library. A failure at any step
  * puts the files back. Runs on the import thread. */
@@ -1806,7 +1832,8 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
     /* A recording whose release couldn't be looked up keeps what the search had: the
      * release's title and ids, but no tracklist or album artist, for which its first
      * credited artist stands in. A recording on no release has no album, but for one long
-     * enough to be a mix, which gets one of its title, as a file imported as-is does. */
+     * enough to be a mix or with a picture embedded, which gets one of its title, as a file
+     * imported as-is does (needs_own_album()). */
     int partial = c->from_recording && lone < 0;
     album.no_album = !rel->id || !rel->title;
     album.title = rel->title;
@@ -1817,8 +1844,7 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
     album.disc_total = rel->disc_total;
     album.mb_albumid = rel->id;
     album.mb_releasegroupid = rel->releasegroup_id;
-    int own_album = album.no_album && it->file_count == 1 && map[0] >= 0 &&
-                    item_tags(imp, it, 0)->duration_ms >= MC_MIX_MIN_MS && rel->tracks[map[0]].title;
+    int own_album = album.no_album && map[0] >= 0 && rel->tracks[map[0]].title && needs_own_album(imp, it);
     if (own_album) {
       const mb_track *tr = &rel->tracks[map[0]];
       album.no_album = 0;
@@ -1908,9 +1934,9 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
     /* Discs joined by their album tags are one album, of the title they share. */
     album.title = it->joined ? it->album : first->album;
     album.no_album = !album.title;
-    /* A mix is an album's flag, so one long track with no album tag gets an album of its
-     * title to be a mix on (see "Singles" in docs/tagging-rules.md). */
-    if (album.no_album && it->file_count == 1 && first->duration_ms >= MC_MIX_MIN_MS) {
+    /* One long track, or one bringing a picture, with no album tag gets an album of its
+     * title (needs_own_album()). */
+    if (album.no_album && needs_own_album(imp, it)) {
       album.title = first->title ? first->title : it->album;
       album.no_album = !album.title;
     }
@@ -1982,7 +2008,8 @@ static void write_item(mc_import *imp, mc_library *lib, int idx, int match) {
   }
 
   if (!error && !all_dupes) {
-    if (!album.no_album) album.art_hash = ensure_cover(imp, lib, &album, cover_dir, source_dir, places, count, rel, hash);
+    if (!album.no_album) album.art_hash = ensure_cover(imp, lib, &album, cover_dir, source_dir, places, count,
+                                                      it->kind == MC_IMPORT_SINGLE, rel, hash);
     for (int i = 0; i < count; i++) {
       mc_db_track *t = &rows[i];
       t->path = places[i].dest_rel;
