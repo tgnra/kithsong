@@ -734,7 +734,8 @@ static void show_pending(HWND dlg) {
     const review_row *r = row_at(lv, i);
     if (!r) continue;
     if (r->track >= 0 && r->track == g_view.pending.track) track = i;
-    else if (r->track < 0 && !r->removed && r->from_item == g_view.pending.from_item && r->file == g_view.pending.file) file = i;
+    else if (r->track < 0 && !r->removed && r->from_item == g_view.pending.from_item && r->file == g_view.pending.file)
+      file = i;
   }
   if (track < 0 || file < 0) return;
   for (int col = 3; col <= 5; col++) {

@@ -27,6 +27,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -144,7 +146,11 @@ private fun entryStatus(entry: ImportEntry): String = when (entry.state) {
         },
     )
     CoreImport.State.Skipped -> stringResource(
-        if (entry.outcome == CoreImport.Outcome.Duplicate) R.string.import_state_duplicate else R.string.import_state_skipped,
+        when (entry.outcome) {
+            CoreImport.Outcome.Duplicate -> R.string.import_state_duplicate
+            CoreImport.Outcome.Removed -> R.string.import_state_removed
+            else -> R.string.import_state_skipped
+        },
     )
     CoreImport.State.Failed -> entry.reason ?: stringResource(R.string.import_state_failed)
 }
@@ -165,6 +171,9 @@ private val TwoPaneWidth = 720.dp
  * now, and its length), then the files left over and, with tracks missing, those of other items
  * from its folder. A missing track takes one of those files from its menu (a tap, or a long
  * press, which every track row has for what it can do), and gives it back from the same menu.
+ * While it's in review, a file can be removed from the import: a left-over or other item's file
+ * by its delete button, a track's file by Remove from import in the track's menu (the track is
+ * missing then). The removed files are listed last, each with Put back.
  * At the bottom, Skip, Keep existing tags and Use this match, which applies the chosen files too.
  *
  * An item already imported can be opened as well, while its session is open, to import it again
@@ -182,8 +191,9 @@ fun ImportItemScreen(importer: Importer, key: ItemKey, bottomPadding: Dp, onBack
         loaded = true
     }
     val d = details
-    // Gone with its session, or its files all went to another item.
-    val gone = loaded && (d == null || d.files.isEmpty())
+    // Gone with its session, or its files all went to another item. One whose files were all
+    // removed from the import stays, to put them back.
+    val gone = loaded && (d == null || (d.files.isEmpty() && d.removed.isEmpty()))
     LaunchedEffect(gone) { if (gone) onBack() }
     var chosen by rememberSaveable(key) { mutableStateOf<Int?>(null) }
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
@@ -194,7 +204,10 @@ fun ImportItemScreen(importer: Importer, key: ItemKey, bottomPadding: Dp, onBack
             }
             return@Surface
         }
+        // With every file removed, there's nothing to decide but putting them back.
         val busy = d.info.state.isBusy
+        // With every file removed, there's nothing to decide but putting them back.
+        val locked = busy || d.files.isEmpty()
         // As the desktops: the match it was written with, else the best.
         val index = (chosen ?: d.info.chosen.takeIf { it >= 0 } ?: 0).takeIf { it < d.matches.size } ?: -1
         val match = d.matches.getOrNull(index)
@@ -208,19 +221,19 @@ fun ImportItemScreen(importer: Importer, key: ItemKey, bottomPadding: Dp, onBack
                     Column(Modifier.windowInsetsPadding(pageSides())) { ItemHeader(d, busy, onBack) }
                     Row(Modifier.weight(1f).fillMaxWidth()) {
                         LazyColumn(Modifier.weight(1f).fillMaxSize(), contentPadding = sides) {
-                            searchSection(d, busy, offline, importer)
-                            matchesSection(d, index, busy) { chosen = it }
+                            searchSection(d, locked, offline, importer)
+                            matchesSection(d, index, locked) { chosen = it }
                         }
                         LazyColumn(Modifier.weight(1.3f).fillMaxSize(), contentPadding = sides) {
-                            tracksSection(d, match, picks, busy)
+                            tracksSection(d, match, picks, busy, importer)
                         }
                     }
                 } else {
                     LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = sides) {
                         item(key = "header") { ItemHeader(d, busy, onBack) }
-                        searchSection(d, busy, offline, importer)
-                        matchesSection(d, index, busy) { chosen = it }
-                        tracksSection(d, match, picks, busy)
+                        searchSection(d, locked, offline, importer)
+                        matchesSection(d, index, locked) { chosen = it }
+                        tracksSection(d, match, picks, busy, importer)
                     }
                 }
                 HorizontalDivider()
@@ -236,21 +249,21 @@ fun ImportItemScreen(importer: Importer, key: ItemKey, bottomPadding: Dp, onBack
                             importer.skip(key)
                             onBack()
                         },
-                        enabled = !busy && d.info.state != CoreImport.State.Done,
+                        enabled = !locked && d.info.state != CoreImport.State.Done,
                     ) { Text(stringResource(R.string.import_skip)) }
                     OutlinedButton(
                         onClick = {
                             importer.acceptAsIs(key)
                             onBack()
                         },
-                        enabled = !busy,
+                        enabled = !locked,
                     ) { Text(stringResource(R.string.import_as_tagged)) }
                     Button(
                         onClick = {
                             importer.accept(key, index, picks.map { (track, c) -> TrackPick(track, c.fromItem, c.file.path) })
                             onBack()
                         },
-                        enabled = !busy && match != null,
+                        enabled = !locked && match != null,
                     ) { Text(stringResource(R.string.import_use_match)) }
                 }
             }
@@ -373,7 +386,9 @@ private fun LazyListScope.tracksSection(
     match: CoreImport.Match?,
     picks: MutableMap<Int, Candidate>,
     busy: Boolean,
+    importer: Importer,
 ) {
+    val canRemove = d.canRemove && !busy
     val album = d.info.kind == CoreImport.Kind.Album
     val tracks = match?.tracks.orEmpty()
     val used = tracks.mapNotNull { t -> t.file.takeIf { it >= 0 } }.toSet()
@@ -420,6 +435,16 @@ private fun LazyListScope.tracksSection(
                         },
                     )
                 }
+                // A file on its track: no button, as a track's file isn't clutter, but the menu has it.
+                file != null && pick == null && canRemove -> { close ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.import_remove_from_import)) },
+                        onClick = {
+                            close()
+                            importer.remove(d.key, d.key.item, file.path)
+                        },
+                    )
+                }
                 choices.isNotEmpty() -> { close ->
                     Text(
                         stringResource(R.string.import_use_as_track, number),
@@ -461,6 +486,7 @@ private fun LazyListScope.tracksSection(
                     .joinToString(" · ").ifEmpty { null },
                 noteIsAction = false,
                 menu = null,
+                action = if (canRemove) ({ RemoveButton { importer.remove(d.key, c.fromItem, c.file.path) } }) else null,
             )
         }
     }
@@ -469,11 +495,48 @@ private fun LazyListScope.tracksSection(
             Column {
                 for (c in relatedCandidates(d, true)) {
                     if (picks.values.none { it.file.path == c.file.path }) {
-                        TrackRow(c.file.name, null, c.file.durationMs, null, c.group, noteIsAction = false, menu = null)
+                        val removable = !busy && d.related.any { it.item == c.fromItem && it.canRemove }
+                        TrackRow(
+                            c.file.name, null, c.file.durationMs, null, c.group, noteIsAction = false, menu = null,
+                            action = if (removable) ({ RemoveButton { importer.remove(d.key, c.fromItem, c.file.path) } }) else null,
+                        )
                     }
                 }
             }
         }
+    }
+    // Files removed from the import, its own and those of other items from its folder: left as
+    // they are, until put back.
+    val removed = d.removed.map { Triple(d.key.item, it, d.canPutBack) } + d.related.flatMap { other ->
+        other.removed.map { Triple(other.item, it, other.canPutBack) }
+    }
+    if (removed.isNotEmpty()) {
+        item(key = "removed") { SettingsHeading(stringResource(R.string.import_removed_heading)) }
+        items(removed.size, key = { "removed:${removed[it].second.path}" }) { i ->
+            val (from, file, canPutBack) = removed[i]
+            TrackRow(
+                title = file.name,
+                trackTitle = null,
+                lengthMs = file.durationMs,
+                file = null,
+                note = file.title.ifEmpty { null },
+                noteIsAction = false,
+                menu = null,
+                action = if (canPutBack && !busy) ({
+                    TextButton(onClick = { importer.putBack(d.key, from, file.path) }) {
+                        Text(stringResource(R.string.import_put_back))
+                    }
+                }) else null,
+            )
+        }
+    }
+}
+
+// A file's delete button: removes it from the import (it stays where it is).
+@Composable
+private fun RemoveButton(onClick: () -> Unit) {
+    IconButton(onClick = onClick) {
+        Icon(Icons.Delete, contentDescription = stringResource(R.string.import_remove_from_import))
     }
 }
 
@@ -492,7 +555,8 @@ private fun relatedCandidates(d: ReviewDetails, wanted: Boolean): List<Candidate
  * to (its name, the title it's tagged with now when that's different, and its length), or a file
  * of its own. [note] says what's missing or where the file comes from, in the primary colour when
  * it's what a tap does ([noteIsAction]). [menu] is what can be done with the row, opened by a tap
- * and by a long press; every row has the slot, so an action for any track goes there.
+ * and by a long press; every row has the slot, so an action for any track goes there. [action] is a
+ * button at its end, such as a file's delete button.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -504,6 +568,7 @@ private fun TrackRow(
     note: String?,
     noteIsAction: Boolean,
     menu: (@Composable (close: () -> Unit) -> Unit)?,
+    action: (@Composable () -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     val lines = listOfNotNull(
@@ -527,16 +592,19 @@ private fun TrackRow(
                 }
             }),
             trailingContent = {
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(formatTime(lengthMs.toLong()))
-                    // The file's own length, beside the track's, as the desktops' columns have it.
-                    if (file != null) {
-                        Text(
-                            formatTime(file.durationMs.toLong()),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(formatTime(lengthMs.toLong()))
+                        // The file's own length, beside the track's, as the desktops' columns have it.
+                        if (file != null) {
+                            Text(
+                                formatTime(file.durationMs.toLong()),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
+                    action?.invoke()
                 }
             },
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),

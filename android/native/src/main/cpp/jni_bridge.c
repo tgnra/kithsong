@@ -679,7 +679,7 @@ static int put_int(JNIEnv *env, jobjectArray out, jsize i, long long v) {
 }
 
 /* A snapshot of the item as strings, in CoreImport.ItemInfo's order: kind, state, file count,
- * artist, album, folder, error, searched wider, outcome, chosen, match count. */
+ * artist, album, folder, error, searched wider, outcome, chosen, match count, removed count. */
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemInfo(JNIEnv *env, jclass cls,
                                                                            jlong handle, jint item) {
   (void)cls;
@@ -690,13 +690,14 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemInfo(JNI
     return NULL;
   }
   jclass string_class = (*env)->FindClass(env, "java/lang/String");
-  jobjectArray out = string_class ? (*env)->NewObjectArray(env, 11, string_class, NULL) : NULL;
+  jobjectArray out = string_class ? (*env)->NewObjectArray(env, 12, string_class, NULL) : NULL;
   if (out && !(put_int(env, out, 0, it->kind) && put_int(env, out, 1, it->state) &&
                put_int(env, out, 2, it->file_count) && put_string(env, out, 3, it->artist) &&
                put_string(env, out, 4, it->album) && put_string(env, out, 5, it->folder) &&
                put_string(env, out, 6, it->error) && put_int(env, out, 7, it->searched_wider) &&
                put_int(env, out, 8, it->outcome) && put_int(env, out, 9, it->chosen) &&
-               put_int(env, out, 10, it->match_count)))
+               put_int(env, out, 10, it->match_count) &&
+               put_int(env, out, 11, it->removed_count)))
     out = NULL;
   mc_import_item_free(it);
   return out;
@@ -774,10 +775,11 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeSearch(JNIEnv *env, 
 
 #define FILE_FIELDS 6
 
-/* The item's files, flattened FILE_FIELDS strings each, in CoreImport.ItemFile's order: path,
- * title, artist, track, disc, length in ms. */
+/* The item's files, or with removed its files removed from the import (mc_import_item.removed),
+ * flattened FILE_FIELDS strings each, in CoreImport.ItemFile's order: path, title, artist,
+ * track, disc, length in ms. */
 JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemFiles(JNIEnv *env, jclass cls, jlong handle,
-                                                                            jint item) {
+                                                                            jint item, jboolean removed) {
   (void)cls;
   mc_import_item *it = NULL;
   mc_status st = mc_import_item_get(import_of(handle), item, &it);
@@ -785,11 +787,13 @@ JNIEXPORT jobjectArray JNICALL Java_ng_kithso_core_CoreImport_nativeItemFiles(JN
     throw_status(env, st);
     return NULL;
   }
+  const mc_import_file *files = removed ? it->removed : it->files;
+  int count = removed ? it->removed_count : it->file_count;
   jclass string_class = (*env)->FindClass(env, "java/lang/String");
   jobjectArray out =
-      string_class ? (*env)->NewObjectArray(env, it->file_count * FILE_FIELDS, string_class, NULL) : NULL;
-  for (int i = 0; out && i < it->file_count; i++) {
-    const mc_import_file *f = &it->files[i];
+      string_class ? (*env)->NewObjectArray(env, count * FILE_FIELDS, string_class, NULL) : NULL;
+  for (int i = 0; out && i < count; i++) {
+    const mc_import_file *f = &files[i];
     jsize at = i * FILE_FIELDS;
     if (!(put_string(env, out, at, f->path) && put_string(env, out, at + 1, f->title) &&
           put_string(env, out, at + 2, f->artist) && put_int(env, out, at + 3, f->track) &&
@@ -849,6 +853,20 @@ JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeAssign(JNIEnv *env, 
                                                                   jint match, jint track, jint from_item, jint file) {
   (void)cls;
   mc_status st = mc_import_assign(import_of(handle), item, match, track, from_item, file);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativeRemove(JNIEnv *env, jclass cls, jlong handle, jint item,
+                                                                  jint file) {
+  (void)cls;
+  mc_status st = mc_import_remove(import_of(handle), item, file);
+  if (st != MC_OK) throw_status(env, st);
+}
+
+JNIEXPORT void JNICALL Java_ng_kithso_core_CoreImport_nativePutBack(JNIEnv *env, jclass cls, jlong handle, jint item,
+                                                                   jint removed) {
+  (void)cls;
+  mc_status st = mc_import_put_back(import_of(handle), item, removed);
   if (st != MC_OK) throw_status(env, st);
 }
 

@@ -38,7 +38,7 @@ class CoreImport(
     enum class Kind { Album, Single }
 
     /** mc_import_outcome: what writing an item did, beyond its state. */
-    enum class Outcome { None, Replaced, Added, Duplicate, Moved }
+    enum class Outcome { None, Replaced, Added, Duplicate, Moved, Removed }
 
     /** A snapshot of an item (mc_import_item, without its files). */
     data class ItemInfo(
@@ -56,6 +56,8 @@ class CoreImport(
         /** The match it was written with; -1 for its existing tags, or not yet decided. */
         val chosen: Int,
         val matchCount: Int,
+        /** Files removed from the import ([removedFiles]); not counted in [fileCount]. */
+        val removedCount: Int = 0,
     )
 
     /** One of an item's candidates on MusicBrainz (mc_import_match). Empty strings when unknown. */
@@ -143,6 +145,7 @@ class CoreImport(
             outcome = Outcome.entries.getOrElse(f[8].toInt()) { Outcome.None },
             chosen = f[9].toInt(),
             matchCount = f[10].toInt(),
+            removedCount = f[11].toInt(),
         )
     }
 
@@ -188,8 +191,12 @@ class CoreImport(
     }
 
     /** The item's files. Their indices change as [assign] moves files, so read them again after one. */
-    fun files(item: Int): List<ItemFile> {
-        val f = nativeItemFiles(handle, item)
+    fun files(item: Int): List<ItemFile> = fileList(nativeItemFiles(handle, item, false))
+
+    /** The item's files removed from the import with [remove], in the order they were removed. */
+    fun removedFiles(item: Int): List<ItemFile> = fileList(nativeItemFiles(handle, item, true))
+
+    private fun fileList(f: Array<String>): List<ItemFile> {
         return (0 until f.size / FILE_FIELDS).map { i ->
             val at = i * FILE_FIELDS
             ItemFile(f[at], f[at + 1], f[at + 2], f[at + 3].toInt(), f[at + 4].toInt(), f[at + 5].toInt())
@@ -204,6 +211,16 @@ class CoreImport(
      * [item] with that match (mc_import_assign). Neither may be busy.
      */
     fun assign(item: Int, match: Int, track: Int, fromItem: Int, file: Int) = nativeAssign(handle, item, match, track, fromItem, file)
+
+    /**
+     * Removes [file] of an item in review from the import (mc_import_remove): it's neither
+     * tagged nor imported, and stays where it is; a track it was on goes missing. File indices
+     * change, so read [files] again on [Event.ItemChanged].
+     */
+    fun remove(item: Int, file: Int) = nativeRemove(handle, item, file)
+
+    /** Puts [removed] (an index into [removedFiles]) back among the item's files (mc_import_put_back). */
+    fun putBack(item: Int, removed: Int) = nativePutBack(handle, item, removed)
 
     /** Imports an item that needs review with candidate [match]. */
     fun accept(item: Int, match: Int) = nativeAccept(handle, item, match)
@@ -269,9 +286,11 @@ class CoreImport(
         @JvmStatic external fun nativeItemInfo(handle: Long, item: Int): Array<String>
         @JvmStatic external fun nativeItemMatches(handle: Long, item: Int): Array<String>
         @JvmStatic external fun nativeItemTracks(handle: Long, item: Int): Array<String>
-        @JvmStatic external fun nativeItemFiles(handle: Long, item: Int): Array<String>
+        @JvmStatic external fun nativeItemFiles(handle: Long, item: Int, removed: Boolean): Array<String>
         @JvmStatic external fun nativeRelated(handle: Long, item: Int): IntArray
         @JvmStatic external fun nativeAssign(handle: Long, item: Int, match: Int, track: Int, fromItem: Int, file: Int)
+        @JvmStatic external fun nativeRemove(handle: Long, item: Int, file: Int)
+        @JvmStatic external fun nativePutBack(handle: Long, item: Int, removed: Int)
         @JvmStatic external fun nativeResolve(handle: Long, item: Int, how: Int)
         @JvmStatic external fun nativeAccept(handle: Long, item: Int, match: Int)
         @JvmStatic external fun nativeSearch(handle: Long, item: Int, artist: String?, title: String?)

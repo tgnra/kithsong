@@ -60,11 +60,30 @@ data class ReviewDetails(
     val related: List<RelatedItem>,
     /** Its folder as it was picked: the path under the copies' batch folder, or a zip's. */
     val folder: String = "",
-)
+    /** Its files removed from the import, which [Importer.putBack] can bring back. */
+    val removed: List<CoreImport.ItemFile> = emptyList(),
+) {
+    /** Its files can be removed from the import: it's in review. */
+    val canRemove: Boolean get() = info.state == CoreImport.State.Review
 
-/** Another item from an item's folder, in the review: its album, or a single's title. */
+    /** Its removed files can be put back: in review, or skipped for having none left. */
+    val canPutBack: Boolean get() = canRemove ||
+        (info.state == CoreImport.State.Skipped && info.outcome == CoreImport.Outcome.Removed)
+}
+
+/**
+ * Another item from an item's folder, in the review: its album, or a single's title, its files,
+ * and those removed from the import.
+ */
 @Immutable
-data class RelatedItem(val item: Int, val name: String, val files: List<CoreImport.ItemFile>)
+data class RelatedItem(
+    val item: Int,
+    val name: String,
+    val files: List<CoreImport.ItemFile>,
+    val removed: List<CoreImport.ItemFile> = emptyList(),
+    val canRemove: Boolean = false,
+    val canPutBack: Boolean = false,
+)
 
 /** A file picked for a missing track: [path] of item [fromItem], for [track] of the match. */
 @Immutable
@@ -105,6 +124,8 @@ data class ImportProgress(
     val problems: List<String> = emptyList(),
     /** "Name: what happened" for each item the library already had some of. */
     val outcomes: List<String> = emptyList(),
+    /** Counts the items' changes, so a change that leaves the rest as it was (a file removed) is news too. */
+    val changes: Int = 0,
 ) {
     enum class Phase {
         /** Copying files out of the picked folder or documents into the app's storage. */
@@ -182,11 +203,19 @@ class Importer(
         val outcomes = HashMap<Int, CoreImport.Outcome>()
         /** Picks being applied, one at a time, as the core renumbers files at each. */
         val assigns = ArrayDeque<Assign>()
+        /** Files being removed from the import or put back, one at a time, for the same reason. */
+        val edits = ArrayDeque<Edit>()
     }
 
     private class Assign(val item: Int, val match: Int, val pick: TrackPick) {
         var sent = false
     }
+
+    private class Edit(val item: Int, val path: String, val putBack: Boolean) {
+        var sent = false
+    }
+
+    private var changes = 0
 
     // Only touched on [thread].
     private val batches = mutableListOf<Batch>()
@@ -317,6 +346,23 @@ class Importer(
             nextAssign(batch)
         }
     }
+    /**
+     * Removes file [path] of item [fromItem] ([key]'s own, or a related item's) from the import
+     * (mc_import_remove): it isn't tagged or imported, and a track it was on goes missing.
+     */
+    fun remove(key: ItemKey, fromItem: Int, path: String) = edit(key, Edit(fromItem, path, putBack = false))
+
+    /** Puts back file [path] that was removed from item [fromItem] (mc_import_put_back). */
+    fun putBack(key: ItemKey, fromItem: Int, path: String) = edit(key, Edit(fromItem, path, putBack = true))
+
+    private fun edit(key: ItemKey, edit: Edit) {
+        scope.launch(thread) {
+            val batch = batches.getOrNull(key.batch) ?: return@launch
+            batch.edits += edit
+            nextEdit(batch)
+        }
+    }
+
     fun acceptAsIs(key: ItemKey) = resolve(key, CoreImport::acceptAsIs)
     fun skip(key: ItemKey) = resolve(key, CoreImport::skip)
     fun searchWider(key: ItemKey) = resolve(key, CoreImport::searchWider)
@@ -359,7 +405,15 @@ class Importer(
         try {
             val related = session.related(key.item).filterNot { session.itemState(it).isBusy }.map { item ->
                 val info = session.itemInfo(item)
-                RelatedItem(item, info.album, session.files(item))
+                val review = info.state == CoreImport.State.Review
+                RelatedItem(
+                    item,
+                    info.album,
+                    session.files(item),
+                    session.removedFiles(item),
+                    canRemove = review,
+                    canPutBack = review || (info.state == CoreImport.State.Skipped && info.outcome == CoreImport.Outcome.Removed),
+                )
             }
             val info = session.itemInfo(key.item)
             ReviewDetails(
@@ -370,6 +424,7 @@ class Importer(
                 session.files(key.item),
                 related,
                 shownFolder(info.folder),
+                session.removedFiles(key.item),
             )
         } catch (e: KithCoreException) {
             null
@@ -613,16 +668,25 @@ class Importer(
                 if (batch.states.isEmpty() || batch.states.all { it.isFinished }) settle(batch)
             }
             CoreImport.Event.ItemChanged -> {
+                changes++
                 nextAssign(batch)
+                nextEdit(batch)
                 if (e.arg in batch.states.indices) {
                     val before = batch.states[e.arg]
                     batch.states[e.arg] = session.itemState(e.arg)
                     if (batch.states[e.arg] == CoreImport.State.Done && before != CoreImport.State.Done) refreshNowAndThen()
                     if (batch.states[e.arg].isFinished) noteOutcome(batch, session, e.arg)
+                    else batch.outcomes.remove(e.arg) // a removed file put back: in review again
                     if (batch.scanned && batch.states.all { it.isFinished }) settle(batch)
                 }
             }
-            CoreImport.Event.Idle -> batch.idle.complete(Unit)
+            CoreImport.Event.Idle -> {
+                // Nothing is queued: an edit sent that changed nothing (the item moved on) is over.
+                if (batch.edits.firstOrNull()?.sent == true) batch.edits.removeFirst()
+                nextEdit(batch)
+                batch.idle.complete(Unit)
+                if (batch.scanned && batch.states.all { it.isFinished }) settle(batch)
+            }
             CoreImport.Event.Offline -> batch.offline = e.arg != 0
         }
         publish()
@@ -662,6 +726,35 @@ class Importer(
         }
     }
 
+    // Sends the batch's next removal or put back once the one before has been taken up: files are
+    // found by path when it's sent, as the core renumbers them at each.
+    private fun nextEdit(batch: Batch) {
+        val session = batch.session ?: return
+        while (true) {
+            val next = batch.edits.firstOrNull() ?: return
+            try {
+                if (next.sent) {
+                    val inFiles = session.files(next.item).any { it.path == next.path }
+                    if (inFiles != next.putBack) return // not taken up yet
+                    batch.edits.removeFirst()
+                    continue
+                }
+                val list = if (next.putBack) session.removedFiles(next.item) else session.files(next.item)
+                val file = list.indexOfFirst { it.path == next.path }
+                if (file < 0) {
+                    batch.edits.removeFirst()
+                    continue
+                }
+                if (next.putBack) session.putBack(next.item, file) else session.remove(next.item, file)
+                next.sent = true
+                return
+            } catch (e: KithCoreException) {
+                Log.w(TAG, "Couldn't remove a file from the import or put it back", e)
+                batch.edits.removeFirst()
+            }
+        }
+    }
+
     // What's said of an item the library already had some of, kept for when its session is closed.
     private fun noteOutcome(batch: Batch, session: CoreImport, item: Int) {
         val outcome = session.itemInfo(item).outcome
@@ -681,7 +774,7 @@ class Importer(
 
     // Every item of the batch is settled: close its session and delete its copies.
     private fun settle(batch: Batch) {
-        if (batch.closed || batch.assigns.isNotEmpty()) return
+        if (batch.closed || batch.assigns.isNotEmpty() || batch.edits.isNotEmpty()) return
         batch.closed = true
         batch.names.clear()
         batch.outcomes.clear()
@@ -757,6 +850,7 @@ class Importer(
             entries = entries(),
             problems = copyProblems + failures(),
             outcomes = outcomes.values.toList(),
+            changes = changes,
         )
     }
 
