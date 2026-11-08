@@ -78,16 +78,32 @@ typedef struct view {
     BOOL active;
     int match, track, from_item, file;
   } pending;
+  /* A file removed from the import or put back (mc_import_remove, mc_import_put_back) whose
+   * item the import thread hasn't changed yet: until it has, file indices are as they were,
+   * so the review makes no other change. */
+  struct {
+    BOOL active;
+    int item;
+  } edit;
 } view;
+
+/* What a row's file can have done to it: removed from the import, or put back. */
+enum { ROW_KEEP, ROW_REMOVE, ROW_PUT_BACK };
 
 /* A row of the review's track list: a track of the match, with the file matched to it if
  * any, or a file no track has. A file is item from_item's file `file`: this item's own, or
- * one of a related item (mc_import_related) that Use as Track can bring in. */
+ * one of a related item (mc_import_related) that Use as Track can bring in. A removed file
+ * is from_item's removed file `file` (mc_import_item.removed). */
 typedef struct review_row {
   int track; /* index into the match's tracks, or -1 for a file row */
   int from_item;
-  int file;
+  int file;  /* for a track, the file on it, or -1 */
+  BOOL removed;
+  int action; /* ROW_*, for the item's state when the rows were filled */
 } review_row;
+
+/* The track list's column with a file row's delete button (or Put Back). */
+#define COL_ACTION 6
 
 static view g_view;
 
@@ -173,6 +189,7 @@ static const wchar_t *item_label(const mc_import_item *it) {
       case MC_IMPORT_OUTCOME_ADDED: return mc_wstr(MC_STR_IMPORT_STATE_ADDED_MISSING);
       case MC_IMPORT_OUTCOME_DUPLICATE: return mc_wstr(MC_STR_IMPORT_STATE_DUPLICATE);
       case MC_IMPORT_OUTCOME_MOVED: return mc_wstr(MC_STR_IMPORT_STATE_MOVED);
+      case MC_IMPORT_OUTCOME_REMOVED: return mc_wstr(MC_STR_IMPORT_STATE_REMOVED);
       case MC_IMPORT_OUTCOME_NONE: break;
     }
   }
@@ -399,7 +416,8 @@ static void refresh_row(int idx) {
   const mc_import_match *m = NULL;
   if (it->chosen >= 0 && it->chosen < it->match_count) m = &it->matches[it->chosen];
   else if (it->state != MC_IMPORT_DONE && it->match_count) m = &it->matches[0];
-  if (it->outcome == MC_IMPORT_OUTCOME_MOVED) m = NULL; /* none of it is imported with a match */
+  /* None of it is imported with a match. */
+  if (it->outcome == MC_IMPORT_OUTCOME_MOVED || it->outcome == MC_IMPORT_OUTCOME_REMOVED) m = NULL;
   if (it->error) snprintf(match, sizeof match, "%s", it->error);
   else if (it->state == MC_IMPORT_DONE && it->chosen < 0)
     snprintf(match, sizeof match, "%s", mc_str(MC_STR_IMPORT_EXISTING_TAGS));
@@ -505,7 +523,7 @@ static LPARAM add_row(int track, int from_item, int file) {
   review_row *grown = realloc(g_view.rows, (size_t)(g_view.row_count + 1) * sizeof *grown);
   if (!grown) return -1;
   g_view.rows = grown;
-  g_view.rows[g_view.row_count] = (review_row){track, from_item, file};
+  g_view.rows[g_view.row_count] = (review_row){track, from_item, file, FALSE, ROW_KEEP};
   return g_view.row_count++;
 }
 
@@ -517,9 +535,39 @@ static void file_columns(HWND lv, int row, const mc_import_file *f) {
   lv_set(lv, row, 5, buf);
 }
 
-/* Files of other items from the same folder (mc_import_related), which Use as Track can make
- * tracks of this match. Returns how many were listed. */
-static int fill_related(HWND lv) {
+/* Sets what can be done to the file of the row just added (lParam row), and shows its button:
+ * a delete button for a file no track took, Put Back for a removed one. A track's file can be
+ * removed too, but from the right-click menu only. */
+static void set_row_action(HWND lv, int index, LPARAM row, int action, BOOL removed) {
+  if (row < 0 || row >= g_view.row_count) return;
+  g_view.rows[row].action = action;
+  g_view.rows[row].removed = removed;
+  if (g_view.rows[row].track >= 0) return;
+  if (action == ROW_REMOVE) lv_set(lv, index, COL_ACTION, L"\x2715");
+  else if (action == ROW_PUT_BACK) lv_set(lv, index, COL_ACTION, mc_wstr(MC_STR_IMPORT_PUT_BACK));
+}
+
+/* Whether an item's removed files can be put back: in review, or skipped for having none left. */
+static BOOL can_put_back(const mc_import_item *it) {
+  return it->state == MC_IMPORT_REVIEW ||
+         (it->state == MC_IMPORT_SKIPPED && it->outcome == MC_IMPORT_OUTCOME_REMOVED);
+}
+
+/* Rows for item idx's removed files (snapshot it), each with Put Back. */
+static void fill_removed(HWND lv, int idx, const mc_import_item *it) {
+  for (int i = 0; i < it->removed_count; i++) {
+    LPARAM row = add_row(-1, idx, i);
+    int index = lv_append(lv, row, 0);
+    lv_set(lv, index, 1, mc_wstr(MC_STR_IMPORT_REMOVED_FILE));
+    file_columns(lv, index, &it->removed[i]);
+    set_row_action(lv, index, row, can_put_back(it) ? ROW_PUT_BACK : ROW_KEEP, TRUE);
+  }
+}
+
+/* Files of other items from the same folder (mc_import_related): with files, those Use as Track
+ * can make tracks of this match, and with removed, those removed from the import. Returns how
+ * many files were listed. */
+static int fill_related(HWND lv, BOOL files, BOOL removed) {
   int related[64];
   int n = mc_import_related(g_view.imp, g_view.review_item, related, 64), listed = 0;
   for (int k = 0; k < n && k < 64; k++) {
@@ -531,12 +579,15 @@ static int fill_related(HWND lv) {
     char label[512];
     const char *name = other->album ? other->album : mc_str(MC_STR_UNKNOWN_VALUE);
     mc_format(label, sizeof label, mc_str(MC_STR_IMPORT_OTHER_ITEM_FILE), MC_S(name));
-    for (int i = 0; i < other->file_count; i++) {
-      int row = lv_append(lv, add_row(-1, idx, i), 0);
-      lv_set_utf8(lv, row, 1, label);
-      file_columns(lv, row, &other->files[i]);
+    for (int i = 0; files && i < other->file_count; i++) {
+      LPARAM row = add_row(-1, idx, i);
+      int index = lv_append(lv, row, 0);
+      lv_set_utf8(lv, index, 1, label);
+      file_columns(lv, index, &other->files[i]);
+      set_row_action(lv, index, row, other->state == MC_IMPORT_REVIEW ? ROW_REMOVE : ROW_KEEP, FALSE);
       listed++;
     }
+    if (removed) fill_removed(lv, idx, other);
     mc_import_item_free(other);
   }
   return listed;
@@ -564,20 +615,25 @@ static void fill_track_rows(HWND dlg, int match) {
   wchar_t buf[64];
   int *used = calloc((size_t)it->file_count + 1, sizeof *used);
   int missing = 0, loose = 0;
+  /* Files can be removed from the import while it's in review, not once it's imported. */
+  int removable = it->state == MC_IMPORT_REVIEW ? ROW_REMOVE : ROW_KEEP;
   if (match >= 0 && match < it->match_count) {
     const mc_import_match *m = &it->matches[match];
     g_view.rows_match = match;
     for (int j = 0; j < m->track_count; j++) {
       const mc_import_match_track *t = &m->tracks[j];
-      int row = lv_append(lv, add_row(j, -1, -1), 0);
+      BOOL has_file = t->file >= 0 && t->file < it->file_count;
+      LPARAM r = add_row(j, g_view.review_item, has_file ? t->file : -1);
+      int row = lv_append(lv, r, 0);
       track_number(m, t, buf, 64);
       lv_set(lv, row, 0, it->kind == MC_IMPORT_SINGLE ? L"" : buf);
       lv_set_utf8(lv, row, 1, t->title);
       format_length(t->length_ms, buf, 64);
       lv_set(lv, row, 2, buf);
-      if (t->file >= 0 && t->file < it->file_count) {
+      if (has_file) {
         if (used) used[t->file] = 1;
         file_columns(lv, row, &it->files[t->file]);
+        set_row_action(lv, row, r, removable, FALSE);
       } else {
         lv_set(lv, row, 3, mc_wstr(MC_STR_IMPORT_TRACK_MISSING));
         missing++;
@@ -587,14 +643,19 @@ static void fill_track_rows(HWND dlg, int match) {
   /* Files that weren't matched to any track: left untouched if this match is applied. */
   for (int i = 0; i < it->file_count; i++) {
     if (used && used[i]) continue;
-    int row = lv_append(lv, add_row(-1, g_view.review_item, i), 0);
+    LPARAM r = add_row(-1, g_view.review_item, i);
+    int row = lv_append(lv, r, 0);
     lv_set(lv, row, 1, match >= 0 ? mc_wstr(MC_STR_IMPORT_NOT_MATCHED) : L"");
     file_columns(lv, row, &it->files[i]);
+    set_row_action(lv, row, r, removable, FALSE);
     loose++;
   }
   free(used);
-  /* With tracks missing, files from the same folder that ended up elsewhere may be them. */
-  if (missing && it->kind == MC_IMPORT_ALBUM) loose += fill_related(lv);
+  /* With tracks missing, files from the same folder that ended up elsewhere may be them. Then
+   * the files removed from the import, this item's and theirs. */
+  if (missing && it->kind == MC_IMPORT_ALBUM) loose += fill_related(lv, TRUE, FALSE);
+  fill_removed(lv, g_view.review_item, it);
+  if (it->kind == MC_IMPORT_ALBUM) fill_related(lv, FALSE, TRUE);
   if (!missing || !loose || it->kind != MC_IMPORT_ALBUM) return;
 
   /* The missing tracks' File cells read as a dropdown: clicking the row lists the files. */
@@ -673,7 +734,7 @@ static void show_pending(HWND dlg) {
     const review_row *r = row_at(lv, i);
     if (!r) continue;
     if (r->track >= 0 && r->track == g_view.pending.track) track = i;
-    else if (r->track < 0 && r->from_item == g_view.pending.from_item && r->file == g_view.pending.file) file = i;
+    else if (r->track < 0 && !r->removed && r->from_item == g_view.pending.from_item && r->file == g_view.pending.file) file = i;
   }
   if (track < 0 || file < 0) return;
   for (int col = 3; col <= 5; col++) {
@@ -738,7 +799,7 @@ static void files_menu(HWND dlg, int index, POINT pt) {
   int count = (int)SendMessageW(lv, LVM_GETITEMCOUNT, 0, 0), from = g_view.review_item;
   for (int i = 0; i < count; i++) {
     const review_row *r = row_at(lv, i);
-    if (!r || r->track >= 0) continue;
+    if (!r || r->track >= 0 || r->removed) continue;
     if (r->from_item != from) { /* a related item's files, under "Grouped separately: <album>" */
       from = r->from_item;
       if (GetMenuItemCount(menu) > 0) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
@@ -775,12 +836,67 @@ static void files_menu(HWND dlg, int index, POINT pt) {
   if (track && file && file->track < 0) assign(dlg, track, file);
 }
 
+/* Removes the row's file from the import, or puts it back, as its action says. The import
+ * thread does it when it gets to it, and the review refreshes then (g_view.edit). */
+static void edit_row(HWND dlg, const review_row *r) {
+  if (!r || r->action == ROW_KEEP || r->file < 0 || g_view.edit.active || review_busy()) return;
+  int item = r->from_item;
+  mc_status st = r->action == ROW_PUT_BACK ? mc_import_put_back(g_view.imp, item, r->file)
+                                           : mc_import_remove(g_view.imp, item, r->file);
+  if (st == MC_OK) {
+    g_view.idle = FALSE;
+    g_view.edit.active = TRUE;
+    g_view.edit.item = item;
+    enable_review_buttons(dlg, g_view.review_snap, TRUE);
+    update_status();
+  } else {
+    message_dialog(dlg, mc_wstr(MC_STR_IMPORT_MUSIC), mc_wstr(MC_STR_IMPORT_ITEM_BUSY), MB_ICONINFORMATION);
+  }
+}
+
+/* The menu of the row at list index `index`, alone selected: Remove from Import, or Put Back.
+ * pt as for tracks_menu. */
+static void edit_menu(HWND dlg, int index, POINT pt) {
+  HWND lv = GetDlgItem(dlg, IDC_REV_TRACKS);
+  const review_row *r = row_at(lv, index);
+  if (!r || r->action == ROW_KEEP) return;
+  if (pt.x == -1 && pt.y == -1) {
+    RECT rc = {.left = LVIR_LABEL};
+    if (!SendMessageW(lv, LVM_GETITEMRECT, (WPARAM)index, (LPARAM)&rc)) GetClientRect(lv, &rc);
+    pt.x = rc.left;
+    pt.y = rc.bottom;
+    ClientToScreen(lv, &pt);
+  }
+  HMENU menu = CreatePopupMenu();
+  if (!menu) return;
+  BOOL ok = !g_view.edit.active && !review_busy();
+  enum mc_str_id text = r->action == ROW_PUT_BACK ? MC_STR_IMPORT_PUT_BACK : MC_STR_IMPORT_REMOVE_FROM_IMPORT;
+  AppendMenuW(menu, MF_STRING | (ok ? 0 : MF_GRAYED), 1, mc_wstr(text));
+  int gen = g_view.rows_gen;
+  review_row row = *r;
+  UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
+  int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, dlg, NULL);
+  DestroyMenu(menu);
+  /* As in files_menu: only if the rows weren't rebuilt meanwhile. */
+  if (cmd == 1 && gen == g_view.rows_gen) edit_row(dlg, &row);
+}
+
 /* The track list's menu. On a missing track alone, the files it can take (files_menu); on a
- * missing track selected with one file (Ctrl+click), Use as Track N. pt is in screen
+ * missing track selected with one file (Ctrl+click), Use as Track N; on any other row alone
+ * whose file can be removed from the import or put back, that (edit_menu). pt is in screen
  * coordinates, or (-1, -1) from the keyboard. */
 static void tracks_menu(HWND dlg, POINT pt) {
   const mc_import_item *it = g_view.review_snap;
   int match = g_view.rows_match;
+  HWND tracks_lv = GetDlgItem(dlg, IDC_REV_TRACKS);
+  if (SendMessageW(tracks_lv, LVM_GETSELECTEDCOUNT, 0, 0) == 1) {
+    int i = (int)SendMessageW(tracks_lv, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
+    const review_row *r = row_at(tracks_lv, i);
+    if (r && r->action != ROW_KEEP && !missing_row(tracks_lv, i)) {
+      edit_menu(dlg, i, pt);
+      return;
+    }
+  }
   if (!it || match < 0 || match >= it->match_count || it->kind != MC_IMPORT_ALBUM) return;
   const mc_import_match *m = &it->matches[match];
   HWND lv = GetDlgItem(dlg, IDC_REV_TRACKS);
@@ -797,7 +913,7 @@ static void tracks_menu(HWND dlg, POINT pt) {
         track = r;
         track_index = i;
       }
-    } else {
+    } else if (!r->removed) {
       files++;
       file = r;
     }
@@ -824,7 +940,7 @@ static void tracks_menu(HWND dlg, POINT pt) {
   if (!menu) return;
   AppendMenuW(menu, MF_STRING | (ok ? 0 : MF_GRAYED), 1, text);
   int gen = g_view.rows_gen;
-  review_row t = *track, f = file ? *file : (review_row){-1, -1, -1};
+  review_row t = *track, f = file ? *file : (review_row){-1, -1, -1, FALSE, ROW_KEEP};
   UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : 0);
   int cmd = TrackPopupMenu(menu, flags, pt.x, pt.y, 0, dlg, NULL);
   DestroyMenu(menu);
@@ -933,7 +1049,8 @@ static void load_review(HWND dlg) {
   mc_import_item_free(g_view.review_snap);
   g_view.review_snap = NULL;
   if (mc_import_item_get(g_view.imp, g_view.review_item, &g_view.review_snap) != MC_OK ||
-      g_view.review_snap->file_count == 0) { /* its files went to another item */
+      (g_view.review_snap->file_count == 0 && g_view.review_snap->removed_count == 0)) {
+    /* its files went to another item */
     EndDialog(dlg, IDCANCEL);
     return;
   }
@@ -1008,7 +1125,8 @@ static void load_review(HWND dlg) {
   InvalidateRect(lv, NULL, TRUE);
   fill_tracks(dlg, sel);
 
-  enable_review_buttons(dlg, it, busy || g_view.pending.active);
+  /* With every file removed, only Put Back. */
+  enable_review_buttons(dlg, it, busy || g_view.pending.active || g_view.edit.active || it->file_count == 0);
 }
 
 /* The dialog's fixed text; the template has none (app.rc). */
@@ -1047,11 +1165,12 @@ static void init_review_columns(HWND dlg) {
   GetClientRect(lv, &rc);
   w = rc.right - GetSystemMetrics(SM_CXVSCROLL);
   static const struct { enum mc_str_id title; int pct; int fmt; } tracks[] = {
-    {MC_STR_WINDOWS_COL_NUMBER, 6, LVCFMT_RIGHT}, {MC_STR_TITLE, 30, 0},
+    {MC_STR_WINDOWS_COL_NUMBER, 6, LVCFMT_RIGHT}, {MC_STR_TITLE, 27, 0},
     {MC_STR_WINDOWS_COL_LENGTH, 8, LVCFMT_RIGHT}, {MC_STR_WINDOWS_COL_FILE, 22, 0},
-    {MC_STR_WINDOWS_COL_CURRENT_TITLE, 26, 0}, {MC_STR_WINDOWS_COL_LENGTH, 8, LVCFMT_RIGHT}};
+    {MC_STR_WINDOWS_COL_CURRENT_TITLE, 22, 0}, {MC_STR_WINDOWS_COL_LENGTH, 8, LVCFMT_RIGHT}};
   for (int i = 0; i < 6; i++)
     lv_add_column(lv, i, mc_wstr(tracks[i].title), w * tracks[i].pct / 100, tracks[i].fmt);
+  lv_add_column(lv, COL_ACTION, L"", w * 7 / 100, LVCFMT_CENTER); /* a file's delete button, or Put Back */
 }
 
 static void review_done(HWND dlg, mc_status st) {
@@ -1071,6 +1190,7 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       g_view.review_item = (int)lp;
       g_view.review_terms_set = FALSE;
       g_view.pending.active = FALSE;
+      g_view.edit.active = FALSE;
       init_review_text(dlg);
       init_review_columns(dlg);
       SetWindowSubclass(GetDlgItem(dlg, IDC_REV_TRACKS), tracks_proc, 0, 0);
@@ -1112,8 +1232,25 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       if (nm->idFrom == IDC_REV_TRACKS && nm->code == NM_CLICK) {
         /* A plain click on a missing track drops its files menu down; Ctrl or Shift selects. */
         const NMITEMACTIVATE *ia = (const NMITEMACTIVATE *)lp;
+        /* A click on a file's delete button (or Put Back) does that. */
+        LVHITTESTINFO hit = {.pt = ia->ptAction};
+        if (SendMessageW(nm->hwndFrom, LVM_SUBITEMHITTEST, 0, (LPARAM)&hit) >= 0 && hit.iSubItem == COL_ACTION &&
+            !(ia->uKeyFlags & (LVKF_CONTROL | LVKF_SHIFT))) {
+          const review_row *r = row_at(nm->hwndFrom, hit.iItem);
+          if (r && r->track < 0 && r->action != ROW_KEEP) {
+            edit_row(dlg, r);
+            break;
+          }
+        }
         if (!(ia->uKeyFlags & (LVKF_CONTROL | LVKF_SHIFT)) && missing_row(nm->hwndFrom, ia->iItem))
           files_menu(dlg, ia->iItem, (POINT){-1, -1});
+        break;
+      }
+      if (nm->idFrom == IDC_REV_TRACKS && nm->code == LVN_KEYDOWN && ((const NMLVKEYDOWN *)lp)->wVKey == VK_DELETE) {
+        /* Delete removes the focused row's file from the import, as its button or menu does. */
+        int focus = (int)SendMessageW(nm->hwndFrom, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_FOCUSED);
+        const review_row *r = row_at(nm->hwndFrom, focus);
+        if (r && r->action == ROW_REMOVE) edit_row(dlg, r);
         break;
       }
       if (nm->idFrom == IDC_REV_TRACKS && nm->code == LVN_ITEMCHANGED) {
@@ -1240,14 +1377,20 @@ void import_view_on_event(WPARAM wp, LPARAM lp) {
     case MC_IMPORT_EV_ITEM_CHANGED:
       if (arg < 0 || arg >= g_view.item_count) break;
       refresh_row(arg);
+      /* A file removed or put back: the indices are new now. It may be a related item's. */
+      if (g_view.edit.active && g_view.edit.item == arg) {
+        g_view.edit.active = FALSE;
+        if (g_view.review && g_view.review_item != arg) SendMessageW(g_view.review, WM_APP_REVIEW_REFRESH, 0, 0);
+      }
       if (g_view.review && g_view.review_item == arg) SendMessageW(g_view.review, WM_APP_REVIEW_REFRESH, 0, 0);
       if (g_view.states[arg] == MC_IMPORT_DONE) PostMessageW(g_view.parent, WM_APP_LIBRARY_CHANGED, 0, 0);
       break;
     case MC_IMPORT_EV_IDLE:
       g_view.idle = TRUE;
       /* Nothing is queued, so a pending file was taken up (or turned out not to apply). */
-      if (g_view.pending.active) {
+      if (g_view.pending.active || g_view.edit.active) {
         g_view.pending.active = FALSE;
+        g_view.edit.active = FALSE; /* and so was a file removed or put back */
         if (g_view.review) SendMessageW(g_view.review, WM_APP_REVIEW_REFRESH, 0, 0);
       }
       update_status();
