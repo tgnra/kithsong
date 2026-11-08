@@ -99,17 +99,37 @@ typedef struct item {
    * its best release, and how many discs it's made of if items were joined into it, so or
    * as disc folders (1 until they're counted). Only the import thread uses them. */
   int held, joined;
+  /* Files the user removed from the import (mc_import_remove), guarded like files. */
+  struct removed_file *removed;
+  int removed_count;
 } item;
+
+/* A file removed from an item, and the track it had in each candidate that paired it, by the
+ * candidate's release id (a recording's id for a recording), so putting it back can pair it
+ * again even if the candidates were searched again meanwhile. */
+typedef struct removed_pair {
+  char *key;
+  int from_recording;
+  int track;
+} removed_pair;
+
+typedef struct removed_file {
+  int file; /* index into mc_import.files */
+  removed_pair *pairs;
+  int pair_count;
+} removed_file;
 
 /* REQ_RETRY matches an item waiting on MusicBrainz again (see auto_match), once it's back or
  * tagging is skipped; it does nothing if the item has moved on meanwhile. */
-typedef enum req_kind { REQ_ACCEPT, REQ_AS_IS, REQ_SKIP, REQ_SEARCH, REQ_RETRY, REQ_ASSIGN, REQ_WIDER } req_kind;
+typedef enum req_kind {
+  REQ_ACCEPT, REQ_AS_IS, REQ_SKIP, REQ_SEARCH, REQ_RETRY, REQ_ASSIGN, REQ_WIDER, REQ_REMOVE, REQ_PUT_BACK
+} req_kind;
 
 typedef struct request {
   req_kind kind;
   int item;
   int match;
-  int track, from_item, file; /* REQ_ASSIGN */
+  int track, from_item, file; /* REQ_ASSIGN; file for REQ_REMOVE, the removed index for REQ_PUT_BACK */
   char *artist;
   char *title;
   struct request *next;
@@ -2729,6 +2749,141 @@ static void assign_file(mc_import *imp, mc_library *lib, const request *r) {
   write_item(imp, lib, r->item, r->match);
 }
 
+/* --- Removing files (mc_import_remove, mc_import_put_back) --- */
+
+static const char *pair_key(const candidate *c) {
+  if (c->from_recording) return c->rel.track_count > 0 ? c->rel.tracks[0].recording_id : NULL;
+  return c->rel.id;
+}
+
+static void removed_free(removed_file *r) {
+  for (int i = 0; i < r->pair_count; i++) free(r->pairs[i].key);
+  free(r->pairs);
+}
+
+static int removable(const item *it, int file) {
+  return it->state == MC_IMPORT_REVIEW && file >= 0 && file < it->file_count;
+}
+
+static int can_put_back(const item *it, int removed) {
+  int open = it->state == MC_IMPORT_REVIEW ||
+             (it->state == MC_IMPORT_SKIPPED && it->outcome == MC_IMPORT_OUTCOME_REMOVED);
+  return open && removed >= 0 && removed < it->removed_count;
+}
+
+/* REQ_REMOVE: file `file` leaves the item's files for its removed list, and the candidates
+ * are scored again without it. */
+static void remove_file(mc_import *imp, const request *r) {
+  mc_mutex_lock(&imp->lock);
+  item *it = &imp->items[r->item];
+  int ok = removable(it, r->file);
+  removed_file *list = ok ? realloc(it->removed, ((size_t)it->removed_count + 1) * sizeof *list) : NULL;
+  ok = list != NULL;
+  if (ok) {
+    it->removed = list;
+    removed_file *rf = &list[it->removed_count];
+    rf->file = it->files[r->file];
+    rf->pair_count = 0;
+    rf->pairs = calloc((size_t)it->cand_count + 1, sizeof *rf->pairs);
+    for (int k = 0; rf->pairs && k < it->cand_count; k++) {
+      const candidate *c = &it->cands[k];
+      const char *key = pair_key(c);
+      if (c->map[r->file] < 0 || !key) continue;
+      removed_pair *p = &rf->pairs[rf->pair_count];
+      if (!(p->key = mc_strdup(key))) continue;
+      p->from_recording = c->from_recording;
+      p->track = c->map[r->file];
+      rf->pair_count++;
+    }
+    it->removed_count++;
+
+    int rest = it->file_count - r->file - 1;
+    memmove(&it->files[r->file], &it->files[r->file + 1], (size_t)rest * sizeof *it->files);
+    for (int k = 0; k < it->cand_count; k++) {
+      int *map = it->cands[k].map;
+      memmove(&map[r->file], &map[r->file + 1], (size_t)rest * sizeof *map);
+    }
+    it->file_count--;
+    for (int k = 0; k < it->cand_count; k++) {
+      recount(&it->cands[k], it->file_count);
+      rescore_map(imp, it, &it->cands[k]);
+    }
+    if (it->file_count == 0) {
+      it->state = MC_IMPORT_SKIPPED;
+      it->outcome = MC_IMPORT_OUTCOME_REMOVED;
+    }
+  }
+  mc_mutex_unlock(&imp->lock);
+  if (ok) emit(imp, MC_IMPORT_EV_ITEM_CHANGED, r->item);
+}
+
+/* The track removed file rf should have in candidate c when it's put back as file `at` of
+ * the item (whose map has no pair for it yet), or -1. */
+static int put_back_track(mc_import *imp, const item *it, const candidate *c, const removed_file *rf, int at) {
+  const char *key = pair_key(c);
+  int want = -1;
+  for (int i = 0; key && i < rf->pair_count; i++)
+    if (rf->pairs[i].from_recording == c->from_recording && strcmp(rf->pairs[i].key, key) == 0)
+      want = rf->pairs[i].track;
+  if (want >= c->rel.track_count) want = -1;
+  for (int i = 0; want >= 0 && i < it->file_count; i++)
+    if (i != at && c->map[i] == want) want = -1; /* taken since */
+  if (want >= 0) return want;
+  const mc_tags *tags = &imp->files[rf->file].tags;
+  if (c->from_recording) {
+    for (int i = 0; i < it->file_count; i++)
+      if (i != at && c->map[i] == 0) return -1;
+    return c->rel.track_count > 0 ? 0 : -1;
+  }
+  return mc_best_free_track(&c->rel, tags, c->map, it->file_count);
+}
+
+/* REQ_PUT_BACK: removed file `file` goes back among the item's files, paired again. */
+static void put_back_file(mc_import *imp, const request *r) {
+  mc_mutex_lock(&imp->lock);
+  item *it = &imp->items[r->item];
+  int ok = can_put_back(it, r->file);
+  int n = it->file_count + 1;
+  int *files = ok ? realloc(it->files, (size_t)n * sizeof *files) : NULL;
+  ok = files != NULL;
+  if (ok) it->files = files;
+  for (int k = 0; ok && k < it->cand_count; k++) {
+    int *map = realloc(it->cands[k].map, (size_t)n * sizeof *map);
+    if (!map) ok = 0; /* the arrays that grew are only bigger */
+    else it->cands[k].map = map;
+  }
+  if (ok) {
+    removed_file rf = it->removed[r->file];
+    int at = 0;
+    while (at < it->file_count && file_order(&imp->files[it->files[at]], &imp->files[rf.file]) <= 0) at++;
+    int rest = it->file_count - at;
+    memmove(&it->files[at + 1], &it->files[at], (size_t)rest * sizeof *it->files);
+    it->files[at] = rf.file;
+    for (int k = 0; k < it->cand_count; k++) {
+      int *map = it->cands[k].map;
+      memmove(&map[at + 1], &map[at], (size_t)rest * sizeof *map);
+      map[at] = -1;
+    }
+    it->file_count = n;
+    for (int k = 0; k < it->cand_count; k++) {
+      candidate *c = &it->cands[k];
+      c->map[at] = put_back_track(imp, it, c, &rf, at);
+      recount(c, n);
+      rescore_map(imp, it, c);
+    }
+    removed_free(&rf);
+    memmove(&it->removed[r->file], &it->removed[r->file + 1],
+            (size_t)(it->removed_count - r->file - 1) * sizeof *it->removed);
+    it->removed_count--;
+    if (it->state == MC_IMPORT_SKIPPED) {
+      it->state = MC_IMPORT_REVIEW;
+      it->outcome = MC_IMPORT_OUTCOME_NONE;
+    }
+  }
+  mc_mutex_unlock(&imp->lock);
+  if (ok) emit(imp, MC_IMPORT_EV_ITEM_CHANGED, r->item);
+}
+
 static void handle_request(mc_import *imp, mc_library *lib, request *r) {
   if (!lib) {
     set_state(imp, r->item, MC_IMPORT_FAILED, mc_str(MC_STR_LIBRARY_OPEN_FAILED));
@@ -2748,6 +2903,8 @@ static void handle_request(mc_import *imp, mc_library *lib, request *r) {
       if (match_item(imp, lib, r->item, r->artist, r->title)) probe(imp);
       break;
     case REQ_ASSIGN: assign_file(imp, lib, r); break;
+    case REQ_REMOVE: remove_file(imp, r); break;
+    case REQ_PUT_BACK: put_back_file(imp, r); break;
     case REQ_WIDER:
       /* The frontends offer it only while online; if that changed meanwhile, wait. */
       if (online(imp) && widen_item(imp, r->item)) probe(imp);
@@ -3099,6 +3256,8 @@ void mc_import_free(mc_import *imp) {
     free(it->files);
     free(it->error);
     candidates_free(it->cands, it->cand_count);
+    for (int k = 0; k < it->removed_count; k++) removed_free(&it->removed[k]);
+    free(it->removed);
   }
   free(imp->items);
   for (int i = 0; i < imp->file_count; i++) {
@@ -3167,6 +3326,24 @@ static void copy_match(const item *it, const candidate *c, mc_import_match *m) {
   }
 }
 
+static void copy_file(const file_entry *f, mc_import_file *sf) {
+  sf->path = mc_strdup(f->path);
+  sf->title = mc_strdup(f->tags.title);
+  sf->artist = mc_strdup(f->tags.artist);
+  sf->track = f->tags.track;
+  sf->disc = f->tags.disc;
+  sf->duration_ms = f->tags.duration_ms;
+}
+
+static void free_files(mc_import_file *files, int n) {
+  for (int i = 0; i < n; i++) {
+    free(files[i].path);
+    free(files[i].title);
+    free(files[i].artist);
+  }
+  free(files);
+}
+
 mc_status mc_import_item_get(mc_import *imp, int idx, mc_import_item **out) {
   if (!imp || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
@@ -3194,16 +3371,11 @@ mc_status mc_import_item_get(mc_import *imp, int idx, mc_import_item **out) {
   snap->duplicate_files = it->duplicates;
   if ((snap->files = calloc((size_t)it->file_count, sizeof *snap->files))) {
     snap->file_count = it->file_count;
-    for (int i = 0; i < it->file_count; i++) {
-      const file_entry *f = &imp->files[it->files[i]];
-      mc_import_file *sf = &snap->files[i];
-      sf->path = mc_strdup(f->path);
-      sf->title = mc_strdup(f->tags.title);
-      sf->artist = mc_strdup(f->tags.artist);
-      sf->track = f->tags.track;
-      sf->disc = f->tags.disc;
-      sf->duration_ms = f->tags.duration_ms;
-    }
+    for (int i = 0; i < it->file_count; i++) copy_file(&imp->files[it->files[i]], &snap->files[i]);
+  }
+  if (it->removed_count && (snap->removed = calloc((size_t)it->removed_count, sizeof *snap->removed))) {
+    snap->removed_count = it->removed_count;
+    for (int i = 0; i < it->removed_count; i++) copy_file(&imp->files[it->removed[i].file], &snap->removed[i]);
   }
   if (it->cand_count && (snap->matches = calloc((size_t)it->cand_count, sizeof *snap->matches))) {
     snap->match_count = it->cand_count;
@@ -3217,12 +3389,8 @@ mc_status mc_import_item_get(mc_import *imp, int idx, mc_import_item **out) {
 
 void mc_import_item_free(mc_import_item *s) {
   if (!s) return;
-  for (int i = 0; i < s->file_count; i++) {
-    free(s->files[i].path);
-    free(s->files[i].title);
-    free(s->files[i].artist);
-  }
-  free(s->files);
+  free_files(s->files, s->file_count);
+  free_files(s->removed, s->removed_count);
   for (int i = 0; i < s->match_count; i++) {
     mc_import_match *m = &s->matches[i];
     char *strs[] = {m->album, m->album_artist, m->release, m->country, m->label,
@@ -3322,6 +3490,39 @@ mc_status mc_import_assign(mc_import *imp, int idx, int match, int track, int fr
   return st;
 }
 
+static mc_status enqueue_file(mc_import *imp, req_kind kind, int idx, int file) {
+  if (!imp) return MC_ERR_INVALID_ARG;
+  request *r = calloc(1, sizeof *r);
+  if (!r) return MC_ERR_NOMEM;
+  r->kind = kind;
+  r->item = idx;
+  r->file = file;
+
+  mc_mutex_lock(&imp->lock);
+  mc_status st = MC_ERR_INVALID_ARG;
+  if (idx >= 0 && idx < imp->item_count) {
+    const item *it = &imp->items[idx];
+    if (kind == REQ_REMOVE ? removable(it, file) : can_put_back(it, file)) st = MC_OK;
+  }
+  if (st == MC_OK) {
+    if (imp->tail) imp->tail->next = r;
+    else imp->head = r;
+    imp->tail = r;
+    mc_cond_broadcast(&imp->wake);
+  }
+  mc_mutex_unlock(&imp->lock);
+  if (st != MC_OK) request_free(r);
+  return st;
+}
+
+mc_status mc_import_remove(mc_import *imp, int idx, int file) {
+  return enqueue_file(imp, REQ_REMOVE, idx, file);
+}
+
+mc_status mc_import_put_back(mc_import *imp, int idx, int removed) {
+  return enqueue_file(imp, REQ_PUT_BACK, idx, removed);
+}
+
 /* Whether dir is root or a folder inside it. */
 static int folder_within(const char *dir, const char *root) {
   size_t n = root ? strlen(root) : 0;
@@ -3337,7 +3538,9 @@ int mc_import_related(mc_import *imp, int idx, int *out, int max) {
     const char *root = imp->items[idx].folder;
     for (int i = 0; i < imp->item_count; i++) {
       const item *it = &imp->items[i];
-      if (i == idx || it->file_count == 0 || !folder_within(it->folder, root)) continue;
+      /* An item with no files is left out, unless they were removed and can be put back. */
+      int empty = it->file_count == 0 && !(it->outcome == MC_IMPORT_OUTCOME_REMOVED && it->removed_count);
+      if (i == idx || empty || !folder_within(it->folder, root)) continue;
       if (out && n < max) out[n] = i;
       n++;
     }

@@ -264,9 +264,11 @@ typedef enum mc_import_outcome {
   MC_IMPORT_OUTCOME_ADDED,     /* DONE: added the tracks the library lacked; the rest were
                                 * already there in equal or better quality */
   MC_IMPORT_OUTCOME_DUPLICATE, /* SKIPPED: already in the library in equal or better quality */
-  MC_IMPORT_OUTCOME_MOVED      /* SKIPPED: its files were all assigned to another item's
+  MC_IMPORT_OUTCOME_MOVED,     /* SKIPPED: its files were all assigned to another item's
                                 * tracks (mc_import_assign), or it was a disc joined to
                                 * another item ("Disc folders" above); it has none left */
+  MC_IMPORT_OUTCOME_REMOVED    /* SKIPPED: the user removed all its files from the import
+                                * (mc_import_remove); putting one back brings it to review */
 } mc_import_outcome;
 
 /* Sweep. Once every item is settled and the import went all the way, its thread sweeps the
@@ -340,6 +342,9 @@ typedef struct mc_import_item {
   mc_import_outcome outcome;
   int replaced_files;  /* files swapped for higher quality ones */
   int duplicate_files; /* files skipped because the library already has them */
+  mc_import_file *removed; /* files removed from the import (mc_import_remove), in the order
+                            * they were removed; not in files */
+  int removed_count;
 } mc_import_item;
 
 /* Starts importing the given folders and/or files. lib must stay open until the session is
@@ -387,9 +392,34 @@ mc_status mc_import_search(mc_import *imp, int item, const char *artist, const c
  * MC_IMPORT_EV_ITEM_CHANGED. Queued like the calls above. */
 mc_status mc_import_assign(mc_import *imp, int item, int match, int track, int from_item, int file);
 
+/* Removes file `file` of an item in review from the import: it's neither tagged nor imported,
+ * and stays where it is (the original is never touched; a file out of a zip goes with the
+ * staging folder when the session is freed). It leaves the item's files for its removed list
+ * (mc_import_item.removed), so it's no longer counted anywhere: every match of the item is
+ * scored again from the pairs left (no new lookup), a file that was on a release track leaves
+ * that track missing, as any missing track (so the match is no longer complete and isn't
+ * accepted by itself), and an extra file no longer counts as one. Matches keep their order and
+ * indices, as with mc_import_assign. The item stays in review whatever its confidence is now.
+ * The file is no longer in any item's files, so mc_import_assign can't take it, and nor can
+ * a later search, accept or keep-as-is. An item left with no files becomes MC_IMPORT_SKIPPED
+ * with MC_IMPORT_OUTCOME_REMOVED.
+ *
+ * mc_import_put_back undoes it: removed file `removed` (an index into mc_import_item.removed)
+ * goes back among the item's files, in disc and track order, and each match pairs it again
+ * with the track it had in that match if no file has taken it since, else with the free track
+ * that suits it best if one is close enough, else none (an extra file). The matches are
+ * scored again, and an item that was skipped for having no files left is back in review.
+ *
+ * Both need the item in review (or, to put back, skipped with MC_IMPORT_OUTCOME_REMOVED):
+ * MC_ERR_INVALID_ARG otherwise, as for bad indices. They're queued like the calls above, and
+ * file indices change, so frontends read the item again on MC_IMPORT_EV_ITEM_CHANGED. */
+mc_status mc_import_remove(mc_import *imp, int item, int file);
+mc_status mc_import_put_back(mc_import *imp, int item, int removed);
+
 /* Other items whose folder is item's folder or inside it (a disc folder, say): where files
  * that belong to item but were grouped apart from it are. Fills up to max indices into out and
- * returns how many there are in all. */
+ * returns how many there are in all. Items with no files are left out, except those skipped
+ * with MC_IMPORT_OUTCOME_REMOVED, whose removed files can be put back. */
 int mc_import_related(mc_import *imp, int item, int *out, int max);
 
 /* Searches more widely for an album or a single (see "Extended search" above); the candidates

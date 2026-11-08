@@ -53,4 +53,9 @@ mc_status mc_score_release_map(const mb_release *rel, const mc_tags *files, int 
 /* Scores a one-track release (a recording found for a loose track) against one file. */
 double mc_score_recording(const mb_release *rec, const mc_tags *file);
 
+/* The release track that suits file best among those no file in map (file_count long) has,
+ * left-out tracks aside, if it's close enough for mc_score_release to pair them; else -1.
+ * For a file put back into an item (mc_import_put_back). */
+int mc_best_free_track(const mb_release *rel, const mc_tags *file, const int *map, int file_count);
+
 #endif

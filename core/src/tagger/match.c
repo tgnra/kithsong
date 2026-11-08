@@ -739,3 +739,20 @@ double mc_score_recording(const mb_release *rec, const mc_tags *file) {
   add(&w, length_distance(file->duration_ms, t->length_ms), 2.0);
   return w.sum / w.weight;
 }
+
+int mc_best_free_track(const mb_release *rel, const mc_tags *file, const int *map, int file_count) {
+  int best = -1;
+  double best_d = TRACK_MATCH_MAX;
+  for (int j = 0; j < rel->track_count; j++) {
+    if (mc_track_left_out(rel, j)) continue;
+    int taken = 0;
+    for (int i = 0; i < file_count && !taken; i++) taken = map[i] == j;
+    if (taken) continue;
+    double d = mc_track_distance(file, &rel->tracks[j], j);
+    if (d < best_d || (best < 0 && d <= best_d)) {
+      best_d = d;
+      best = j;
+    }
+  }
+  return best;
+}

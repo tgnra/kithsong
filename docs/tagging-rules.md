@@ -194,6 +194,21 @@ Everything runs on one core-owned thread per import session (`tagger.c`).
    with no new request, so a match that was low only for want of that track goes up; every
    pair counts, even one the tagger would have dropped as too far apart. The other matches of
    both items are rescored too, but keep their order.
+   **Remove from import** takes a file out of an item in review (`mc_import_remove`): a file
+   no track took, or one from another item of the folder, has a delete button on its row; a
+   file on a release track has Remove from Import in its right-click menu (on Android, in the
+   row's menu). The file is neither tagged nor imported and stays where it is in the source,
+   untouched. It's no longer one of the item's files, so it counts nowhere: a removed extra
+   file no longer keeps the match from being complete, and a track whose file was removed is
+   missing like any other, so the match isn't complete either. The matches are rescored from
+   the pairs left (no new request), and the item stays in review whatever its confidence is
+   now. Nothing pulls a removed file back in (Use as Track N doesn't offer it, a new search
+   doesn't score it, keeping the existing tags doesn't import it). An item left with no files
+   is skipped as "Removed from the import". The removed files are listed under the item with
+   **Put back** (`mc_import_put_back`), which returns the file among the item's files and pairs
+   it again with the track it had, if no file took that track meanwhile, else with the free
+   track that suits it best, if one is close enough; a skipped item comes back to review.
+   Neither works once the item is imported.
 7. **Compare** with the library (`dupes.c`, see [Duplicates](#duplicates)): skip what it
    already has, or swap in a better copy of the release.
 8. **Write** (see [Library folder](#library-folder)): copy the files into the library folder
