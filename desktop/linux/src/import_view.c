@@ -48,6 +48,7 @@ typedef struct review {
   GtkWidget *menu;
   GSimpleAction *assign;
   GSimpleAction *use_file; /* the missing tracks' Choose File menus: (track, from_item, file) */
+  GSimpleAction *remove_file, *put_back; /* (from_item, file): mc_import_remove, mc_import_put_back */
   int assign_track, assign_from, assign_file;
   GArray *candidates; /* of candidate: what the Choose File menus list, built when one opens */
 
@@ -59,15 +60,23 @@ typedef struct review {
     gboolean active;
     int match, track, from_item, file;
   } pending;
+  /* A file removed from the import or put back whose item the import thread hasn't changed
+   * yet: until it has, file indices are as they were, so the review makes no other change. */
+  struct {
+    gboolean active;
+    int item;
+  } edit;
 } review;
 
 /* What a row of the review's track list is (its "review-row" data): a track of the match,
  * with the file matched to it if any, or a file no track has, which is from_item's file
- * `file`: the item's own, or one of a related item (mc_import_related). */
+ * `file`: the item's own, or one of a related item (mc_import_related). A removed file
+ * is from_item's removed file `file` (mc_import_item.removed). */
 typedef struct review_row {
   int track; /* index into the match's tracks, or -1 for a file row */
   int from_item;
-  int file;
+  int file; /* for a track, the file on it, or -1 */
+  gboolean removed;
 } review_row;
 
 /* Reference counted (atomically: the import thread takes references), so events still queued
@@ -138,6 +147,7 @@ static const char *outcome_label(mc_import_outcome o) {
     case MC_IMPORT_OUTCOME_ADDED: return mc_str(MC_STR_IMPORT_STATE_ADDED_MISSING);
     case MC_IMPORT_OUTCOME_DUPLICATE: return mc_str(MC_STR_IMPORT_STATE_DUPLICATE);
     case MC_IMPORT_OUTCOME_MOVED: return mc_str(MC_STR_IMPORT_STATE_MOVED);
+    case MC_IMPORT_OUTCOME_REMOVED: return mc_str(MC_STR_IMPORT_STATE_REMOVED);
     case MC_IMPORT_OUTCOME_NONE: break;
   }
   return NULL;
@@ -366,7 +376,8 @@ static void refresh_row(import_view *v, int idx) {
   const mc_import_match *m = NULL;
   if (it->chosen >= 0 && it->chosen < it->match_count) m = &it->matches[it->chosen];
   else if (it->state != MC_IMPORT_DONE && it->match_count) m = &it->matches[0];
-  if (it->outcome == MC_IMPORT_OUTCOME_MOVED) m = NULL; /* none of it is imported with a match */
+  /* None of it is imported with a match. */
+  if (it->outcome == MC_IMPORT_OUTCOME_MOVED || it->outcome == MC_IMPORT_OUTCOME_REMOVED) m = NULL;
   gboolean as_is = it->state == MC_IMPORT_DONE && it->chosen < 0;
 
   /* A zip that couldn't be extracted (or a file whose path is too long) is an item with no
@@ -443,6 +454,11 @@ static void on_event(import_view *v, mc_import_event ev, int arg) {
       if (arg < 0 || arg >= v->item_count) break;
       mc_import_state before = v->states[arg];
       refresh_row(v, arg);
+      /* A file removed or put back: the indices are new now. It may be a related item's. */
+      if (v->rev && v->rev->edit.active && v->rev->edit.item == arg) {
+        v->rev->edit.active = FALSE;
+        if (v->rev->item != arg) review_load(v->rev);
+      }
       if (v->rev && v->rev->item == arg) review_load(v->rev);
       if (v->states[arg] == MC_IMPORT_DONE && before != MC_IMPORT_DONE && v->cb.library_changed)
         v->cb.library_changed(v->cb.user);
@@ -451,8 +467,9 @@ static void on_event(import_view *v, mc_import_event ev, int arg) {
     case MC_IMPORT_EV_IDLE:
       v->idle = TRUE;
       /* Nothing is queued, so a pending file was taken up (or turned out not to apply). */
-      if (v->rev && v->rev->pending.active) {
+      if (v->rev && (v->rev->pending.active || v->rev->edit.active)) {
         v->rev->pending.active = FALSE;
+        v->rev->edit.active = FALSE; /* and so was a file removed or put back */
         review_load(v->rev);
       }
       break;
@@ -688,8 +705,46 @@ static void track_number(const mc_import_match *m, const mc_import_match_track *
 }
 
 static void set_review_row(GtkWidget *row, int track, int from_item, int file) {
-  review_row rr = {track, from_item, file};
+  review_row rr = {track, from_item, file, FALSE};
   g_object_set_data_full(G_OBJECT(row), "review-row", g_memdup2(&rr, sizeof rr), g_free);
+}
+
+/* A button at the end of a file's row that runs review.remove-file (a delete button) or
+ * review.put-back (Put Back) on from_item's file `file`. */
+static void add_edit_button(GtkWidget *row, gboolean put_back, int from_item, int file) {
+  GtkWidget *button;
+  if (put_back) {
+    button = gtk_button_new_with_label(mc_str(MC_STR_IMPORT_PUT_BACK));
+  } else {
+    button = gtk_button_new_from_icon_name("user-trash-symbolic");
+    gtk_widget_set_tooltip_text(button, mc_str(MC_STR_IMPORT_REMOVE_FROM_IMPORT));
+    gtk_accessible_update_property(GTK_ACCESSIBLE(button), GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                   mc_str(MC_STR_IMPORT_REMOVE_FROM_IMPORT), -1);
+  }
+  gtk_widget_add_css_class(button, "flat");
+  gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
+  gtk_actionable_set_action_name(GTK_ACTIONABLE(button), put_back ? "review.put-back" : "review.remove-file");
+  gtk_actionable_set_action_target_value(GTK_ACTIONABLE(button), g_variant_new("(ii)", from_item, file));
+  adw_action_row_add_suffix(ADW_ACTION_ROW(row), button);
+}
+
+/* Whether an item's removed files can be put back: in review, or skipped for having none left. */
+static gboolean can_put_back(const mc_import_item *it) {
+  return it->state == MC_IMPORT_REVIEW ||
+         (it->state == MC_IMPORT_SKIPPED && it->outcome == MC_IMPORT_OUTCOME_REMOVED);
+}
+
+static GtkWidget *file_row(const mc_import_file *f, const char *note);
+
+/* Rows for item idx's removed files (snapshot it), each with Put Back. */
+static void fill_removed(review *r, int idx, const mc_import_item *it) {
+  for (int i = 0; i < it->removed_count; i++) {
+    GtkWidget *row = file_row(&it->removed[i], mc_str(MC_STR_IMPORT_REMOVED_FILE));
+    review_row rr = {-1, idx, i, TRUE};
+    g_object_set_data_full(G_OBJECT(row), "review-row", g_memdup2(&rr, sizeof rr), g_free);
+    if (can_put_back(it)) add_edit_button(row, TRUE, idx, i);
+    gtk_list_box_append(GTK_LIST_BOX(r->tracks), row);
+  }
 }
 
 static GtkWidget *file_row(const mc_import_file *f, const char *note) {
@@ -731,9 +786,10 @@ static void add_candidate(GArray *candidates, int from_item, int file, const cha
   g_array_append_val(candidates, c);
 }
 
-/* Files of other items from the same folder (mc_import_related), which Use as Track can make
- * tracks of this match: listed, and added to candidates. Returns how many were listed. */
-static int fill_related(review *r, GArray *candidates) {
+/* Files of other items from the same folder (mc_import_related): with candidates, those Use as
+ * Track can make tracks of this match, listed and added to candidates; with removed, those
+ * removed from the import. Returns how many files were listed. */
+static int fill_related(review *r, GArray *candidates, gboolean removed) {
   import_view *v = r->v;
   int related[64];
   int n = mc_import_related(v->imp, r->item, related, 64), listed = 0;
@@ -744,13 +800,15 @@ static int fill_related(review *r, GArray *candidates) {
     if (mc_import_item_get(v->imp, idx, &other) != MC_OK) continue;
     char *note = mc_format_alloc(mc_str(MC_STR_IMPORT_OTHER_ITEM_FILE),
                                  MC_S(other->album ? other->album : mc_str(MC_STR_UNKNOWN_VALUE)));
-    for (int i = 0; i < other->file_count; i++) {
+    for (int i = 0; candidates && i < other->file_count; i++) {
       GtkWidget *row = file_row(&other->files[i], note);
       set_review_row(row, -1, idx, i);
+      if (other->state == MC_IMPORT_REVIEW) add_edit_button(row, FALSE, idx, i);
       gtk_list_box_append(GTK_LIST_BOX(r->tracks), row);
       add_candidate(candidates, idx, i, other->files[i].path, note);
       listed++;
     }
+    if (removed) fill_removed(r, idx, other);
     mc_free(note);
     mc_import_item_free(other);
   }
@@ -855,7 +913,7 @@ static void review_fill_tracks(review *r, int match) {
       }
       GtkWidget *row = plain_row(title, sub);
       g_free(title);
-      set_review_row(row, j, -1, -1);
+      set_review_row(row, j, r->item, is_missing ? -1 : t->file);
       format_length(t->length_ms, len, sizeof len);
       adw_action_row_add_suffix(ADW_ACTION_ROW(row), dim_label(len));
       gtk_list_box_append(GTK_LIST_BOX(r->tracks), row);
@@ -867,13 +925,17 @@ static void review_fill_tracks(review *r, int match) {
     if (used[i]) continue;
     GtkWidget *row = file_row(&it->files[i], match >= 0 ? mc_str(MC_STR_IMPORT_NOT_MATCHED) : NULL);
     set_review_row(row, -1, r->item, i);
+    if (it->state == MC_IMPORT_REVIEW) add_edit_button(row, FALSE, r->item, i);
     gtk_list_box_append(GTK_LIST_BOX(r->tracks), row);
     add_candidate(candidates, r->item, i, it->files[i].path, NULL);
     loose++;
   }
   g_free(used);
-  /* With tracks missing, files from the same folder that ended up elsewhere may be them. */
-  if (missing && it->kind == MC_IMPORT_ALBUM) loose += fill_related(r, candidates);
+  /* With tracks missing, files from the same folder that ended up elsewhere may be them. Then
+   * the files removed from the import, this item's and theirs. */
+  if (missing && it->kind == MC_IMPORT_ALBUM) loose += fill_related(r, candidates, FALSE);
+  fill_removed(r, r->item, it);
+  if (it->kind == MC_IMPORT_ALBUM) fill_related(r, NULL, TRUE);
 
   /* Each missing track gets a Choose File button with the files it can take; activating the
    * row (a click, Enter) opens it too (on_track_activated). */
@@ -936,7 +998,8 @@ static void show_pending(review *r) {
     const review_row *rr = g_object_get_data(G_OBJECT(w), "review-row");
     if (!rr) continue;
     if (rr->track >= 0 && rr->track == r->pending.track) track = w;
-    else if (rr->track < 0 && rr->from_item == r->pending.from_item && rr->file == r->pending.file) file = w;
+    else if (rr->track < 0 && !rr->removed && rr->from_item == r->pending.from_item && rr->file == r->pending.file)
+      file = w;
   }
   if (!track || !file) return;
   mc_import_item *other = NULL;
@@ -975,11 +1038,38 @@ static void on_track_activated(GtkListBox *list, GtkListBoxRow *row, gpointer da
 
 /* Right-click on the track list: on a missing track selected with one file (Ctrl+click), Use
  * as Track N; otherwise, on a missing track, its Choose File menu. */
+static void popup_tracks_menu(review *r, GMenu *model, double x, double y) {
+  gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(r->menu), G_MENU_MODEL(model));
+  graphene_point_t at;
+  if (!gtk_widget_compute_point(r->tracks, gtk_widget_get_parent(r->menu), &GRAPHENE_POINT_INIT((float)x, (float)y), &at))
+    return;
+  gtk_popover_set_pointing_to(GTK_POPOVER(r->menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(r->menu));
+}
+
+/* Right-click on a track with a file, while the item is in review: Remove from Import. TRUE if
+ * it was one. */
+static gboolean remove_menu(review *r, GtkGestureClick *click, double x, double y) {
+  GtkListBoxRow *at = gtk_list_box_get_row_at_y(GTK_LIST_BOX(r->tracks), (int)y);
+  const review_row *rr = at ? g_object_get_data(G_OBJECT(at), "review-row") : NULL;
+  if (!rr || rr->track < 0 || rr->file < 0 || !r->snap || r->snap->state != MC_IMPORT_REVIEW) return FALSE;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  GMenu *model = g_menu_new();
+  GMenuItem *item = g_menu_item_new(mc_str(MC_STR_IMPORT_REMOVE_FROM_IMPORT), NULL);
+  g_menu_item_set_action_and_target_value(item, "review.remove-file", g_variant_new("(ii)", rr->from_item, rr->file));
+  g_menu_append_item(model, item);
+  g_object_unref(item);
+  popup_tracks_menu(r, model, x, y);
+  g_object_unref(model);
+  return TRUE;
+}
+
 static void on_tracks_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer data) {
   (void)n_press;
   review *r = data;
   const mc_import_item *it = r->snap;
   int match = r->selected;
+  if (r->v->imp && remove_menu(r, click, x, y)) return;
   if (!it || !r->v->imp || match < 0 || match >= it->match_count || it->kind != MC_IMPORT_ALBUM) return;
   const mc_import_match *m = &it->matches[match];
 
@@ -993,7 +1083,7 @@ static void on_tracks_menu(GtkGestureClick *click, int n_press, double x, double
     if (rr->track >= 0) {
       tracks++;
       if (rr->track < m->track_count && m->tracks[rr->track].file < 0) track = rr;
-    } else {
+    } else if (!rr->removed) {
       files++;
       file = rr;
     }
@@ -1023,13 +1113,8 @@ static void on_tracks_menu(GtkGestureClick *click, int n_press, double x, double
   GMenu *model = g_menu_new();
   g_menu_append(model, label, "review.assign");
   mc_free(label);
-  gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(r->menu), G_MENU_MODEL(model));
+  popup_tracks_menu(r, model, x, y);
   g_object_unref(model);
-  graphene_point_t at;
-  if (!gtk_widget_compute_point(r->tracks, gtk_widget_get_parent(r->menu), &GRAPHENE_POINT_INIT((float)x, (float)y), &at))
-    return;
-  gtk_popover_set_pointing_to(GTK_POPOVER(r->menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
-  gtk_popover_popup(GTK_POPOVER(r->menu));
 }
 
 /* After a track got its file. */
@@ -1096,6 +1181,39 @@ static void on_use_file(GSimpleAction *action, GVariant *param, gpointer data) {
   review_assign(data, track, from_item, file); /* as Use as Track */
 }
 
+/* Removes from_item's file `file` from the import, or puts back its removed file `file`. The
+ * import thread does it when it gets to it, and the review refreshes then (r->edit). */
+static void review_edit(review *r, int from_item, int file, gboolean put_back) {
+  if (!r->v->imp || r->edit.active || r->pending.active) return;
+  mc_status st = put_back ? mc_import_put_back(r->v->imp, from_item, file)
+                          : mc_import_remove(r->v->imp, from_item, file);
+  if (st == MC_OK) {
+    r->v->idle = FALSE;
+    r->edit.active = TRUE;
+    r->edit.item = from_item;
+    review_set_busy(r, TRUE);
+    g_simple_action_set_enabled(r->remove_file, FALSE);
+    g_simple_action_set_enabled(r->put_back, FALSE);
+    update_status(r->v);
+  } else {
+    alert(GTK_WIDGET(r->dialog), mc_str(MC_STR_LINUX_IMPORT_ITEM_BUSY_TITLE), mc_str(MC_STR_IMPORT_ITEM_BUSY));
+  }
+}
+
+static void on_remove_file(GSimpleAction *action, GVariant *param, gpointer data) {
+  (void)action;
+  int from_item, file;
+  g_variant_get(param, "(ii)", &from_item, &file);
+  review_edit(data, from_item, file, FALSE);
+}
+
+static void on_put_back(GSimpleAction *action, GVariant *param, gpointer data) {
+  (void)action;
+  int from_item, file;
+  g_variant_get(param, "(ii)", &from_item, &file);
+  review_edit(data, from_item, file, TRUE);
+}
+
 static void on_match_toggled(GtkCheckButton *check, gpointer data) {
   review *r = data;
   if (!gtk_check_button_get_active(check)) return;
@@ -1108,7 +1226,8 @@ static void review_load(review *r) {
   mc_import_item_free(r->snap);
   r->snap = NULL;
   if (!v->imp || mc_import_item_get(v->imp, r->item, &r->snap) != MC_OK ||
-      r->snap->file_count == 0) { /* its files went to another item */
+      (r->snap->file_count == 0 && r->snap->removed_count == 0)) {
+    /* its files went to another item */
     adw_dialog_force_close(r->dialog);
     return;
   }
@@ -1190,7 +1309,11 @@ static void review_load(review *r) {
     : it->error             ? mc_str(MC_STR_LINUX_IMPORT_MATCHES_NONE_YET)
                             : mc_str(MC_STR_LINUX_IMPORT_MATCHES_NOTHING));
   review_fill_tracks(r, sel); /* and the tracks' description */
-  review_set_busy(r, busy || r->pending.active);
+  /* With every file removed, only Put Back. */
+  review_set_busy(r, busy || r->pending.active || r->edit.active || it->file_count == 0);
+  gboolean editable = !busy && !r->pending.active && !r->edit.active;
+  g_simple_action_set_enabled(r->remove_file, editable);
+  g_simple_action_set_enabled(r->put_back, editable);
 }
 
 static void review_done(review *r, mc_status st) {
@@ -1377,6 +1500,14 @@ static void open_review(import_view *v, int idx) {
   g_signal_connect(r->use_file, "activate", G_CALLBACK(on_use_file), r);
   g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(r->use_file));
   g_object_unref(r->use_file);
+  r->remove_file = g_simple_action_new("remove-file", G_VARIANT_TYPE("(ii)"));
+  g_signal_connect(r->remove_file, "activate", G_CALLBACK(on_remove_file), r);
+  g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(r->remove_file));
+  g_object_unref(r->remove_file);
+  r->put_back = g_simple_action_new("put-back", G_VARIANT_TYPE("(ii)"));
+  g_signal_connect(r->put_back, "activate", G_CALLBACK(on_put_back), r);
+  g_action_map_add_action(G_ACTION_MAP(group), G_ACTION(r->put_back));
+  g_object_unref(r->put_back);
   gtk_widget_insert_action_group(GTK_WIDGET(r->dialog), "review", G_ACTION_GROUP(group));
   g_object_unref(group);
 
