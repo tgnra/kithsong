@@ -2,18 +2,6 @@
 
 What's left to build, fix and check. Platform first, then the item. "Decided:" marks a choice already made.
 
-## For 1.0
-
-- **Home page** - On Windows and Linux, from core's kithcore/home_picks.h: a station for each kind of music the audio analysis finds (kithcore/radio_stations.h), and the played rows from the play log, with track_plays for what's older than it. The phone app has only the Radio row, on its main page
-- **Repeat and a play queue** - A major item, to be designed by hand rather than handed to agents. Decided: repeat all is always on when shuffling, which is intended, and there's no repeat one, as it's not much use and would clutter the UI. Ctrl+R for repeat on Windows and Linux is Tania's to add. The queue itself is in core (up next, in playback.h) and on Windows and Linux, with Play Next and Play Last everywhere, the toolbar popup or popover, and the setting for adding tracks one by one, and on Android, where a chevron on the full player slides to it
-
-## Needs input
-
-- Analysis version 2: judge a few stations by ear, as the weights were only checked against albums and artists. `bpm` reads about a third of one 150 BPM album as 100, a dotted beat, which only matters if it's ever shown
-- Release - architectures other than x64. Windows and Linux build for ARM too, and the signed Flatpak repo now merges x86_64 and aarch64 (linux-repo in release.yml), first run by the 0.8.5 tag. Neither Linux job runs the tests. Needs a list of any other architectures, and a way to test Linux ARM
-- Core - mc_smart_describe() is English-shaped ("field op value" clauses under "Tracks where …"): languages with grammatical case or agreement may need their own templates; dates use the smart_date template, not the OS's date format. Needs a real translation to show what the templates have to do
-
-- Android - the tablet layout's decisions: Sync now, Leave group and the recycle bin's notice are on this phone's own page in the sidebar, as on the desktops (a Sync now in the Devices heading, or a Sync page, are the other answers); the sidebar's rows are 44dp, under the 48dp touch target, which is what lets a Pixel Fold held sideways have the layout; and where a fold leaves too narrow a strip past the sidebar (the 7.6" Fold-in) the sidebar widens to the fold, so the grid isn't split there
 ## Library and browsing
 
 - Android - Android Auto's queue items now expose art through ArtProvider, untested there
