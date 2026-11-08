@@ -6,7 +6,6 @@ What's left to build, fix and check. Platform first, then the item. "Decided:" m
 
 - Android - Android Auto's queue items now expose art through ArtProvider, untested there
 - Android - stations in Android Auto are untested; after a seed that won't open, Media3's legacy session queue keeps its old size, which Auto could show
-- All - radio skips: a restart after a long pause still counts as a skip, and going back to a skipped track keeps its push until the station next opens
 - Windows and Linux - Home's tile menus: physical clicks and the Menu key on Windows, screen readers on both, and touch long-press on Linux are untested
 - All - a chosen cover undone on one device stays on its peers, and sync replacing a chosen cover on a peer deletes the old one rather than sending it to the Recycle Bin (mc_coverart_replace)
 - Windows - a cover arriving by sync or import doesn't refresh the now-playing strip or the media controls' thumbnail until the next track (refresh_library doesn't call playback_tracks_changed)
