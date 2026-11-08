@@ -3,7 +3,7 @@
  *
  *   manual_stations <library folder> [--days <n>] [--runs <n>] [--migrate]
  *   manual_stations <library folder> --open [--now <ms>] [--runs <n>]
- *   manual_stations <empty folder> --make <tracks> [--skips <rows>]
+ *   manual_stations <empty folder> --make <tracks>
  *
  * --days also shows the next days' stations, and --runs repeats the timing. Timing covers
  * mc_radio_stations_list() and the whole of mc_home_picks_load(), which it's part of.
@@ -12,8 +12,7 @@
  * picks. With --now they're the same on every run, so two builds can be compared.
  *
  * --make fills a new library with tracks of 30 made-up sounds and a few strays, and plays for
- * some of them, so the first form has something big to time. Nothing is decoded. --skips adds
- * that many rows of stations' plays over the last 90 days, most of them early skips.
+ * some of them, so the first form has something big to time. Nothing is decoded.
  *
  * A library of an older schema is refused without --migrate, as an older app can't open one
  * that's been migrated. The artist refresh that opening normally starts stays off, so this
@@ -97,30 +96,7 @@ static void result_for(int sound, mc_analysis *a) {
   a->true_peak = -1.0;
 }
 
-/* Stations' plays of random tracks, from 200 seeds, as if listened to all the time. */
-static void make_skips(sqlite3 *db, int tracks, int rows, int64_t now) {
-  sqlite3_stmt *event;
-  sqlite3_prepare_v2(db, "INSERT INTO play_events (uid, track_uid, node_uid, started_ms, listened_ms, ended, context, context_uid)"
-                         " VALUES (?1, ?2, 'n', ?3, ?4, ?5, 'radio', ?6)", -1, &event, NULL);
-  char uid[64], track[64], seed[64];
-  for (int i = 0; i < rows; i++) {
-    int skipped = unit() < 0.7;
-    snprintf(uid, sizeof uid, "radio-%d", i);
-    snprintf(track, sizeof track, "track%07d", (int)(unit() * tracks));
-    snprintf(seed, sizeof seed, "track%07d", (int)(unit() * 200) * (tracks / 200));
-    sqlite3_bind_text(event, 1, uid, -1, SQLITE_STATIC);
-    sqlite3_bind_text(event, 2, track, -1, SQLITE_STATIC);
-    sqlite3_bind_int64(event, 3, now - (int64_t)(unit() * 90 * DAY_MS));
-    sqlite3_bind_int64(event, 4, skipped ? 10000 : 200000);
-    sqlite3_bind_text(event, 5, skipped ? "skipped" : "finished", -1, SQLITE_STATIC);
-    sqlite3_bind_text(event, 6, seed, -1, SQLITE_STATIC);
-    sqlite3_step(event);
-    sqlite3_reset(event);
-  }
-  sqlite3_finalize(event);
-}
-
-static int make_library(const char *dir, int tracks, int skips) {
+static int make_library(const char *dir, int tracks) {
   mc_mkdirs(dir);
   mc_library *lib = NULL;
   if (mc_library_open_internal(dir, &lib) != MC_OK) {
@@ -209,7 +185,6 @@ static int make_library(const char *dir, int tracks, int skips) {
       }
     }
   }
-  make_skips(db, tracks, skips, now);
   sqlite3_stmt *all[] = {artist, album, track, file, analysis, plays, event};
   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) sqlite3_finalize(all[i]);
   int rc = sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
@@ -293,25 +268,24 @@ static void open_stations(mc_library *lib, int64_t now, int runs) {
 
 int main(int argc, char **argv) {
   if (argc < 2 || argv[1][0] == '-') {
-    fprintf(stderr, "usage: %s <library folder> [--days <n>] [--runs <n>] [--migrate] [--open] [--now <ms>] | --make <tracks> [--skips <rows>]\n", argv[0]);
+    fprintf(stderr, "usage: %s <library folder> [--days <n>] [--runs <n>] [--migrate] [--open] [--now <ms>] | --make <tracks>\n", argv[0]);
     return 2;
   }
   const char *dir = argv[1];
-  int days = 1, runs = 3, migrate = 0, make = 0, skips = 0, open_them = 0;
+  int days = 1, runs = 3, migrate = 0, make = 0, open_them = 0;
   int64_t fixed_now = 0;
   for (int i = 2; i < argc; i++) {
     int more = i + 1 < argc;
     if (!strcmp(argv[i], "--days") && more) days = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--runs") && more) runs = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--make") && more) make = atoi(argv[++i]);
-    else if (!strcmp(argv[i], "--skips") && more) skips = atoi(argv[++i]);
     else if (!strcmp(argv[i], "--now") && more) fixed_now = atoll(argv[++i]);
     else if (!strcmp(argv[i], "--open")) open_them = 1;
     else if (!strcmp(argv[i], "--migrate")) migrate = 1;
     else return 2;
   }
   if (mc_init() != MC_OK) return 1;
-  if (make > 0) return make_library(dir, make, skips);
+  if (make > 0) return make_library(dir, make);
 
   int version = schema_on_disk(dir);
   if (version <= 0) {
