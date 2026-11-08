@@ -2,6 +2,7 @@ package ng.kithso.wear
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
@@ -26,6 +27,7 @@ import ng.kithso.core.KithCoreException
 import ng.kithso.core.SyncDevice
 import ng.kithso.core.SyncWaiting
 import java.io.File
+import java.net.Inet4Address
 
 /**
  * What the sync screen shows. The watch is always device B in pairing (see "Pairing" in
@@ -35,8 +37,8 @@ import java.io.File
  */
 @Immutable
 sealed interface SyncState {
-    /** Discoverable and waiting for another device to start pairing. */
-    data class Waiting(val deviceName: String) : SyncState
+    /** Discoverable and waiting for another device to start pairing, at [address] if on a LAN. */
+    data class Waiting(val deviceName: String, val address: LanAddress? = null) : SyncState
 
     /** Sync couldn't start, so the watch can't be found or paired. */
     data class Unavailable(val error: SyncError) : SyncState
@@ -54,7 +56,8 @@ sealed interface SyncState {
      * group; before its first file phase, [synced] counts the tracks with a file here and
      * [wanted] is 0. [progress] is a session fetching files, [waiting] the tracks that can only
      * come from members the watch can't reach, [problems] what's wrong with the files here as
-     * the core words it, and [failure] the last session that failed.
+     * the core words it, [failure] the last session that failed, and [address] where the
+     * others reach the watch, if it's on a LAN.
      */
     data class Paired(
         val devices: List<String>,
@@ -66,8 +69,13 @@ sealed interface SyncState {
         val waiting: SyncWaiting = SyncWaiting.NONE,
         val problems: String = "",
         val failure: SyncFailure? = null,
+        val address: LanAddress? = null,
     ) : SyncState
 }
+
+/** Where other devices reach this watch to add it by address: its IPv4 [host] and [port]. */
+@Immutable
+data class LanAddress(val host: String, val port: Int)
 
 /** The join-rule refusals the watch can hit as device B, and a pairing that broke down. */
 enum class RefuseReason { InGroup, LibraryMismatch, AlreadyPaired, Failed }
@@ -118,7 +126,14 @@ data class SyncStatus(
     /** What's wrong with the files here, as the core words it; empty if nothing is. */
     val problems: String = "",
     val pairing: Pairing? = null,
+    /** This watch's IPv4 address on the Wi-Fi network sync uses, or null off one. */
+    val host: String? = null,
+    /** The port sync listens on, while it runs. */
+    val port: Int = 0,
 ) {
+    /** Where the others reach this watch, while sync runs on a LAN. */
+    val address: LanAddress? get() = host?.takeIf { running }?.let { LanAddress(it, port) }
+
     /** Something is under way that shouldn't be cut off: a session or a pairing. */
     val busy: Boolean get() = sessions.isNotEmpty() || pairing is Pairing.ShowCode
 
@@ -148,10 +163,11 @@ data class SyncStatus(
                 waiting = waiting,
                 problems = problems,
                 failure = failure,
+                address = address,
             )
         }
         error != null -> SyncState.Unavailable(error)
-        else -> SyncState.Waiting(deviceName)
+        else -> SyncState.Waiting(deviceName, address)
     }
 }
 
@@ -209,7 +225,9 @@ class WatchSyncer(
             ?.createMulticastLock("kithsong:sync")
             ?.apply { setReferenceCounted(false) }
     }
-    private val wifi = WifiRequest(context.applicationContext)
+    private val wifi = WifiRequest(context.applicationContext) { host ->
+        scope.launch(thread) { update { copy(host = host) } }
+    }
     private val events = Channel<CoreSync.Event>(Channel.UNLIMITED)
 
     // When the library was last read again for files that arrived (elapsed realtime). Only
@@ -343,7 +361,7 @@ class WatchSyncer(
             return
         }
         Log.i(TAG, "Sync running on port ${sync.port}")
-        update { copy(running = true, error = null) }
+        update { copy(running = true, error = null, port = sync.port) }
         refreshLists(sync)
     }
 
@@ -355,7 +373,7 @@ class WatchSyncer(
         sync.stop()
         multicastLock?.release()
         wifi.release()
-        update { copy(running = false, sessions = emptyMap()) }
+        update { copy(running = false, sessions = emptyMap(), host = null) }
         Log.i(TAG, "Sync stopped")
     }
 
@@ -514,8 +532,11 @@ class WatchSyncer(
  * the Wi-Fi transport brings Wi-Fi up (if the watch knows the network), and binding the
  * process to it sends the core's sockets that way rather than through the phone, where the
  * other devices can't be reached. Released, Wi-Fi may go off again.
+ *
+ * [onAddress] hears the watch's IPv4 address on that network as it comes, changes and goes
+ * (null), on a ConnectivityManager thread.
  */
-private class WifiRequest(context: Context) {
+private class WifiRequest(context: Context, private val onAddress: (String?) -> Unit) {
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private var callback: ConnectivityManager.NetworkCallback? = null
 
@@ -527,9 +548,14 @@ private class WifiRequest(context: Context) {
                 connectivity.bindProcessToNetwork(network)
             }
 
+            override fun onLinkPropertiesChanged(network: Network, link: LinkProperties) {
+                onAddress(link.ipv4Address())
+            }
+
             override fun onLost(network: Network) {
                 Log.i(TAG, "Wi-Fi went away")
                 connectivity.bindProcessToNetwork(null)
+                onAddress(null)
             }
         }
         val request = NetworkRequest.Builder()
@@ -541,8 +567,9 @@ private class WifiRequest(context: Context) {
             this.callback = callback
         } catch (e: RuntimeException) {
             // SecurityException without CHANGE_NETWORK_STATE, or too many requests: sync still
-            // works wherever the watch already is.
+            // works wherever the watch already is, at the address it has there if on a LAN.
             Log.w(TAG, "Couldn't ask for Wi-Fi", e)
+            onAddress(currentLanAddress())
         }
     }
 
@@ -555,7 +582,23 @@ private class WifiRequest(context: Context) {
         } catch (e: IllegalArgumentException) {
             // Already gone.
         }
+        onAddress(null)
     }
+
+    // The active network's address, if it's Wi-Fi or Ethernet (as the phone's lanAddress).
+    private fun currentLanAddress(): String? {
+        val network = connectivity.activeNetwork ?: return null
+        val capabilities = connectivity.getNetworkCapabilities(network) ?: return null
+        if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+            !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        ) {
+            return null
+        }
+        return connectivity.getLinkProperties(network)?.ipv4Address()
+    }
+
+    private fun LinkProperties.ipv4Address(): String? =
+        linkAddresses.map { it.address }.firstOrNull { it is Inet4Address && !it.isLoopbackAddress }?.hostAddress
 
     private companion object {
         const val TAG = "kithsong"

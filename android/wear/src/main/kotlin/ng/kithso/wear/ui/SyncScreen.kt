@@ -25,9 +25,11 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import ng.kithso.core.ConfirmState
+import ng.kithso.core.CoreSync
 import ng.kithso.core.SyncWaiting
 import ng.kithso.core.WaitingDevice
 import ng.kithso.wear.FileProgress
+import ng.kithso.wear.LanAddress
 import ng.kithso.wear.R
 import ng.kithso.wear.RefuseReason
 import ng.kithso.wear.SyncError
@@ -51,7 +53,7 @@ fun SyncScreen(state: SyncState, onDismissRefusal: () -> Unit) {
         is SyncState.Waiting -> listOf(
             Line(stringResource(R.string.watch_pair_waiting, state.deviceName), emphasis = true),
             Line(stringResource(R.string.watch_keep_open)),
-        )
+        ) + listOfNotNull(addressLine(state.address))
         is SyncState.Unavailable -> listOf(
             Line(
                 stringResource(
@@ -142,7 +144,24 @@ private fun pairedLines(state: SyncState.Paired): List<Line> {
     state.failure?.let { failure ->
         lines += Line(stringResource(R.string.sync_failed_with, failure.deviceName, statusText(failure.status)), error = true)
     }
+    addressLine(state.address)?.let { lines += it }
     return lines
+}
+
+/**
+ * "Address: 192.168.1.20", where other devices reach the watch to add it by address, with the
+ * port only when it isn't the usual one (as the phone's Sync screen shows its own); null off
+ * Wi-Fi, where there's nothing to show.
+ */
+@Composable
+private fun addressLine(address: LanAddress?): Line? {
+    address ?: return null
+    val text = if (address.port != CoreSync.DEFAULT_PORT && address.port != 0) {
+        stringResource(R.string.device_address_port, address.host, address.port)
+    } else {
+        address.host
+    }
+    return Line(stringResource(R.string.watch_address, text))
 }
 
 /**
@@ -237,7 +256,7 @@ private fun refusalText(state: SyncState.Refused) = when (state.reason) {
 
 @Preview(device = "id:wearos_small_round", showSystemUi = true)
 @Composable
-private fun WaitingPreview() = SyncPreview(SyncState.Waiting("Galaxy Watch7"))
+private fun WaitingPreview() = SyncPreview(SyncState.Waiting("Galaxy Watch7", LanAddress("192.168.1.20", CoreSync.DEFAULT_PORT)))
 
 @Preview(device = "id:wearos_small_round", showSystemUi = true)
 @Composable
@@ -251,7 +270,10 @@ private fun RefusedPreview() =
 @Preview(device = "id:wearos_small_round", showSystemUi = true)
 @Composable
 private fun PairedPreview() = SyncPreview(
-    SyncState.Paired(listOf("Linux desktop", "Pixel 10"), ConfirmState.Confirmed, 12, 34, hasStatus = true),
+    SyncState.Paired(
+        listOf("Linux desktop", "Pixel 10"), ConfirmState.Confirmed, 12, 34, hasStatus = true,
+        address = LanAddress("192.168.1.20", 47824),
+    ),
 )
 
 @Preview(device = "id:wearos_small_round", showSystemUi = true)

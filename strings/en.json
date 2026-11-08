@@ -1448,6 +1448,7 @@
     "watch_pair_refused": { "text": "Can't pair", "note": "Title of the watch's screen when it turned down a pairing request." },
     "watch_pair_waiting": { "text": "Add {0} under Devices on your computer, or under Sync on your phone.", "note": "{0} is this watch's name." },
     "watch_keep_open": "Keep this screen open.",
+    "watch_address": { "text": "Address: {0}", "note": "Last line of the watch's Sync screen while it's on Wi-Fi: where other devices reach it, to add it by address. {0} is its IP address, or device_address_port when it listens on another port than usual." },
     "watch_enter_code": { "text": "Enter this code on {0}", "note": "{0} is the name of the device asking to pair." },
     "watch_syncing": { "one": "Syncing {0:d} of {1:d} track", "other": "Syncing {0:d} of {1:d} tracks", "note": "The plural follows {1}, the number of tracks to sync." },
     "watch_tracks": { "one": "{0:d} track on this watch", "other": "{0:d} tracks on this watch" },
