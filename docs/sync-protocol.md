@@ -37,8 +37,12 @@ the data after a crash.
 ## Discovery
 
 - mDNS/DNS-SD service `_kithsong._tcp`, announced and browsed by an embedded responder
-  (mjansson/mdns) on a background thread. Default scan interval: 30 s. A device that hasn't
-  answered for two intervals is offline.
+  (mjansson/mdns) on a background thread. Default scan interval: 30 s. Each scan browses and
+  also announces the device again, so it stays online for others even when their queries
+  don't reach it. A device that hasn't been heard for two intervals is offline. A socket that
+  hears nothing for 1.5 intervals, not even its own looped-back packets, or fails to send,
+  is reopened: a sleep or a Wi-Fi reconnect can leave it out of the multicast group with
+  the interface's address unchanged.
 - The SRV record carries the TCP port the device listens on: 47823 by default, so a firewall
   rule can allow it, or an ephemeral port if 47823 is taken. Hosts with a firewall must allow
   UDP 5353 (mDNS) and TCP 47823.

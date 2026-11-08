@@ -2,7 +2,7 @@
  * "_kithsong._tcp"), with no OS mDNS daemon. See docs/sync-protocol.md, "Discovery".
  *
  * Threading: mc_discovery_start() starts a discovery thread that answers queries, browses
- * every scan interval and calls the callback. The callback always runs on that thread, so
+ * and announces every scan interval and calls the callback. The callback always runs on that thread, so
  * frontends marshal it onto their UI thread. mc_discovery_set_group() may be called from
  * any thread, the callback included, but not concurrently with mc_discovery_stop(). Stop
  * joins the thread, so it must not be called from the callback.
@@ -48,9 +48,10 @@ typedef void (*mc_peer_cb)(const mc_peer_info *peer, int online, void *user);
 /* Announces this device and browses for others until mc_discovery_stop(). kind is
  * "desktop", "phone" or "watch". group_hash is from mc_discovery_group_hash(), or NULL or
  * "" when not in a group. port is the TCP port this device listens on. scan_interval_s is
- * how often to browse (0 for the default); a peer not heard for two intervals is offline.
- * Fails with MC_ERR_NET if no mDNS socket can be opened (no network, or multicast is
- * blocked). */
+ * how often to browse and announce again (0 for the default); a peer not heard for two
+ * intervals is offline. Starts with no network too, opening its sockets once there is one,
+ * and reopens sockets that go deaf (e.g. after a sleep). Fails with MC_ERR_NET only if the
+ * socket API can't be initialised. */
 mc_status mc_discovery_start(const char *device_uid, const char *device_name, const char *kind,
                              const char *group_hash, uint16_t port, int scan_interval_s,
                              mc_peer_cb cb, void *user, mc_discovery **out);

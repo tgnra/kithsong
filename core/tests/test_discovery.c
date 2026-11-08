@@ -2,8 +2,9 @@
  * packets the test sends itself with mdns.h. Skipped (exit 77) when multicast isn't
  * available, e.g. in a sandbox with no network. Checks that each instance sees the other
  * with the right TXT fields, that a group change and a rename reach the other, that a goodbye takes a
- * peer offline at once, that a silent peer times out after two scan intervals, and that
- * peers speaking another protocol version are ignored. */
+ * peer offline at once, that a silent peer times out after two scan intervals, that
+ * peers speaking another protocol version are ignored, and that a peer whose sockets went
+ * deaf stays online and hears again. */
 #ifndef _WIN32
 #define _DEFAULT_SOURCE /* the socket API mdns.h uses */
 #endif
@@ -15,6 +16,7 @@
 #include "kithcore/kithcore.h"
 #include "mdns.h"
 #include "test.h"
+#include "discovery/discovery_test.h"
 #include "util/platform.h"
 
 #define SKIP 77
@@ -219,6 +221,24 @@ int main(void) {
   }
   CHECK_STR(pa.name, "Living room");
   CHECK(pa.online);
+
+  /* B's sockets go deaf, as after a sleep: it hears nothing, so it answers none of A's
+   * queries. Its own announcements every scan keep it online at A all the same, and once
+   * B notices it hasn't heard even its own browse, it reopens them and hears A again. */
+  mc_discovery_test_deafen(b);
+  uint64_t deafened = mc_mono_ms();
+  int a_kept_b = 1;
+  while (mc_mono_ms() - deafened < (3 * INTERVAL_S + 1) * 1000) {
+    if (!lookup(&seen_by_a, uid_b, &pb) || !pb.online) a_kept_b = 0;
+    mc_sleep_ms(50);
+  }
+  CHECK(a_kept_b);
+  int reopened = mc_discovery_test_reopened(b);
+  printf("B reopened %d deaf socket(s); A, hearing all along, %d\n", reopened,
+         mc_discovery_test_reopened(a));
+  CHECK(reopened > 0);
+  CHECK(wait_for(&seen_by_b, uid_a, 1, NULL, (2 * INTERVAL_S + 1) * 1000, NULL) >= 0);
+  CHECK(wait_for(&seen_by_a, uid_b, 1, NULL, 100, NULL) >= 0);
 
   /* A fake peer announces once and then falls silent; one on protocol version 2 is
    * ignored. */
