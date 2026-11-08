@@ -6,8 +6,11 @@
 #include "analysis_ui.h"
 #include "device_view.h"
 #include "pair_dialog.h"
+#include "playback.h"
+#include "plugins_ui.h"
 #include "settings_view.h"
 #include "sync_bridge.h"
+#include "tethered_bridge.h"
 
 enum {
   REFRESH_DEVICES_MS = 200, /* after sync events, once for a burst */
@@ -97,12 +100,17 @@ static void save_own_name(mc_sync *sync) {
 
 /* --- The section --- */
 
-/* The kind's icon; not every icon theme has a watch, so phones stand in. */
+/* device_row()'s kind for a tethered device, such as an iPod. */
+#define KIND_TETHERED (-1)
+
+/* The kind's icon; not every icon theme has a watch, so phones stand in, or a media player,
+ * so a removable drive does. */
 static GtkWidget *kind_icon(int kind) {
-  const char *names[] = {kind == MC_DEVICE_WATCH   ? "smartwatch-symbolic"
+  const char *names[] = {kind == KIND_TETHERED     ? "multimedia-player-symbolic"
+                         : kind == MC_DEVICE_WATCH ? "smartwatch-symbolic"
                          : kind == MC_DEVICE_PHONE ? "phone-symbolic"
                                                    : "computer-symbolic",
-                         "phone-symbolic", NULL};
+                         kind == KIND_TETHERED ? "drive-removable-media-symbolic" : "phone-symbolic", NULL};
   GIcon *gicon = g_themed_icon_new_from_names((char **)names, -1);
   GtkWidget *icon = gtk_image_new_from_gicon(gicon);
   g_object_unref(gicon);
@@ -260,6 +268,20 @@ static void refresh_devices(void) {
     rows++;
     if (!strcmp(uid, d.selected)) selected = row;
   }
+  /* Tethered devices, after the group's: plugged in first, then by name, as listed. */
+  mc_tethered *teth = tethered_bridge_get();
+  mc_tethered_device_list *tethered = NULL;
+  if (teth && mc_tethered_list(teth, &tethered) != MC_OK) tethered = NULL;
+  for (int i = 0; tethered && i < tethered->count; i++) {
+    const mc_tethered_device *dev = &tethered->items[i];
+    const char *name = dev->name && *dev->name ? dev->name : dev->kind;
+    const char *sub = mc_str(dev->connected ? MC_STR_TETHERED_CONNECTED : MC_STR_TETHERED_NOT_CONNECTED);
+    GtkWidget *row = device_row(dev->uid, KIND_TETHERED, name, sub, NULL, dev->syncing, !dev->connected);
+    gtk_list_box_append(GTK_LIST_BOX(d.paired), row);
+    rows++;
+    if (!strcmp(dev->uid, d.selected)) selected = row;
+  }
+  mc_tethered_device_list_free(tethered);
   int nn = nearby ? nearby->count : 0;
   for (int i = 0; i < nn; i++) {
     const mc_sync_nearby *dev = &nearby->items[i];
@@ -328,11 +350,17 @@ static void schedule_library_refresh(void) {
   if (!d.library_source) d.library_source = g_timeout_add(REFRESH_LIBRARY_MS, on_library_timeout, NULL);
 }
 
+/* Shows uid's page: a tethered device's, or a group member's. */
+static void open_page(const char *uid) {
+  if (tethered_bridge_has(uid)) device_view_open_tethered(tethered_bridge_get(), d.a->lib, uid);
+  else device_view_open(sync_bridge_get(), d.a->lib, uid);
+}
+
 static void open_device(const char *uid) {
   g_strlcpy(d.selected, uid, sizeof d.selected);
   gtk_list_box_unselect_all(d.a->top_nav);
   gtk_list_box_unselect_all(d.a->nav);
-  device_view_open(sync_bridge_get(), d.a->lib, uid);
+  open_page(uid);
   gtk_stack_set_visible_child_name(d.a->pages, "device");
 }
 
@@ -559,6 +587,39 @@ static void on_sync_event(void *user, const sync_event *ev) {
   }
 }
 
+/* --- Tethered devices --- */
+
+static void on_tethered_event(void *user, const tethered_event *ev) {
+  (void)user;
+  switch (ev->kind) {
+    case TETHERED_EV_DEVICES:
+      schedule_refresh();
+      break;
+    case TETHERED_EV_PROGRESS:
+      if (ev->phase == MC_TETHERED_PHASE_READING) schedule_refresh(); /* the row's spinner */
+      device_view_on_tethered_event(ev);
+      break;
+    case TETHERED_EV_DONE:
+      device_view_on_tethered_event(ev);
+      /* Plays and On-The-Go playlists taken in from it. */
+      if (ev->result.plays_imported > 0 || ev->result.playlists_imported > 0) schedule_library_refresh();
+      schedule_refresh();
+      break;
+  }
+}
+
+/* Plays from devices are scrobbled while this computer scrobbles. */
+static void update_tethered_scrobbler(void) {
+  tethered_bridge_set_scrobbler(playback_scrobble_target());
+}
+
+/* A plugin was turned on or off: its devices may be plugged in already. */
+static void on_plugins_changed(void *user) {
+  (void)user;
+  tethered_bridge_scan();
+  refresh_devices();
+}
+
 /* --- Device page callbacks --- */
 
 static void on_rename_self(void *user, const char *name) {
@@ -575,6 +636,8 @@ static void on_devices_changed(void *user) {
 GtkWidget *devices_new(app *a) {
   d.a = a;
   pair_dialog_init(&k_pair_host);
+  plugins_ui_init(on_plugins_changed, a);
+  playback_on_scrobble_changed(update_tethered_scrobbler);
   GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 
   /* The Devices heading, with + at the end to add a device by address. */
@@ -634,9 +697,12 @@ void devices_start(app *a) {
   char *name = saved_name();
   sync_bridge_start(a->lib, a->settings_dir, name, on_sync_event, a);
   g_free(name);
+  /* Tethered devices work with no group, and without sync. */
+  tethered_bridge_start(a->lib, a->settings_dir, on_tethered_event, a);
+  update_tethered_scrobbler();
   /* After a library switch on a device's page, it shows again on the new sync (or Albums, if
    * the refresh finds the device gone). */
-  if (d.selected[0]) device_view_open(sync_bridge_get(), a->lib, d.selected);
+  if (d.selected[0]) open_page(d.selected);
   if (!d.poll_source) d.poll_source = g_timeout_add_seconds(POLL_DEVICES_S, on_poll, NULL);
   refresh_devices();
   app_update_waiting(a); /* the old sync's banner goes; the new one's comes with its event */
@@ -647,6 +713,7 @@ void devices_stop(app *a) {
   analysis_ui_stop();
   pair_dialog_close_all();
   device_view_open(NULL, NULL, NULL);
+  tethered_bridge_stop(); /* before the library, and the scrobbler, go */
   sync_bridge_stop();
   g_clear_handle_id(&d.refresh_source, g_source_remove);
   g_clear_handle_id(&d.library_source, g_source_remove);

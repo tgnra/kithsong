@@ -448,7 +448,7 @@ int main(int argc, char **argv) {
     snprintf(wav, sizeof wav, "%s/long.wav", root);
     snprintf(cache, sizeof cache, "%s/c-cache", root);
     CHECK(write_wav(wav, LONG_MS, 330));
-    mc_transcode_opts opts = {MC_FORMAT_OPUS, 256};
+    mc_transcode_opts opts = {.format = MC_FORMAT_OPUS, .bitrate_kbps = 256};
     CHECK(mc_transcode_cached(cache, lossy_orig, wav, &opts, &made) == MC_OK);
     abs_path(&a, copy_rel, p, sizeof p);
     CHECK(made && mc_copy_file(made, p, 0) == MC_OK);

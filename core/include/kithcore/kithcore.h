@@ -73,6 +73,7 @@ mc_status mc_uid_new(char out[MC_UID_STRLEN]);
 #include "kithcore/playback.h"
 #include "kithcore/tagger.h"
 #include "kithcore/transcode.h"
+#include "kithcore/plugins.h"
 #include "kithcore/discovery.h"
 #include "kithcore/sync.h"
 #include "kithcore/sync_here.h"

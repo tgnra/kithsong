@@ -92,6 +92,10 @@ BOOL settings_view_translate(const MSG *msg);
 /* Where the Sync section saves this PC's name, and what it calls after renaming it or
  * leaving the group (to refresh the devices). Call once, after creating it. */
 void settings_view_init_sync(mc_settings *settings, void (*devices_changed)(void));
+/* The Plugins section (plugins_view.h), saving to the settings given above, and what's called
+ * after a plugin is turned on or off, and after the scrobbling checkbox changes. Call once,
+ * after settings_view_init_sync() and once plugins are loaded. */
+void settings_view_init_plugins(void (*plugins_changed)(void), void (*scrobble_changed)(void));
 /* Reloads the Sync section: the name (unless it's being edited), the addresses and whether
  * this PC is in a group. Call when sync starts or stops and when the devices change. */
 void settings_view_update_sync(void);

@@ -58,6 +58,7 @@
 #include "now_playing.h"
 #include "perf_ui.h"
 #include "playback.h"
+#include "plugins_ui.h"
 #include "testing_view.h"
 #include "playlist_dialogs.h"
 #include "recents.h"
@@ -1885,6 +1886,9 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
     return;
   }
   a->gapp = gapp;
+  /* In the primary instance only (one launched again just hands over), before sync and the
+   * tethered devices start. */
+  plugins_ui_load(a->settings_dir);
 
   GtkCssProvider *provider = gtk_css_provider_new();
   gtk_css_provider_load_from_string(provider, css);
@@ -2118,6 +2122,7 @@ int main(int argc, char **argv) {
    * search of the Edit dialog's is done with it. */
   edit_dialog_wait();
   mc_library_close(a.lib);
+  plugins_ui_unload(); /* sync and the tethered devices have stopped with the window */
   g_free(a.settings_dir);
   g_free(a.art_dir);
   mc_free(a.reset_failed);

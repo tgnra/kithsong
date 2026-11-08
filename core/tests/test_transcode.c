@@ -124,7 +124,7 @@ static int dir_entries(const char *dir) {
 
 static void run_job(void *arg) {
   job *j = arg;
-  mc_transcode_opts opts = {MC_FORMAT_OPUS, 96};
+  mc_transcode_opts opts = {.format = MC_FORMAT_OPUS, .bitrate_kbps = 96};
   j->st = mc_transcode_cached(j->cache, j->uid, j->src, &opts, &j->out);
 }
 
@@ -154,7 +154,7 @@ static void check_transcode(const char *dir) {
   in.disc_total = 2;
   CHECK(mc_tags_write(src, &in) == MC_OK);
 
-  mc_transcode_opts opts = {MC_FORMAT_OPUS, 128};
+  mc_transcode_opts opts = {.format = MC_FORMAT_OPUS, .bitrate_kbps = 128};
   char *out = NULL;
   CHECK(mc_transcode_cached(cache, "0192f1e4-7c3a-7b21-9d4e-1f2a3b4c5d6e", src, &opts, &out) == MC_OK);
   char expected_buf[1024];
@@ -267,13 +267,13 @@ static void check_transcode(const char *dir) {
   }
 
   /* Original needs no transcode. */
-  mc_transcode_opts original = {MC_FORMAT_ORIGINAL, 0};
+  mc_transcode_opts original = {.format = MC_FORMAT_ORIGINAL, .bitrate_kbps = 0};
   CHECK(mc_transcode_cached(cache, "x", src, &original, &again) == MC_OK);
   CHECK_STR(again, src);
   mc_free(again);
 
   /* Bad arguments. */
-  mc_transcode_opts odd = {MC_FORMAT_OPUS, 100};
+  mc_transcode_opts odd = {.format = MC_FORMAT_OPUS, .bitrate_kbps = 100};
   CHECK(mc_transcode_cached(cache, "x", src, &odd, &again) == MC_ERR_INVALID_ARG && !again);
   CHECK(mc_transcode_cached(cache, "..", src, &opts, &again) == MC_ERR_INVALID_ARG);
   CHECK(mc_transcode_cached(cache, "a/b", src, &opts, &again) == MC_ERR_INVALID_ARG);

@@ -1,4 +1,4 @@
-/* Opus transcodes for sync.
+/* Transcodes: Opus for sync, and a plugin's encoders for tethered devices.
  *
  *   decoder (playback/decoder.c) -> downmix to stereo -> libopusenc (Speex resampler to
  *   48 kHz, then libopus) -> <path>.<random>.part, hashed as it's written -> rename into
@@ -11,7 +11,10 @@
  *
  * Tags are read from the source with TagLib (tag_io.cpp) and written as Opus comments while
  * encoding, so the file is complete the moment it's renamed into place. The cover is the
- * album's image beside the source (coverart.c finds it), never the source's embedded one. */
+ * album's image beside the source (coverart.c finds it), never the source's embedded one.
+ *
+ * A plugin's encoder is given a source (plugin/source.c) already converted to its input format
+ * and the device's limits, and writes the part file itself; it's hashed once written. */
 #include "kithcore/transcode.h"
 
 #include <math.h>
@@ -24,8 +27,10 @@
 #include "miniaudio.h"
 #include "opusenc.h"
 #include "playback/decoder.h"
+#include "plugin/plugins_internal.h"
 #include "tagger/coverart.h"
 #include "tagger/tag_io.h"
+#include "transcode/transcode_internal.h"
 #include "util/platform.h"
 
 enum {
@@ -335,24 +340,150 @@ static void mark_used(const char *path) {
   if (valid) write_sidecar(path, sha);
 }
 
+/* --- Plugin encoders --- */
+
+/* [a-z0-9]+ (or empty, if may_be_empty), NUL-terminated within MC_ENCODER_ID_LEN. */
+static int valid_id(const char *s, int may_be_empty) {
+  size_t n = 0;
+  for (; n < MC_ENCODER_ID_LEN && s[n]; n++)
+    if (!((s[n] >= 'a' && s[n] <= 'z') || (s[n] >= '0' && s[n] <= '9'))) return 0;
+  return n < MC_ENCODER_ID_LEN && (n || may_be_empty);
+}
+
+/* The plugin encoder format opts names, if it's loaded and has the setting. */
+static mc_status find_encoder(const mc_transcode_opts *opts, mc_plugin_encoder *out) {
+  if (!valid_id(opts->encoder, 0) || !valid_id(opts->setting, 1) || opts->max_sample_rate < 0 ||
+      opts->max_bits < 0 || opts->max_channels < 0)
+    return MC_ERR_INVALID_ARG;
+  mc_status st = mc_plugins_find_encoder(opts->encoder, out);
+  if (st != MC_OK) return st;
+  const kith_encoder_format *f = out->format;
+  if (!f->extension || !valid_id(f->extension, 0)) return MC_ERR_FORMAT;
+  if (!f->setting_count) return opts->setting[0] ? MC_ERR_INVALID_ARG : MC_OK;
+  for (int i = 0; f->settings && i < f->setting_count; i++)
+    if (f->settings[i].id && !strcmp(f->settings[i].id, opts->setting)) return MC_OK;
+  return MC_ERR_INVALID_ARG;
+}
+
+mc_status mc_transcode_cache_name(const mc_transcode_opts *opts, char *out, size_t cap) {
+  if (!opts || !out || !cap) return MC_ERR_INVALID_ARG;
+  out[0] = '\0';
+  if (opts->format == MC_FORMAT_OPUS) {
+    if (!valid_bitrate(opts->bitrate_kbps)) return MC_ERR_INVALID_ARG;
+    snprintf(out, cap, "opus-%d.opus", opts->bitrate_kbps);
+    return MC_OK;
+  }
+  if (opts->format != MC_FORMAT_ENCODER) return MC_ERR_INVALID_ARG;
+  mc_plugin_encoder enc;
+  mc_status st = find_encoder(opts, &enc);
+  if (st != MC_OK) return st;
+  char limits[64] = "";
+  if (opts->max_sample_rate || opts->max_bits || opts->max_channels)
+    snprintf(limits, sizeof limits, "-max%db%dr%dc", opts->max_bits, opts->max_sample_rate,
+             opts->max_channels);
+  int n = snprintf(out, cap, "%s%s%s%s.%s", opts->encoder, opts->setting[0] ? "-" : "",
+                   opts->setting, limits, enc.format->extension);
+  return n > 0 && (size_t)n < cap ? MC_OK : MC_ERR_INVALID_ARG;
+}
+
+char *mc_transcode_cache_path(const char *cache_dir, const char *file_uid,
+                              const mc_transcode_opts *opts) {
+  char name[128];
+  if (!cache_dir || !valid_uid(file_uid) ||
+      mc_transcode_cache_name(opts, name, sizeof name) != MC_OK)
+    return NULL;
+  char *uid_dir = concat(cache_dir, MC_PATH_SEP, file_uid);
+  char *path = uid_dir ? concat(uid_dir, MC_PATH_SEP, name) : NULL;
+  free(uid_dir);
+  return path;
+}
+
+int mc_transcode_same_opts(const mc_transcode_opts *a, const mc_transcode_opts *b) {
+  if (a->format != b->format) return 0;
+  if (a->format == MC_FORMAT_OPUS) return a->bitrate_kbps == b->bitrate_kbps;
+  if (a->format != MC_FORMAT_ENCODER) return 1;
+  return !strncmp(a->encoder, b->encoder, MC_ENCODER_ID_LEN) &&
+         !strncmp(a->setting, b->setting, MC_ENCODER_ID_LEN) &&
+         a->max_sample_rate == b->max_sample_rate && a->max_bits == b->max_bits &&
+         a->max_channels == b->max_channels;
+}
+
+/* hex SHA-256 of a whole file. */
+static mc_status hash_file(const char *path, char sha[65]) {
+  FILE *f = mc_fopen(path, "rb");
+  if (!f) return MC_ERR_IO;
+  mbedtls_sha256_context ctx;
+  mbedtls_sha256_init(&ctx);
+  static const size_t BUF = 65536;
+  unsigned char *buf = malloc(BUF), digest[32];
+  int ok = buf && mbedtls_sha256_starts(&ctx, 0) == 0;
+  size_t n;
+  while (ok && (n = fread(buf, 1, BUF, f)) > 0) ok = mbedtls_sha256_update(&ctx, buf, n) == 0;
+  if (ferror(f)) ok = 0;
+  fclose(f);
+  free(buf);
+  if (ok) ok = mbedtls_sha256_finish(&ctx, digest) == 0;
+  mbedtls_sha256_free(&ctx);
+  if (!ok) return MC_ERR_IO;
+  hex(digest, sha);
+  return MC_OK;
+}
+
+/* Has the plugin's encoder write src into part_path, then hashes what it wrote. */
+static mc_status encode_plugin(const char *src_path, const char *part_path,
+                               const mc_transcode_opts *opts, const mc_plugin_encoder *enc,
+                               const kith_job *job, char sha[65]) {
+  kith_pcm_format want = enc->format->input;
+  want.max_sample_rate = opts->max_sample_rate;
+  want.max_bits = opts->max_bits;
+  want.max_channels = opts->max_channels;
+  kith_source *src = NULL;
+  int rc = mc_source_open(src_path, &want, &src);
+  if (rc != KITH_OK)
+    return rc == KITH_ERR_FORMAT ? MC_ERR_FORMAT : rc == KITH_ERR_NOMEM ? MC_ERR_NOMEM : MC_ERR_IO;
+  rc = enc->encoder->encode(src, opts->encoder, opts->setting, part_path, job);
+  mc_source_close(src);
+  if (rc == KITH_OK && mc_plugin_job_cancelled(job)) rc = KITH_ERR_CANCELLED;
+  if (rc != KITH_OK)
+    return rc == KITH_ERR_CANCELLED ? MC_ERR_CANCELLED
+         : rc == KITH_ERR_NOMEM     ? MC_ERR_NOMEM
+                                    : MC_ERR_IO;
+  return hash_file(part_path, sha);
+}
+
 mc_status mc_transcode_cached(const char *cache_dir, const char *file_uid, const char *src_path,
                               const mc_transcode_opts *opts, char **out_path) {
+  return mc_transcode_cached_job(cache_dir, file_uid, src_path, opts, NULL, out_path);
+}
+
+mc_status mc_transcode_cached_job(const char *cache_dir, const char *file_uid,
+                                  const char *src_path, const mc_transcode_opts *opts,
+                                  const kith_job *job, char **out_path) {
   if (out_path) *out_path = NULL;
   if (!src_path || !opts || !out_path) return MC_ERR_INVALID_ARG;
   if (opts->format == MC_FORMAT_ORIGINAL) {
     *out_path = mc_strdup(src_path);
     return *out_path ? MC_OK : MC_ERR_NOMEM;
   }
-  if (opts->format != MC_FORMAT_OPUS || !valid_bitrate(opts->bitrate_kbps) || !cache_dir ||
-      !valid_uid(file_uid))
+  mc_plugin_encoder enc;
+  memset(&enc, 0, sizeof enc);
+  if (opts->format == MC_FORMAT_OPUS) {
+    if (!valid_bitrate(opts->bitrate_kbps)) return MC_ERR_INVALID_ARG;
+  } else if (opts->format == MC_FORMAT_ENCODER) {
+    mc_status found = find_encoder(opts, &enc);
+    if (found != MC_OK) return found;
+  } else {
     return MC_ERR_INVALID_ARG;
+  }
+  if (!cache_dir || !valid_uid(file_uid)) return MC_ERR_INVALID_ARG;
 
-  char name[32];
-  snprintf(name, sizeof name, "opus-%d.opus", opts->bitrate_kbps);
+  char name[128];
+  mc_status st = mc_transcode_cache_name(opts, name, sizeof name);
+  if (st != MC_OK) return st;
   char *uid_dir = concat(cache_dir, MC_PATH_SEP, file_uid);
   char *path = uid_dir ? concat(uid_dir, MC_PATH_SEP, name) : NULL;
   char *part = path ? part_path(path) : NULL;
-  mc_status st = MC_ERR_NOMEM;
+  st = MC_ERR_NOMEM;
   if (part && mc_file_exists(path)) {
     mark_used(path);
     st = MC_OK;
@@ -361,7 +492,8 @@ mc_status mc_transcode_cached(const char *cache_dir, const char *file_uid, const
     for (int tries = 0; tries < 2; tries++) {
       if ((st = mc_mkdirs(uid_dir)) != MC_OK) break;
       char sha[65];
-      st = encode(src_path, part, opts->bitrate_kbps, sha);
+      st = opts->format == MC_FORMAT_OPUS ? encode(src_path, part, opts->bitrate_kbps, sha)
+                                          : encode_plugin(src_path, part, opts, &enc, job, sha);
       if (st == MC_OK) {
         /* The size and mtime are the part file's (a rename keeps them). Should another encode
          * of it replace it before the sidecar is written, the bytes are the same. */
@@ -379,7 +511,7 @@ mc_status mc_transcode_cached(const char *cache_dir, const char *file_uid, const
       int gone = !mc_file_exists(uid_dir);
       if (mc_file_exists(part)) mc_remove(part);
       mc_rmdir(uid_dir); /* only if it's empty */
-      if (!gone) break;
+      if (!gone || st == MC_ERR_CANCELLED) break;
     }
   }
   if (st == MC_OK) {
@@ -415,15 +547,34 @@ typedef struct cache_scan {
   int oom;
 } cache_scan;
 
-/* A sidecar goes with its file; one whose file is gone goes now. */
+/* Whether a name in a cache folder is stem's cached file: stem, a dot, an extension. */
+typedef struct stem_find {
+  const char *stem; /* without the dot */
+  size_t len;
+  int found;
+} stem_find;
+
+static void on_sibling(void *user, const char *name, int is_dir) {
+  stem_find *s = user;
+  if (is_dir || s->found || strncmp(name, s->stem, s->len) || name[s->len] != '.') return;
+  const char *ext = name + s->len;
+  if (strcmp(ext, ".sha256") && !ends_with(ext, ".part")) s->found = 1;
+}
+
+/* A sidecar goes with its file, whatever its extension; one whose file is gone goes now. */
 static void check_sidecar(const char *path) {
-  size_t stem = strlen(path) - strlen(".sha256");
-  char *file = malloc(stem + sizeof ".opus");
-  if (!file) return;
-  memcpy(file, path, stem);
-  memcpy(file + stem, ".opus", sizeof ".opus");
-  if (!mc_file_exists(file)) mc_remove(path);
-  free(file);
+  char *dir = parent_dir(path);
+  const char *base = dir ? path + strlen(dir) + 1 : path;
+  size_t len = strlen(base) - strlen(".sha256");
+  char *stem = malloc(len + 1);
+  if (stem && dir) {
+    memcpy(stem, base, len);
+    stem[len] = '\0';
+    stem_find s = {stem, len, 0};
+    if (mc_list_dir(dir, on_sibling, &s) == MC_OK && !s.found) mc_remove(path);
+  }
+  free(stem);
+  free(dir);
 }
 
 static int on_cached_file(void *user, const char *path) {

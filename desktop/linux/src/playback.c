@@ -31,6 +31,7 @@ static struct {
   mc_scrobbler *scrobbler;
   gboolean scrobble_off;              /* this device doesn't scrobble (the account is the group's) */
   void (*scrobbler_closing)(void);
+  void (*scrobble_changed)(void);     /* playback_on_scrobble_changed() */
   int announced;   /* the item last sent as now playing, or -1 */
   item *items;
   int count;
@@ -571,8 +572,17 @@ void playback_on_scrobbler_closing(void (*closing)(void)) {
   s.scrobbler_closing = closing;
 }
 
+mc_scrobbler *playback_scrobble_target(void) {
+  return s.scrobble_off ? NULL : s.scrobbler;
+}
+
+void playback_on_scrobble_changed(void (*changed)(void)) {
+  s.scrobble_changed = changed;
+}
+
 void playback_set_scrobble(gboolean on) {
   s.scrobble_off = !on;
+  if (s.scrobble_changed) s.scrobble_changed();
 }
 
 /* --- The queue, the core's up next --- */

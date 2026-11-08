@@ -37,7 +37,7 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
     enum class UpNextKind { Track, Album, Artist, Playlist, SmartPlaylist, AlbumGroup, SmartAlbumGroup }
 
     /** How a queue came to be played (mc_play_context, in the same order). */
-    enum class PlayContext { Unknown, Manual, Album, Playlist, AlbumGroup, Artist, Shuffle, Radio }
+    enum class PlayContext { Unknown, Manual, Album, Playlist, AlbumGroup, Artist, Shuffle, Radio, Device }
 
     /** How a play ended (mc_play_end, in the same order). */
     enum class PlayEnd { Unknown, Finished, Skipped, Stopped, Replaced, Failed }

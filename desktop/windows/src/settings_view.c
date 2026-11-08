@@ -18,6 +18,7 @@
 #include "scrobble_service.h"
 #include "scroller.h"
 #include "sync_bridge.h"
+#include "plugins_view.h"
 #include "testing_view.h"
 #include "theme.h"
 #include "wstr.h"
@@ -54,6 +55,8 @@ enum {
   ID_SET_ANALYSIS_HEADING,
   ID_SET_ANALYSIS_STATUS,
   ID_SET_ANALYSIS_RESUME,
+  ID_SET_PLUGINS_HEADING,
+  ID_SET_PLUGINS_TEXT,
   ID_SET_TEST_HEADING,
   ID_SET_TEST_TOGGLE,
   ID_SET_RESET_HEADING,
@@ -90,6 +93,7 @@ static struct {
   BOOL analysis_stopped;       /* Resume analysis is there */
   wchar_t analysis_shown[256]; /* the status line as last set */
   HWND lfm_heading, lfm_status, lfm_button, lfm_service, lfm_check, lfm_check_label, lfm_note;
+  HWND plugins_heading, plugins_text; /* the rest of Plugins is plugins_view.c's */
   HWND test_heading, test_toggle; /* the Testing section's accordion: the rest is testing_view.c's */
   BOOL test_open;
   HWND reset_heading, reset, reset_note;
@@ -100,6 +104,7 @@ static struct {
   BOOL shown;
   mc_settings *settings;
   void (*devices_changed)(void);
+  void (*scrobble_changed)(void); /* the checkbox changed: tethered devices' scrobbler follows */
   char shown_name[MC_SYNC_DEVICE_NAME_MAX + 1]; /* what the name box was last set to */
 
   /* Signing in to Last.fm (or the service chosen instead). */
@@ -369,6 +374,10 @@ void settings_view_create(HWND parent) {
   g_set.lfm_check_label = child(WC_STATICW, mc_wstr(MC_STR_SCROBBLE_SWITCH), label | SS_NOTIFY, ID_SET_LFM_CHECK_LABEL);
   g_set.lfm_note = child(WC_STATICW, NULL, label, ID_SET_LFM_NOTE); /* names the service: update_scrobble() */
 
+  g_set.plugins_heading = child(WC_STATICW, mc_wstr(MC_STR_SETTINGS_PLUGINS), label, ID_SET_PLUGINS_HEADING);
+  g_set.plugins_text = child(WC_STATICW, mc_wstr(MC_STR_PLUGINS_TEXT), label, ID_SET_PLUGINS_TEXT);
+  plugins_view_create(g_set.content, g_set.plugins_text, relayout); /* here, for the tab order */
+
   g_set.test_heading = child(WC_STATICW, mc_wstr(MC_STR_TESTING_HEADING), label, ID_SET_TEST_HEADING);
   g_set.test_toggle = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_TESTING_SHOW), BS_PUSHBUTTON | WS_TABSTOP, ID_SET_TEST_TOGGLE);
   testing_view_create(g_set.content, relayout); /* here, for the tab order */
@@ -381,6 +390,7 @@ void settings_view_create(HWND parent) {
 
 void settings_view_destroy(void) {
   testing_view_destroy();
+  plugins_view_destroy();
   stop_auth();
   playback_on_scrobbler_closing(NULL);
   if (g_set.acc) {
@@ -433,6 +443,9 @@ void settings_view_set_font(HFONT font, UINT dpi) {
   SendMessageW(g_set.play_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.analysis_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.lfm_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
+  SendMessageW(g_set.plugins_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
+  SendMessageW(g_set.plugins_text, WM_SETFONT, (WPARAM)font, TRUE);
+  plugins_view_set_font(font, dpi);
   SendMessageW(g_set.test_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.reset_heading, WM_SETFONT, (WPARAM)g_set.heading_font, TRUE);
   SendMessageW(g_set.test_toggle, WM_SETFONT, (WPARAM)font, TRUE);
@@ -477,10 +490,12 @@ void settings_view_show(BOOL show) {
                 g_set.queue_note, g_set.analysis_heading, g_set.analysis_status,
                 g_set.lfm_heading, g_set.lfm_status,
                 g_set.lfm_button, g_set.lfm_service,  g_set.lfm_check, g_set.lfm_check_label, g_set.lfm_note,
-                g_set.test_heading, g_set.test_toggle, g_set.reset_heading, g_set.reset, g_set.reset_note};
+                g_set.plugins_heading, g_set.plugins_text, g_set.test_heading, g_set.test_toggle,
+                g_set.reset_heading, g_set.reset, g_set.reset_note};
   for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) ShowWindow(all[i], show ? SW_SHOW : SW_HIDE);
   ShowWindow(g_set.analysis_resume, show && g_set.analysis_stopped ? SW_SHOW : SW_HIDE);
   testing_view_show(show, g_set.test_open); /* its controls show only while it's open */
+  plugins_view_show(show);
   ShowWindow(g_set.page, show ? SW_SHOW : SW_HIDE);
   update_firewall();
   if (show) {
@@ -626,6 +641,15 @@ void settings_view_layout(int x, int y, int w, int h, UINT dpi) {
   MoveWindow(g_set.lfm_note, left, top, text_w, nh, TRUE);
   top += nh + S(32);
 
+  /* Plugins */
+  hh = canvas_text_height(g_set.plugins_heading, g_set.heading_font, text_w, 0);
+  MoveWindow(g_set.plugins_heading, left, top, text_w, hh, TRUE);
+  top += hh + S(8);
+  nh = canvas_text_height(g_set.plugins_text, g_set.font, text_w, 0);
+  MoveWindow(g_set.plugins_text, left, top, text_w, nh, TRUE);
+  top += nh + S(16);
+  top = plugins_view_layout(left, top, text_w, dpi) + S(32);
+
   /* Testing */
   hh = canvas_text_height(g_set.test_heading, g_set.heading_font, text_w, 0);
   MoveWindow(g_set.test_heading, left, top, text_w, hh, TRUE);
@@ -695,6 +719,11 @@ void settings_view_init_sync(mc_settings *settings, void (*devices_changed)(void
   playback_set_queue_tracks(queue_tracks);
   SendMessageW(g_set.queue_check, BM_SETCHECK, queue_tracks ? BST_CHECKED : BST_UNCHECKED, 0);
   settings_view_update_sync();
+}
+
+void settings_view_init_plugins(void (*plugins_changed)(void), void (*scrobble_changed)(void)) {
+  g_set.scrobble_changed = scrobble_changed;
+  plugins_view_init(g_set.settings, plugins_changed);
 }
 
 /* This PC's name as sync has it, else as saved, else the host name; UTF-8 into out. */
@@ -1061,6 +1090,7 @@ static void on_scrobble_button(void) {
 static void on_scrobble_check(void) {
   BOOL on = SendMessageW(g_set.lfm_check, BM_GETCHECK, 0, 0) == BST_CHECKED;
   playback_set_scrobble(on);
+  if (g_set.scrobble_changed) g_set.scrobble_changed();
   if (g_set.settings) {
     mc_settings_set_scrobble(g_set.settings, on);
     mc_settings_save(g_set.settings);
@@ -1168,7 +1198,7 @@ BOOL settings_view_on_command(int id, int code) {
         on_queue_tracks_check();
       }
       return TRUE;
-    default: return testing_view_on_command(id, code);
+    default: return plugins_view_on_command(id, code) || testing_view_on_command(id, code);
   }
 }
 
@@ -1177,16 +1207,19 @@ HBRUSH settings_view_ctlcolor(HWND wnd, HDC dc) {
     SetBkColor(dc, theme.bg);
     return theme.bg_brush;
   }
+  HBRUSH plugins = plugins_view_ctlcolor(wnd, dc);
+  if (plugins) return plugins;
   HBRUSH testing = testing_view_ctlcolor(wnd, dc);
   if (testing) return testing;
   BOOL note = wnd == g_set.note || wnd == g_set.sync_note || wnd == g_set.order_note || wnd == g_set.queue_note ||
-              wnd == g_set.lfm_note;
+              wnd == g_set.lfm_note || wnd == g_set.plugins_text;
   if (!note && wnd != g_set.title && wnd != g_set.heading && wnd != g_set.path && wnd != g_set.sync_heading &&
       wnd != g_set.name_label && wnd != g_set.addr_label && wnd != g_set.addr && wnd != g_set.play_heading &&
       wnd != g_set.order_check_label && wnd != g_set.queue_check_label && wnd != g_set.analysis_heading &&
       wnd != g_set.analysis_status &&
       wnd != g_set.lfm_heading && wnd != g_set.lfm_status &&
-      wnd != g_set.lfm_check_label && wnd != g_set.test_heading)
+      wnd != g_set.lfm_check_label && wnd != g_set.test_heading && wnd != g_set.plugins_heading &&
+      wnd != g_set.plugins_text)
     return NULL;
   SetTextColor(dc, note ? theme.text2 : theme.text);
   SetBkColor(dc, theme.bg);

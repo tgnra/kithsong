@@ -8,6 +8,7 @@
 
 #include "kithcore/transcode.h"
 #include "sync/sync_internal.h"
+#include "transcode/transcode_internal.h"
 #include "util/platform.h"
 
 enum { QUEUED, RUNNING, DONE };
@@ -16,7 +17,7 @@ enum { QUEUED, RUNNING, DONE };
 
 typedef struct job {
   char file_uid[MC_UID_STRLEN];
-  int kbps;
+  mc_transcode_opts opts;
   char *src;
   mc_encode_prio prio;
   int background;    /* also asked for as MC_ENCODE_BACKGROUND */
@@ -44,13 +45,17 @@ struct mc_encode_pool {
   mc_encode_stats stats;
 };
 
-/* <cache>/<file_uid>/opus-<kbps>.opus, as mc_transcode_cached() makes it. */
-static char *out_path(const mc_encode_pool *p, const char *file_uid, int kbps) {
-  size_t n = strlen(p->cache_dir) + MC_UID_STRLEN + 32;
-  char *path = malloc(n);
-  if (path) snprintf(path, n, "%s%c%s%copus-%d.opus", p->cache_dir, MC_PATH_SEP, file_uid,
-                     MC_PATH_SEP, kbps);
-  return path;
+/* <cache>/<file_uid>/<format>-<setting>.<ext>, as mc_transcode_cached() makes it. */
+static char *out_path(const mc_encode_pool *p, const char *file_uid, const mc_transcode_opts *opts) {
+  return mc_transcode_cache_path(p->cache_dir, file_uid, opts);
+}
+
+static mc_transcode_opts opus_opts(int kbps) {
+  mc_transcode_opts opts;
+  memset(&opts, 0, sizeof opts);
+  opts.format = MC_FORMAT_OPUS;
+  opts.bitrate_kbps = kbps;
+  return opts;
 }
 
 static void job_free(job *j) {
@@ -58,9 +63,9 @@ static void job_free(job *j) {
   free(j);
 }
 
-static job *find(job *list, const char *file_uid, int kbps) {
+static job *find(job *list, const char *file_uid, const mc_transcode_opts *opts) {
   for (; list; list = list->next)
-    if (list->kbps == kbps && !strcmp(list->file_uid, file_uid)) return list;
+    if (mc_transcode_same_opts(&list->opts, opts) && !strcmp(list->file_uid, file_uid)) return list;
   return NULL;
 }
 
@@ -120,10 +125,9 @@ static void worker(void *arg) {
     mc_mutex_unlock(&p->lock);
     uint64_t t0 = mc_mono_ms();
 
-    char *path = out_path(p, j->file_uid, j->kbps), *out = NULL;
+    char *path = out_path(p, j->file_uid, &j->opts), *out = NULL;
     int had = path && mc_file_exists(path);
-    mc_transcode_opts opts = {MC_FORMAT_OPUS, j->kbps};
-    mc_status st = mc_transcode_cached(p->cache_dir, j->file_uid, j->src, &opts, &out);
+    mc_status st = mc_transcode_cached(p->cache_dir, j->file_uid, j->src, &j->opts, &out);
     if (st != MC_OK)
       fprintf(stderr, "kithcore: sync: transcoding %s failed: %s\n", j->src, mc_status_str(st));
     free(out);
@@ -164,15 +168,15 @@ static void spawn(mc_encode_pool *p) {
 }
 
 /* A new queued job. Under lock. */
-static job *add(mc_encode_pool *p, const char *file_uid, const char *src, int kbps,
-                mc_encode_prio prio) {
+static job *add(mc_encode_pool *p, const char *file_uid, const char *src,
+                const mc_transcode_opts *opts, mc_encode_prio prio) {
   job *j = calloc(1, sizeof *j);
   if (!j || !(j->src = mc_strdup(src))) {
     free(j);
     return NULL;
   }
   memcpy(j->file_uid, file_uid, MC_UID_STRLEN);
-  j->kbps = kbps;
+  j->opts = *opts;
   j->prio = prio;
   j->background = prio == MC_ENCODE_BACKGROUND;
   j->state = QUEUED;
@@ -215,17 +219,24 @@ void mc_encode_pool_set_size(mc_encode_pool *p, int n) {
 
 mc_status mc_encode_pool_queue(mc_encode_pool *p, const char *file_uid, const char *src,
                                int kbps, mc_encode_prio prio, const void *owner) {
+  mc_transcode_opts opts = opus_opts(kbps);
+  return mc_encode_pool_queue_as(p, file_uid, src, &opts, prio, owner);
+}
+
+mc_status mc_encode_pool_queue_as(mc_encode_pool *p, const char *file_uid, const char *src,
+                                  const mc_transcode_opts *opts, mc_encode_prio prio,
+                                  const void *owner) {
   mc_mutex_lock(&p->lock);
   mc_status st = MC_OK;
-  job *j = find(p->queue, file_uid, kbps);
-  if (!j) j = find(p->running, file_uid, kbps);
+  job *j = find(p->queue, file_uid, opts);
+  if (!j) j = find(p->running, file_uid, opts);
   if (p->stopping) {
     st = MC_ERR_INVALID_ARG;
   } else if (j) {
     if (prio == MC_ENCODE_BACKGROUND) j->background = 1;
     if (prio == MC_ENCODE_AHEAD && j->state == QUEUED && j->prio > prio) j->owner = owner;
     raise_prio(p, j, prio);
-  } else if ((j = add(p, file_uid, src, kbps, prio)) != NULL) {
+  } else if ((j = add(p, file_uid, src, opts, prio)) != NULL) {
     if (prio == MC_ENCODE_AHEAD) j->owner = owner;
     spawn(p);
   } else {
@@ -268,19 +279,39 @@ void mc_encode_pool_drop(mc_encode_pool *p, const void *owner) {
   mc_mutex_unlock(&p->lock);
 }
 
+/* mc_encode_pool_encode()'s idle, as mc_encode_pool_encode_as() takes it. */
+typedef struct idle_call {
+  void (*idle)(void *user);
+  void *user;
+} idle_call;
+
+static int call_idle(void *user) {
+  idle_call *c = user;
+  c->idle(c->user);
+  return 0;
+}
+
 mc_status mc_encode_pool_encode(mc_encode_pool *p, const char *file_uid, const char *src,
                                 int kbps, void (*idle)(void *user), void *user, char **out) {
+  mc_transcode_opts opts = opus_opts(kbps);
+  idle_call c = {idle, user};
+  return mc_encode_pool_encode_as(p, file_uid, src, &opts, idle ? call_idle : NULL, &c, out);
+}
+
+mc_status mc_encode_pool_encode_as(mc_encode_pool *p, const char *file_uid, const char *src,
+                                   const mc_transcode_opts *opts, int (*idle)(void *user),
+                                   void *user, char **out) {
   *out = NULL;
   mc_mutex_lock(&p->lock);
-  job *j = find(p->queue, file_uid, kbps);
-  if (!j) j = find(p->running, file_uid, kbps);
+  job *j = find(p->queue, file_uid, opts);
+  if (!j) j = find(p->running, file_uid, opts);
   if (p->stopping) {
     mc_mutex_unlock(&p->lock);
     return MC_ERR_INVALID_ARG;
   }
   if (j) {
     raise_prio(p, j, MC_ENCODE_NOW);
-  } else if ((j = add(p, file_uid, src, kbps, MC_ENCODE_NOW)) != NULL) {
+  } else if ((j = add(p, file_uid, src, opts, MC_ENCODE_NOW)) != NULL) {
     p->stats.unasked++;
   } else {
     mc_mutex_unlock(&p->lock);
@@ -288,20 +319,35 @@ mc_status mc_encode_pool_encode(mc_encode_pool *p, const char *file_uid, const c
   }
   j->waiters++;
   spawn(p);
+  int stopped = 0;
   while (j->state != DONE) {
     if (!idle) {
       mc_cond_wait(&p->cond, &p->lock);
       continue;
     }
     mc_cond_wait_ms(&p->cond, &p->lock, IDLE_MS);
+    if (j->state == DONE) break;
     mc_mutex_unlock(&p->lock);
-    idle(user);
+    stopped = idle(user);
     mc_mutex_lock(&p->lock);
+    if (stopped) break;
+  }
+  if (stopped && j->state != DONE) {
+    /* Given up on: a queued job nobody else wants goes, a running one finishes. */
+    j->waiters--;
+    if (j->state == QUEUED && !j->waiters && !j->owner && !j->background) {
+      unlink_job(&p->queue, j);
+      p->nqueued--;
+      job_free(j);
+      maybe_trim(p);
+    }
+    mc_mutex_unlock(&p->lock);
+    return MC_ERR_CANCELLED;
   }
   mc_status st = j->st;
   if (!--j->waiters) job_free(j);
   mc_mutex_unlock(&p->lock);
-  if (st == MC_OK && !(*out = out_path(p, file_uid, kbps))) st = MC_ERR_NOMEM;
+  if (st == MC_OK && !(*out = out_path(p, file_uid, opts))) st = MC_ERR_NOMEM;
   return st;
 }
 

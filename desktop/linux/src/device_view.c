@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "tethered_bridge.h"
 
 #if !ADW_CHECK_VERSION(1, 5, 0)
 #error "device_view.c needs libadwaita 1.5 or later"
@@ -33,7 +34,11 @@ static const enum mc_str_id k_tab_none[NUM_TABS] = {MC_STR_NO_ALBUMS, MC_STR_NO_
                                                     MC_STR_NO_ALBUM_GROUPS};
 
 /* Which fields of the profile have edits waiting to be applied. */
-enum { PEND_FORMAT = 1, PEND_BUDGET = 2, PEND_SYNC_ALL = 4 };
+enum { PEND_FORMAT = 1, PEND_BUDGET = 2, PEND_SYNC_ALL = 4, PEND_POLICY = 8 };
+
+/* A tethered device's "Re-encode if over" menu, after "Copy as they are". */
+static const int k_lossy_caps[] = {320, 256, 192, 160, 128};
+#define NUM_LOSSY_CAPS ((int)(sizeof k_lossy_caps / sizeof k_lossy_caps[0]))
 
 typedef struct toggle {
   mc_profile_item_kind kind;
@@ -85,17 +90,32 @@ static struct {
   AdwToastOverlay *toasts;
   AdwBanner *banner;
   GtkWidget *icon, *title, *status_stack, *status, *progress_box, *progress, *progress_text, *message;
-  GtkWidget *sync_now, *remove;
-  GtkWidget *info_group, *files_row, *address_row, *reach_row, *reach_check;
+  GtkWidget *sync_now, *eject, *remove, *result;
+  GtkWidget *info_group, *files_row, *address_row, *reach_row, *reach_check, *capacity_row, *capacity_bar;
   GtkWidget *profile_group, *name_row, *archive_row, *format_row, *budget_row, *budget_switch, *budget_spin;
+  GtkWidget *lossless_row, *lossy_row, *reencode_row; /* a tethered device's format policy */
   GtkWidget *what_group, *sync_all_row, *picker, *tabs[NUM_TABS], *select_box, *select_all, *select_none, *list_stack,
     *empty, *count;
   GListStore *store;
   gboolean filling; /* ignore the controls' signals while we set them */
 
   mc_sync *sync;
+  mc_tethered *teth; /* a tethered device's page (then sync is NULL) */
   mc_library *lib;
   char uid[MC_UID_STRLEN];
+
+  /* A tethered device, from mc_tethered_list(), its format policy and the choices its menus
+   * offer (as they were filled: the menus' items, by index into choices, -1 for the stored
+   * one the plugins don't offer now). */
+  char t_model[128], t_mount[1024];
+  int t_connected, t_syncing, t_usable;
+  int64_t t_capacity, t_free;
+  mc_tethered_phase t_phase;
+  int t_done, t_total;
+  char t_title[256];
+  mc_tethered_policy policy;
+  mc_tethered_choice_list *choices;
+  GArray *lossless_map, *reencode_map; /* of int */
 
   /* The device, from mc_sync_list_devices(). solo: this computer, not in a group, so found
    * with what it knows of itself. */
@@ -127,6 +147,7 @@ static struct {
     int budget_enabled;
     int64_t budget_bytes;
     int sync_all;
+    mc_tethered_policy policy;
     GArray *toggles; /* of toggle */
   } pending;
   guint apply_source, estimate_source, tick_source, finished_source;
@@ -156,6 +177,16 @@ static struct {
 
 static void estimate_request(void);
 static void schedule(void);
+
+/* A tethered device's page; else a group member's (or nothing). */
+static gboolean tmode(void) {
+  return g_dv.teth != NULL;
+}
+
+/* Either kind of device is shown. */
+static gboolean active(void) {
+  return g_dv.sync || g_dv.teth;
+}
 
 /* --- Text helpers --- */
 
@@ -335,6 +366,36 @@ static char *self_address(void) {
   return out;
 }
 
+/* A tethered device's row, from mc_tethered_list(), and the choices for its menus. */
+static void load_tethered_device(void) {
+  g_dv.is_self = g_dv.solo = FALSE;
+  g_dv.removed = g_dv.has_status = g_dv.archive = 0;
+  g_dv.confirm = MC_SYNC_CONFIRMED;
+  g_dv.t_model[0] = g_dv.t_mount[0] = '\0';
+  g_dv.t_connected = g_dv.t_syncing = g_dv.t_usable = 0;
+  g_dv.t_capacity = g_dv.t_free = 0;
+  mc_tethered_device_list *list = NULL;
+  if (mc_tethered_list(g_dv.teth, &list) == MC_OK && list) {
+    for (int i = 0; i < list->count; i++) {
+      const mc_tethered_device *d = &list->items[i];
+      if (strcmp(d->uid, g_dv.uid)) continue;
+      g_dv.found = TRUE;
+      g_strlcpy(g_dv.name, d->name && *d->name ? d->name : d->kind ? d->kind : "", sizeof g_dv.name);
+      g_strlcpy(g_dv.t_model, d->model ? d->model : d->kind ? d->kind : "", sizeof g_dv.t_model);
+      if (d->mount_path) g_strlcpy(g_dv.t_mount, d->mount_path, sizeof g_dv.t_mount);
+      g_dv.online = g_dv.t_connected = d->connected;
+      g_dv.t_syncing = d->syncing;
+      g_dv.t_usable = d->usable;
+      g_dv.t_capacity = d->capacity_bytes;
+      g_dv.t_free = d->free_bytes;
+      g_dv.last_sync_ms = d->last_sync_ms;
+    }
+    mc_tethered_device_list_free(list);
+  }
+  g_clear_pointer(&g_dv.choices, mc_tethered_choice_list_free);
+  if (g_dv.found && mc_tethered_choices(g_dv.teth, g_dv.uid, &g_dv.choices) != MC_OK) g_dv.choices = NULL;
+}
+
 /* Reads the device's row from the device list. */
 static void load_device(void) {
   g_dv.found = FALSE;
@@ -342,6 +403,10 @@ static void load_device(void) {
   g_clear_pointer(&g_dv.address, g_free);
   g_dv.lib_state = MC_SYNC_LIBRARY_GROUP;
   g_dv.merge_pending = FALSE;
+  if (g_dv.teth) {
+    load_tethered_device();
+    return;
+  }
   if (!g_dv.sync) return;
   g_dv.is_self = !strcmp(g_dv.uid, mc_sync_device_uid(g_dv.sync));
   mc_sync_device_list *list = NULL;
@@ -399,7 +464,12 @@ static void load_device(void) {
 static void load_profile(void) {
   free_profile();
   g_dv.profile_status = MC_ERR_NOT_FOUND;
-  if (g_dv.sync && g_dv.found && !g_dv.removed && !g_dv.solo) {
+  if (g_dv.teth && g_dv.found) {
+    g_dv.profile_status = mc_tethered_get_profile(g_dv.teth, g_dv.uid, &g_dv.profile, &g_dv.policy);
+    if (g_dv.profile_status == MC_OK) g_dv.profile_status = apply_pending(g_dv.profile);
+    if (g_dv.profile_status != MC_OK) free_profile();
+    else if (g_dv.pending.mask & PEND_POLICY) g_dv.policy = g_dv.pending.policy;
+  } else if (g_dv.sync && g_dv.found && !g_dv.removed && !g_dv.solo) {
     g_dv.profile_status = mc_sync_get_profile(g_dv.sync, g_dv.uid, &g_dv.profile);
     if (g_dv.profile_status == MC_OK) g_dv.profile_status = apply_pending(g_dv.profile);
     if (g_dv.profile_status != MC_OK) free_profile();
@@ -413,7 +483,20 @@ static gboolean editable(void) {
 }
 
 static gboolean syncing(void) {
-  return g_dv.nbusy > 0;
+  return tmode() ? g_dv.t_syncing : g_dv.nbusy > 0;
+}
+
+/* A tethered sync's bar: a step for each phase, and writing by tracks written. */
+static double tethered_fraction(void) {
+  switch (g_dv.t_phase) {
+    case MC_TETHERED_PHASE_READING: return 0.05;
+    case MC_TETHERED_PHASE_IMPORTING: return 0.1;
+    case MC_TETHERED_PHASE_WRITING:
+      if (g_dv.t_total <= 0) return 0.2;
+      return 0.2 + 0.7 * MIN(g_dv.t_done, g_dv.t_total) / g_dv.t_total;
+    case MC_TETHERED_PHASE_FINISHING: return 0.95;
+    default: return 1;
+  }
 }
 
 /* Where the bar stands: a step for each phase, and the files phase by files fetched and
@@ -444,8 +527,91 @@ static void set_finished(gboolean on) {
 
 /* --- Controls from state --- */
 
+/* While syncing, Sync now becomes Cancel sync; set only on a change, not every progress. */
+static void set_sync_button(void) {
+  const char *want = mc_str(syncing() ? MC_STR_CANCEL_SYNC : MC_STR_SYNC_NOW);
+  if (!g_strcmp0(gtk_button_get_label(GTK_BUTTON(g_dv.sync_now)), want)) return;
+  gtk_button_set_label(GTK_BUTTON(g_dv.sync_now), want);
+  if (syncing()) gtk_widget_remove_css_class(g_dv.sync_now, "suggested-action");
+  else gtk_widget_add_css_class(g_dv.sync_now, "suggested-action");
+}
+
+static void update_tethered_status(void) {
+  char text[512] = "", ago[64];
+  if (!g_dv.found) {
+    g_strlcpy(text, mc_str(MC_STR_DEVICE_UNKNOWN), sizeof text);
+  } else if (syncing()) {
+    g_strlcpy(text, mc_str(MC_STR_SYNCING_PROGRESS), sizeof text);
+  } else if (g_dv.last_sync_ms > 0) {
+    fmt_ago(g_dv.last_sync_ms, ago, sizeof ago);
+    mc_format(text, sizeof text,
+              mc_str(g_dv.t_connected ? MC_STR_TETHERED_CONNECTED_SYNCED : MC_STR_TETHERED_NOT_CONNECTED_SYNCED), MC_S(ago));
+  } else {
+    g_strlcpy(text, mc_str(g_dv.t_connected ? MC_STR_TETHERED_CONNECTED : MC_STR_TETHERED_NOT_CONNECTED), sizeof text);
+  }
+  gtk_label_set_text(GTK_LABEL(g_dv.status), text);
+
+  /* The model, "3.2 GB free of 4 GB", and a bar of what's used. */
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(g_dv.capacity_row), g_dv.t_model);
+  text[0] = '\0';
+  if (g_dv.t_capacity > 0) {
+    char free_s[32], cap_s[32];
+    mc_format(text, sizeof text, mc_str(MC_STR_TETHERED_CAPACITY), MC_S(fmt_size(g_dv.t_free, free_s, sizeof free_s)),
+              MC_S(fmt_size(g_dv.t_capacity, cap_s, sizeof cap_s)));
+  }
+  adw_action_row_set_subtitle(ADW_ACTION_ROW(g_dv.capacity_row), text);
+  int64_t used = g_dv.t_capacity - g_dv.t_free;
+  gtk_level_bar_set_value(GTK_LEVEL_BAR(g_dv.capacity_bar),
+                          g_dv.t_capacity > 0 && used > 0 ? (double)used / (double)g_dv.t_capacity : 0);
+  gtk_widget_set_visible(g_dv.capacity_bar, g_dv.t_capacity > 0);
+
+  text[0] = '\0';
+  gboolean busy = g_dv.found && (syncing() || g_dv.finished);
+  if (syncing()) {
+    switch (g_dv.t_phase) {
+      case MC_TETHERED_PHASE_READING: g_strlcpy(text, mc_str(MC_STR_TETHERED_PHASE_READING), sizeof text); break;
+      case MC_TETHERED_PHASE_IMPORTING: g_strlcpy(text, mc_str(MC_STR_TETHERED_PHASE_IMPORTING), sizeof text); break;
+      case MC_TETHERED_PHASE_WRITING: {
+        char done[32], total[32];
+        int at = g_dv.t_done < g_dv.t_total ? g_dv.t_done + 1 : g_dv.t_total;
+        size_t n = mc_format(text, sizeof text, mc_str(MC_STR_TETHERED_PHASE_WRITING), MC_S(fmt_count(at, done, sizeof done)),
+                             MC_S(fmt_count(g_dv.t_total, total, sizeof total)));
+        if (g_dv.t_title[0] && n < sizeof text)
+          g_snprintf(text + n, sizeof text - n, "%s%s", mc_str(MC_STR_SEPARATOR_DOT), g_dv.t_title);
+        break;
+      }
+      default: g_strlcpy(text, mc_str(MC_STR_PHASE_DONE), sizeof text); break;
+    }
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(g_dv.progress), tethered_fraction());
+  } else if (g_dv.finished) {
+    g_strlcpy(text, g_dv.finished_text, sizeof text);
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(g_dv.progress), 1);
+  }
+  gtk_label_set_text(GTK_LABEL(g_dv.progress_text), text);
+  gtk_stack_set_visible_child_name(GTK_STACK(g_dv.status_stack), busy ? "progress" : "status");
+
+  /* Its plugin turned off: it can't be synced till it's on again. */
+  gboolean off = g_dv.found && !g_dv.t_usable;
+  if (off) adw_banner_set_title(g_dv.banner, mc_str(MC_STR_TETHERED_PLUGIN_OFF));
+  adw_banner_set_button_label(g_dv.banner, NULL);
+  adw_banner_set_revealed(g_dv.banner, off);
+
+  set_sync_button();
+  gtk_widget_set_visible(g_dv.sync_now, g_dv.found);
+  gtk_widget_set_sensitive(g_dv.sync_now, g_dv.found && (syncing() || (g_dv.t_connected && g_dv.t_usable)));
+  gtk_widget_set_visible(g_dv.eject, g_dv.found);
+  gtk_widget_set_sensitive(g_dv.eject, g_dv.found && g_dv.t_connected && !syncing());
+  gtk_widget_set_visible(g_dv.remove, g_dv.found);
+  gtk_widget_set_sensitive(g_dv.remove, g_dv.found && !g_dv.t_connected && !syncing());
+}
+
 static void update_status(void) {
   if (!g_dv.root) return;
+  if (tmode()) {
+    update_tethered_status();
+    return;
+  }
+  gtk_widget_set_visible(g_dv.eject, FALSE);
   char text[256] = "", ago[64];
   if (!g_dv.sync) {
     text[0] = '\0';
@@ -567,14 +733,7 @@ static void update_status(void) {
   adw_banner_set_button_label(g_dv.banner, button ? mc_str(MC_STR_SYNC_NOW) : NULL);
   adw_banner_set_revealed(g_dv.banner, notice != NULL);
 
-  /* While syncing, Sync now becomes Cancel sync; set only on a change, not every progress. */
-  static int cancel_shown = -1;
-  if (cancel_shown != syncing()) {
-    cancel_shown = syncing();
-    gtk_button_set_label(GTK_BUTTON(g_dv.sync_now), mc_str(cancel_shown ? MC_STR_CANCEL_SYNC : MC_STR_SYNC_NOW));
-    if (cancel_shown) gtk_widget_remove_css_class(g_dv.sync_now, "suggested-action");
-    else gtk_widget_add_css_class(g_dv.sync_now, "suggested-action");
-  }
+  set_sync_button();
   gboolean can_sync = g_dv.found && !g_dv.removed && (syncing() || g_dv.online);
   gtk_widget_set_sensitive(g_dv.sync_now, can_sync);
   gtk_widget_set_visible(g_dv.sync_now, g_dv.found && !g_dv.solo);
@@ -587,7 +746,8 @@ static void update_status(void) {
 static void update_picker(void) {
   const mc_sync_profile *p = g_dv.profile;
   gboolean choosing = p && !p->sync_all;
-  gtk_widget_set_visible(g_dv.picker, p && !p->archive);
+  /* A tethered device has nothing to leave out of everything: the list is for choosing. */
+  gtk_widget_set_visible(g_dv.picker, p && !p->archive && (choosing || !tmode()));
   for (int t = TAB_PLAYLISTS; t < NUM_TABS; t++) gtk_widget_set_visible(g_dv.tabs[t], choosing);
   gtk_widget_set_visible(g_dv.select_box, choosing);
   gtk_widget_set_visible(g_dv.count, choosing);
@@ -640,36 +800,105 @@ static void set_group_description(GtkWidget *group, const char *text) {
   g_free(escaped);
 }
 
+/* A policy menu's items: the choices (lossy ones only, unless lossless_too), with format and
+ * setting's selected; one the plugins don't offer now shows by its ids. map gets each item's
+ * index into the choices, -1 for that one. */
+static void fill_choice_row(GtkWidget *row, GArray *map, gboolean lossless_too, const char *format, const char *setting) {
+  GtkStringList *labels = gtk_string_list_new(NULL);
+  g_array_set_size(map, 0);
+  guint sel = GTK_INVALID_LIST_POSITION;
+  for (int i = 0; g_dv.choices && i < g_dv.choices->count; i++) {
+    const mc_tethered_choice *c = &g_dv.choices->items[i];
+    if (!lossless_too && c->lossless) continue;
+    gtk_string_list_append(labels, c->label ? c->label : c->format);
+    g_array_append_val(map, i);
+    if (!strcmp(c->format, format) && !strcmp(c->setting, setting)) sel = map->len - 1;
+  }
+  if (sel == GTK_INVALID_LIST_POSITION && format[0]) {
+    char *text = g_strdup_printf("%s%s%s", format, setting[0] ? " " : "", setting);
+    gtk_string_list_append(labels, text);
+    g_free(text);
+    int none = -1;
+    g_array_append_val(map, none);
+    sel = map->len - 1;
+  }
+  adw_combo_row_set_model(ADW_COMBO_ROW(row), G_LIST_MODEL(labels));
+  g_object_unref(labels);
+  adw_combo_row_set_selected(ADW_COMBO_ROW(row), sel);
+}
+
+/* The three menus from the choices and the policy. */
+static void fill_policy(void) {
+  if (!tmode() || !g_dv.profile) return;
+  const mc_tethered_policy *p = &g_dv.policy;
+  fill_choice_row(g_dv.lossless_row, g_dv.lossless_map, TRUE, p->lossless_format, p->lossless_setting);
+  fill_choice_row(g_dv.reencode_row, g_dv.reencode_map, FALSE, p->lossy_format, p->lossy_setting);
+  GtkStringList *labels = gtk_string_list_new(NULL);
+  gtk_string_list_append(labels, mc_str(MC_STR_TETHERED_LOSSY_AS_IS));
+  guint sel = p->lossy_cap_kbps <= 0 ? 0 : GTK_INVALID_LIST_POSITION;
+  for (int i = 0; i < NUM_LOSSY_CAPS; i++) {
+    char text[64];
+    mc_format(text, sizeof text, mc_str(MC_STR_TETHERED_LOSSY_CAP), MC_D(k_lossy_caps[i]));
+    gtk_string_list_append(labels, text);
+    if (k_lossy_caps[i] == p->lossy_cap_kbps) sel = (guint)i + 1;
+  }
+  if (sel == GTK_INVALID_LIST_POSITION) { /* a cap not offered here: shown as it is */
+    char text[64];
+    mc_format(text, sizeof text, mc_str(MC_STR_TETHERED_LOSSY_CAP), MC_D(p->lossy_cap_kbps));
+    gtk_string_list_append(labels, text);
+    sel = NUM_LOSSY_CAPS + 1;
+  }
+  adw_combo_row_set_model(ADW_COMBO_ROW(g_dv.lossy_row), G_LIST_MODEL(labels));
+  g_object_unref(labels);
+  adw_combo_row_set_selected(ADW_COMBO_ROW(g_dv.lossy_row), sel);
+}
+
 /* Every control's text, value and sensitivity from the loaded device and profile. The name is
  * left alone while it has the focus, unless force. */
 static void update_controls(gboolean force) {
   if (!g_dv.root) return;
   g_dv.filling = TRUE;
-  gboolean dev = g_dv.sync && g_dv.found;
-  /* Not every icon theme has a watch. */
-  const char *names[] = {g_dv.kind == MC_DEVICE_WATCH ? "smartwatch-symbolic" : g_dv.kind == MC_DEVICE_PHONE
-                                                                                  ? "phone-symbolic"
-                                                                                  : "computer-symbolic",
-                         "phone-symbolic", NULL};
+  gboolean dev = active() && g_dv.found, tm = tmode();
+  gboolean grp = dev && !tm; /* a group member's page */
+  /* Not every icon theme has a watch, or a media player. */
+  const char *names[] = {tm                            ? "multimedia-player-symbolic"
+                         : g_dv.kind == MC_DEVICE_WATCH ? "smartwatch-symbolic"
+                         : g_dv.kind == MC_DEVICE_PHONE ? "phone-symbolic"
+                                                        : "computer-symbolic",
+                         tm ? "drive-removable-media-symbolic" : "phone-symbolic", NULL};
   GIcon *icon = g_themed_icon_new_from_names((char **)names, -1);
   gtk_image_set_from_gicon(GTK_IMAGE(g_dv.icon), icon);
   g_object_unref(icon);
   gtk_widget_set_visible(g_dv.icon, dev);
-  gtk_label_set_text(GTK_LABEL(g_dv.title), !g_dv.sync ? mc_str(MC_STR_SYNC_IS_OFF)
+  gtk_label_set_text(GTK_LABEL(g_dv.title), !active()    ? mc_str(MC_STR_SYNC_IS_OFF)
                                             : g_dv.found ? g_dv.name
                                                          : mc_str(MC_STR_DEVICE_UNKNOWN));
-  gtk_button_set_label(GTK_BUTTON(g_dv.remove),
-                       mc_str(g_dv.is_self ? MC_STR_LEAVE_GROUP_BUTTON : MC_STR_REMOVE_FROM_GROUP_BUTTON));
+  gtk_button_set_label(GTK_BUTTON(g_dv.remove), mc_str(tm             ? MC_STR_TETHERED_FORGET
+                                                       : g_dv.is_self ? MC_STR_LEAVE_GROUP_BUTTON
+                                                                      : MC_STR_REMOVE_FROM_GROUP_BUTTON));
   gtk_widget_set_tooltip_text(g_dv.sync_now, g_dv.is_self ? mc_str(MC_STR_LINUX_SYNC_EVERYONE_TOOLTIP) : NULL);
   update_status();
+  fill_policy();
 
   gtk_widget_set_visible(g_dv.info_group, dev);
+  gtk_widget_set_visible(g_dv.files_row, grp && !g_dv.solo);
+  gtk_widget_set_visible(g_dv.address_row, grp);
+  gtk_widget_set_visible(g_dv.reach_row, grp);
+  gtk_widget_set_visible(g_dv.capacity_row, dev && tm);
   gtk_widget_set_visible(g_dv.profile_group, dev && !g_dv.removed);
   gtk_widget_set_visible(g_dv.what_group, dev && !g_dv.removed && !g_dv.solo);
-  /* Outside a group there's no profile, only the name. */
-  gtk_widget_set_visible(g_dv.archive_row, !g_dv.solo);
-  gtk_widget_set_visible(g_dv.format_row, !g_dv.solo);
+  /* Outside a group there's no profile, only the name; a tethered device has its own name,
+   * and a format policy rather than a format. */
+  gtk_widget_set_visible(g_dv.name_row, !tm);
+  gtk_widget_set_visible(g_dv.archive_row, !g_dv.solo && !tm);
+  gtk_widget_set_visible(g_dv.format_row, !g_dv.solo && !tm);
   gtk_widget_set_visible(g_dv.budget_row, !g_dv.solo);
+  gtk_widget_set_visible(g_dv.lossless_row, tm);
+  gtk_widget_set_visible(g_dv.lossy_row, tm);
+  gtk_widget_set_visible(g_dv.reencode_row, tm);
+  gtk_widget_set_sensitive(g_dv.lossless_row, tm && g_dv.profile);
+  gtk_widget_set_sensitive(g_dv.lossy_row, tm && g_dv.profile);
+  gtk_widget_set_sensitive(g_dv.reencode_row, tm && g_dv.profile);
 
   if (force || !has_focus_within(g_dv.name_row)) set_entry_text(g_dv.name_row, g_dv.found ? g_dv.name : "");
   gtk_widget_set_sensitive(g_dv.name_row, g_dv.found && !g_dv.removed && (g_dv.is_self || g_dv.profile));
@@ -1062,7 +1291,7 @@ static void estimate_cancel(void) {
 static void show_stored(mc_status st) {
   if (st == MC_ERR_LOCKED) toast(mc_str(MC_STR_PROFILE_LOCKED));
   else if (st != MC_OK) toast_status(MC_STR_PROFILE_SAVE_FAILED, st);
-  else mc_sync_notify_changed(g_dv.sync);
+  else if (g_dv.sync) mc_sync_notify_changed(g_dv.sync);
   load_profile();
   if (g_dv.root) {
     update_controls(FALSE);
@@ -1074,14 +1303,23 @@ static void show_stored(mc_status st) {
 static void flush(void) {
   g_clear_handle_id(&g_dv.apply_source, g_source_remove);
   select_wait();
-  if (!pending_any() || !g_dv.sync) {
+  if (!pending_any() || !active()) {
     pending_clear();
     return;
   }
   mc_sync_profile *p = NULL;
-  mc_status st = mc_sync_get_profile(g_dv.sync, g_dv.uid, &p);
-  if (st == MC_OK) st = apply_pending(p);
-  if (st == MC_OK) st = mc_sync_set_profile(g_dv.sync, g_dv.uid, p);
+  mc_status st;
+  if (tmode()) {
+    mc_tethered_policy policy;
+    st = mc_tethered_get_profile(g_dv.teth, g_dv.uid, &p, &policy);
+    if (st == MC_OK) st = apply_pending(p);
+    if (st == MC_OK && (g_dv.pending.mask & PEND_POLICY)) policy = g_dv.pending.policy;
+    if (st == MC_OK) st = mc_tethered_set_profile(g_dv.teth, g_dv.uid, p, &policy);
+  } else {
+    st = mc_sync_get_profile(g_dv.sync, g_dv.uid, &p);
+    if (st == MC_OK) st = apply_pending(p);
+    if (st == MC_OK) st = mc_sync_set_profile(g_dv.sync, g_dv.uid, p);
+  }
   mc_sync_profile_free(p);
   pending_clear();
   show_stored(st);
@@ -1188,8 +1426,14 @@ static void on_remove_response(AdwAlertDialog *dialog, const char *response, gpo
   set_message(text);
 }
 
+static void forget_device(void);
+
 static void on_remove_clicked(GtkButton *button, gpointer data) {
   (void)button, (void)data;
+  if (tmode() && g_dv.found) {
+    forget_device();
+    return;
+  }
   if (!g_dv.sync || !g_dv.found) return;
   AdwDialog *dialog;
   if (g_dv.is_self) {
@@ -1216,6 +1460,23 @@ static void on_remove_clicked(GtkButton *button, gpointer data) {
 /* --- Sync now --- */
 
 static void sync_now(void) {
+  if (tmode()) {
+    flush();
+    mc_status st = mc_tethered_sync(g_dv.teth, g_dv.uid);
+    char text[256] = "";
+    if (st != MC_OK) mc_format(text, sizeof text, mc_str(MC_STR_SYNC_START_FAILED), MC_S(mc_status_str(st)));
+    set_message(text);
+    if (st == MC_OK) {
+      g_dv.t_syncing = 1; /* till its first progress says how far it is */
+      g_dv.t_phase = MC_TETHERED_PHASE_READING;
+      g_dv.t_done = g_dv.t_total = 0;
+      g_dv.t_title[0] = '\0';
+      set_finished(FALSE);
+      gtk_widget_set_visible(g_dv.result, FALSE);
+      update_status();
+    }
+    return;
+  }
   if (!g_dv.sync) return;
   flush();
   /* The user's say-so: confirms the profiles, so their files sync from now on. */
@@ -1228,7 +1489,105 @@ static void sync_now(void) {
 
 /* Ends the sessions the page shows, which on_sync_done then reports as cancelled. */
 static void cancel_sync(void) {
-  if (g_dv.sync) mc_sync_cancel(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
+  if (tmode()) mc_tethered_cancel(g_dv.teth, g_dv.uid);
+  else if (g_dv.sync) mc_sync_cancel(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
+}
+
+/* --- A tethered device's Eject, Forget and format policy --- */
+
+typedef struct eject_wait {
+  mc_tethered *teth;
+  char uid[MC_UID_STRLEN], mount[1024], name[MC_SYNC_DEVICE_NAME_MAX + 1];
+} eject_wait;
+
+/* The system's eject is over: gone from its view, the device list shows it unplugged at once,
+ * rather than at the mount-removed that follows (none does for a test folder). */
+static void on_volume_ejected(void *user, mc_status st, const char *message) {
+  eject_wait *w = user;
+  gboolean same = w->teth == g_dv.teth && !strcmp(w->uid, g_dv.uid);
+  if (st == MC_OK && w->teth == tethered_bridge_get()) mc_tethered_volume_removed(w->teth, w->mount);
+  if (same && g_dv.root) {
+    char text[512];
+    if (st == MC_OK) mc_format(text, sizeof text, mc_str(MC_STR_TETHERED_EJECTED), MC_S(w->name));
+    else mc_format(text, sizeof text, mc_str(MC_STR_TETHERED_EJECT_FAILED), MC_S(message ? message : mc_status_str(st)));
+    reload(TRUE);
+    set_message(text);
+  }
+  g_free(w);
+}
+
+/* Eject: the device's own needs (the plugin's), then the system's. */
+static void on_eject_clicked(GtkButton *button, gpointer data) {
+  (void)button, (void)data;
+  if (!tmode() || !g_dv.found) return;
+  flush();
+  mc_status st = mc_tethered_eject(g_dv.teth, g_dv.uid);
+  if (st != MC_OK) {
+    char text[256];
+    mc_format(text, sizeof text, mc_str(MC_STR_TETHERED_EJECT_FAILED), MC_S(mc_status_str(st)));
+    set_message(text);
+    return;
+  }
+  eject_wait *w = g_new0(eject_wait, 1);
+  w->teth = g_dv.teth;
+  g_strlcpy(w->uid, g_dv.uid, sizeof w->uid);
+  g_strlcpy(w->mount, g_dv.t_mount, sizeof w->mount);
+  g_strlcpy(w->name, g_dv.name, sizeof w->name);
+  gtk_widget_set_sensitive(g_dv.eject, FALSE);
+  tethered_bridge_eject_volume(g_dv.t_mount, on_volume_ejected, w);
+}
+
+static void on_forget_response(AdwAlertDialog *dialog, const char *response, gpointer data) {
+  (void)dialog, (void)data;
+  if (strcmp(response, "forget") || !tmode() || !g_dv.found) return;
+  flush();
+  mc_status st = mc_tethered_forget(g_dv.teth, g_dv.uid);
+  if (st == MC_OK) {
+    if (g_dv.cb.devices_changed) g_dv.cb.devices_changed(g_dv.cb.user);
+    return;
+  }
+  char text[256];
+  mc_format(text, sizeof text, mc_str(MC_STR_TETHERED_FORGET_FAILED), MC_S(mc_status_str(st)));
+  set_message(text);
+}
+
+static void forget_device(void) {
+  char *heading = mc_format_alloc(mc_str(MC_STR_TETHERED_FORGET_TITLE), MC_S(g_dv.name));
+  AdwDialog *dialog = adw_alert_dialog_new(heading, mc_str(MC_STR_TETHERED_FORGET_TEXT));
+  mc_free(heading);
+  AdwAlertDialog *alert = ADW_ALERT_DIALOG(dialog);
+  adw_alert_dialog_add_responses(alert, "cancel", mc_str_mnemonic(MC_STR_CANCEL), "forget",
+                                 mc_str_mnemonic(MC_STR_TETHERED_FORGET_CONFIRM), NULL);
+  adw_alert_dialog_set_response_appearance(alert, "forget", ADW_RESPONSE_DESTRUCTIVE);
+  adw_alert_dialog_set_default_response(alert, "cancel");
+  adw_alert_dialog_set_close_response(alert, "cancel");
+  g_signal_connect(dialog, "response", G_CALLBACK(on_forget_response), NULL);
+  adw_dialog_present(dialog, g_dv.root);
+}
+
+/* A choice in one of the menus: pending, as the other edits are. */
+static void on_policy_selected(GObject *row, GParamSpec *pspec, gpointer data) {
+  (void)pspec, (void)data;
+  if (g_dv.filling || !tmode() || !g_dv.profile) return;
+  guint i = adw_combo_row_get_selected(ADW_COMBO_ROW(row));
+  if (i == GTK_INVALID_LIST_POSITION) return;
+  mc_tethered_policy *p = &g_dv.policy;
+  if (GTK_WIDGET(row) == g_dv.lossy_row) {
+    if (i == 0) p->lossy_cap_kbps = 0;
+    else if (i <= (guint)NUM_LOSSY_CAPS) p->lossy_cap_kbps = k_lossy_caps[i - 1];
+    else return; /* the stored one: no change */
+  } else {
+    GArray *map = GTK_WIDGET(row) == g_dv.lossless_row ? g_dv.lossless_map : g_dv.reencode_map;
+    int c = i < map->len ? g_array_index(map, int, i) : -1;
+    if (c < 0 || !g_dv.choices || c >= g_dv.choices->count) return; /* the stored one: no change */
+    const mc_tethered_choice *choice = &g_dv.choices->items[c];
+    gboolean lossless = GTK_WIDGET(row) == g_dv.lossless_row;
+    g_strlcpy(lossless ? p->lossless_format : p->lossy_format, choice->format, MC_ENCODER_ID_LEN);
+    g_strlcpy(lossless ? p->lossless_setting : p->lossy_setting, choice->setting, MC_ENCODER_ID_LEN);
+  }
+  g_dv.pending.policy = *p;
+  g_dv.pending.mask |= PEND_POLICY;
+  schedule();
 }
 
 static void on_sync_now_clicked(GtkButton *button, gpointer data) {
@@ -1439,6 +1798,18 @@ static gpointer select_main(gpointer data) {
  * before them go first. A press while one is being stored does nothing. */
 static void on_select_clicked(GtkButton *button, gpointer data) {
   (void)button;
+  if (tmode() && g_dv.rows_tab >= 0 && editable()) {
+    /* A tethered device's profile is one row: the rows as toggles, stored now. */
+    gboolean on = GPOINTER_TO_INT(data);
+    guint n = g_list_model_get_n_items(G_LIST_MODEL(g_dv.store));
+    for (guint i = 0; i < n; i++) {
+      DvItem *item = g_list_model_get_item(G_LIST_MODEL(g_dv.store), i);
+      pending_toggle(k_tab_kind[g_dv.rows_tab], item->uid, on);
+      g_object_unref(item);
+    }
+    flush();
+    return;
+  }
   if (g_dv.rows_tab < 0 || !g_dv.sync || !editable() || g_dv.select_thread) return;
   flush(); /* may fill the list again */
   guint n = g_list_model_get_n_items(G_LIST_MODEL(g_dv.store));
@@ -1477,6 +1848,7 @@ static void on_destroy(GtkWidget *widget, gpointer data) {
   g_clear_handle_id(&g_dv.finished_source, g_source_remove);
   pending_clear();
   free_profile();
+  g_clear_pointer(&g_dv.choices, mc_tethered_choice_list_free);
   g_clear_object(&g_dv.store);
   g_dv.root = NULL;
 }
@@ -1523,9 +1895,13 @@ static GtkWidget *build_header(void) {
   g_dv.sync_now = gtk_button_new_with_label(mc_str(MC_STR_SYNC_NOW));
   gtk_widget_add_css_class(g_dv.sync_now, "suggested-action");
   g_signal_connect(g_dv.sync_now, "clicked", G_CALLBACK(on_sync_now_clicked), NULL);
+  g_dv.eject = gtk_button_new_with_mnemonic(mc_str_mnemonic(MC_STR_TETHERED_EJECT));
+  g_signal_connect(g_dv.eject, "clicked", G_CALLBACK(on_eject_clicked), NULL);
+  gtk_widget_set_visible(g_dv.eject, FALSE);
   g_dv.remove = gtk_button_new_with_label(mc_str(MC_STR_REMOVE_FROM_GROUP_BUTTON));
   g_signal_connect(g_dv.remove, "clicked", G_CALLBACK(on_remove_clicked), NULL);
   gtk_box_append(GTK_BOX(buttons), g_dv.sync_now);
+  gtk_box_append(GTK_BOX(buttons), g_dv.eject);
   gtk_box_append(GTK_BOX(buttons), g_dv.remove);
   gtk_grid_attach(GTK_GRID(grid), buttons, 2, 0, 1, 1);
 
@@ -1558,7 +1934,24 @@ static GtkWidget *build_header(void) {
   gtk_widget_add_css_class(g_dv.message, "warning");
   gtk_widget_set_visible(g_dv.message, FALSE);
   gtk_box_append(GTK_BOX(outer), g_dv.message);
+  /* A tethered sync's summary: a line for each kind of thing it did. */
+  g_dv.result = gtk_label_new(NULL);
+  gtk_label_set_wrap(GTK_LABEL(g_dv.result), TRUE);
+  gtk_label_set_xalign(GTK_LABEL(g_dv.result), 0);
+  gtk_label_set_selectable(GTK_LABEL(g_dv.result), TRUE);
+  gtk_widget_set_visible(g_dv.result, FALSE);
+  gtk_box_append(GTK_BOX(outer), g_dv.result);
   return outer;
+}
+
+/* A tethered device's format policy: three menus, filled from its choices (fill_policy()). */
+static GtkWidget *policy_row(enum mc_str_id title, const char *subtitle) {
+  GtkWidget *row = adw_combo_row_new();
+  adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
+  adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), mc_str(title));
+  if (subtitle) adw_action_row_set_subtitle(ADW_ACTION_ROW(row), subtitle);
+  g_signal_connect(row, "notify::selected", G_CALLBACK(on_policy_selected), NULL);
+  return row;
 }
 
 static GtkWidget *build_profile_group(void) {
@@ -1593,6 +1986,13 @@ static GtkWidget *build_profile_group(void) {
   g_object_unref(formats);
   g_signal_connect(g_dv.format_row, "notify::selected", G_CALLBACK(on_format_selected), NULL);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), g_dv.format_row);
+
+  g_dv.lossless_row = policy_row(MC_STR_TETHERED_LOSSLESS, NULL);
+  g_dv.lossy_row = policy_row(MC_STR_TETHERED_LOSSY, NULL);
+  g_dv.reencode_row = policy_row(MC_STR_TETHERED_REENCODE_TO, mc_str(MC_STR_TETHERED_POLICY_NOTE));
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), g_dv.lossless_row);
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), g_dv.lossy_row);
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), g_dv.reencode_row);
 
   /* Limit storage to [32] GB (o): the switch turns the budget on, which makes the format Auto. */
   g_dv.budget_row = adw_action_row_new();
@@ -1692,6 +2092,8 @@ GtkWidget *device_view_new(const device_view_callbacks *callbacks) {
     if (!g_dv.removed_items[i]) g_dv.removed_items[i] = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
   }
   if (!g_dv.pending.toggles) g_dv.pending.toggles = g_array_new(FALSE, FALSE, sizeof(toggle));
+  if (!g_dv.lossless_map) g_dv.lossless_map = g_array_new(FALSE, FALSE, sizeof(int));
+  if (!g_dv.reencode_map) g_dv.reencode_map = g_array_new(FALSE, FALSE, sizeof(int));
   g_dv.rows_tab = -1;
 
   GtkWidget *header_group = adw_preferences_group_new();
@@ -1708,6 +2110,16 @@ GtkWidget *device_view_new(const device_view_callbacks *callbacks) {
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(g_dv.info_group), g_dv.files_row);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(g_dv.info_group), g_dv.address_row);
   adw_preferences_group_add(ADW_PREFERENCES_GROUP(g_dv.info_group), g_dv.reach_row);
+  /* A tethered device's model and free space, with a bar of what's used. */
+  g_dv.capacity_row = info_row("");
+  g_dv.capacity_bar = gtk_level_bar_new();
+  gtk_widget_set_size_request(g_dv.capacity_bar, 160, -1);
+  gtk_widget_set_valign(g_dv.capacity_bar, GTK_ALIGN_CENTER);
+  gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(g_dv.capacity_bar), GTK_LEVEL_BAR_OFFSET_LOW);
+  gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(g_dv.capacity_bar), GTK_LEVEL_BAR_OFFSET_HIGH);
+  gtk_level_bar_remove_offset_value(GTK_LEVEL_BAR(g_dv.capacity_bar), GTK_LEVEL_BAR_OFFSET_FULL);
+  adw_action_row_add_suffix(ADW_ACTION_ROW(g_dv.capacity_row), g_dv.capacity_bar);
+  adw_preferences_group_add(ADW_PREFERENCES_GROUP(g_dv.info_group), g_dv.capacity_row);
 
   g_dv.profile_group = build_profile_group();
   g_dv.what_group = build_what_group();
@@ -1741,22 +2153,28 @@ GtkWidget *device_view_new(const device_view_callbacks *callbacks) {
 
 /* --- API --- */
 
-void device_view_open(mc_sync *sync, mc_library *lib, const char *uid) {
+/* Shows device uid's page: a group member's (sync), a tethered device's (teth), or none. */
+static void open_page(mc_sync *sync, mc_tethered *teth, mc_library *lib, const char *uid) {
   /* Edits still waiting go to the device they were made for, while its sync is still
    * there: opening with NULL comes before sync stops. */
-  if (g_dv.sync && (sync == g_dv.sync || !sync)) flush();
+  if ((g_dv.sync && (sync == g_dv.sync || !sync)) || (g_dv.teth && (teth == g_dv.teth || !teth))) flush();
   g_clear_handle_id(&g_dv.apply_source, g_source_remove);
   pending_clear();
-  gboolean same = sync && sync == g_dv.sync && uid && !strcmp(uid, g_dv.uid);
+  gboolean same = (sync || teth) && sync == g_dv.sync && teth == g_dv.teth && uid && !strcmp(uid, g_dv.uid);
   if (sync != g_dv.sync) estimate_cancel(); /* it uses the old one */
   if (!same) clear_estimate();
   g_dv.sync = sync;
+  g_dv.teth = teth;
   g_dv.lib = lib;
   if (!same) {
-    g_strlcpy(g_dv.uid, uid && sync ? uid : "", sizeof g_dv.uid);
+    g_strlcpy(g_dv.uid, uid && (sync || teth) ? uid : "", sizeof g_dv.uid);
     g_dv.nbusy = 0;
+    g_dv.t_syncing = 0;
     set_finished(FALSE);
-    if (g_dv.root) set_message(NULL);
+    if (g_dv.root) {
+      set_message(NULL);
+      gtk_widget_set_visible(g_dv.result, FALSE);
+    }
   }
   g_dv.rows_tab = -1; /* the library may have changed: reload */
   if (!g_dv.root) return;
@@ -1767,6 +2185,14 @@ void device_view_open(mc_sync *sync, mc_library *lib, const char *uid) {
     g_dv.tab = TAB_ALBUMS;
   }
   reload(FALSE);
+}
+
+void device_view_open(mc_sync *sync, mc_library *lib, const char *uid) {
+  open_page(sync, NULL, lib, uid);
+}
+
+void device_view_open_tethered(mc_tethered *teth, mc_library *lib, const char *uid) {
+  open_page(NULL, teth, lib, uid);
 }
 
 static gboolean focus_what_to_sync(gpointer data) {
@@ -1780,8 +2206,87 @@ void device_view_focus_what_to_sync(void) {
 }
 
 void device_view_refresh(void) {
-  if (!g_dv.sync || !g_dv.root) return;
+  if (!active() || !g_dv.root) return;
   reload(TRUE);
+}
+
+/* The summary of a tethered sync, a line for each kind of thing it did. */
+static void show_tethered_result(const mc_tethered_result *r) {
+  GString *text = g_string_new(NULL);
+  char n[64], line[256];
+  if (r->over_budget) {
+    mc_format(line, sizeof line, mc_str(MC_STR_TETHERED_RESULT_OVER), MC_S(fmt_size(r->shortfall_bytes, n, sizeof n)));
+    g_string_append(text, line);
+  }
+  if (r->full) {
+    if (text->len) g_string_append_c(text, '\n');
+    g_string_append(text, mc_str(MC_STR_TETHERED_RESULT_FULL));
+  }
+  /* What was written, then what was taken in from it: each line's parts joined. */
+  struct {
+    int count;
+    enum mc_str_id id;
+  } lines[2][4] = {
+    {{r->written, MC_STR_TETHERED_RESULT_WRITTEN},
+     {r->removed, MC_STR_TETHERED_RESULT_REMOVED},
+     {r->updated, MC_STR_TETHERED_RESULT_UPDATED},
+     {r->failed, MC_STR_TETHERED_RESULT_FAILED}},
+    {{r->plays_imported, MC_STR_TETHERED_RESULT_PLAYS},
+     {r->plays_not_scrobbled, MC_STR_TETHERED_RESULT_NOT_SCROBBLED},
+     {r->plays_unmatched, MC_STR_TETHERED_RESULT_UNMATCHED},
+     {r->playlists_imported, MC_STR_TETHERED_RESULT_PLAYLISTS}},
+  };
+  for (int l = 0; l < 2; l++) {
+    gboolean first = TRUE;
+    for (int i = 0; i < 4; i++) {
+      if (lines[l][i].count <= 0) continue;
+      if (first && text->len) g_string_append_c(text, '\n');
+      else if (!first) g_string_append(text, mc_str(MC_STR_IMPORT_LIST_SEPARATOR));
+      first = FALSE;
+      mc_format(line, sizeof line, mc_str_plural(lines[l][i].id, lines[l][i].count), MC_D(lines[l][i].count));
+      g_string_append(text, line);
+    }
+  }
+  if (r->missing > 0) {
+    if (text->len) g_string_append_c(text, '\n');
+    mc_format(line, sizeof line, mc_str_plural(MC_STR_TETHERED_RESULT_MISSING, r->missing), MC_D(r->missing));
+    g_string_append(text, line);
+  }
+  if (!text->len && r->status == MC_OK) g_string_append(text, mc_str(MC_STR_TETHERED_RESULT_NONE));
+  gtk_label_set_text(GTK_LABEL(g_dv.result), text->str);
+  gtk_widget_set_visible(g_dv.result, text->len > 0);
+  g_string_free(text, TRUE);
+}
+
+void device_view_on_tethered_event(const tethered_event *ev) {
+  if (!g_dv.root || !tmode() || !g_dv.found || strcmp(ev->uid, g_dv.uid)) return;
+  switch (ev->kind) {
+    case TETHERED_EV_PROGRESS:
+      if (!g_dv.t_syncing) set_message(NULL);
+      g_dv.t_syncing = ev->phase != MC_TETHERED_PHASE_DONE;
+      g_dv.t_phase = ev->phase;
+      g_dv.t_done = ev->done;
+      g_dv.t_total = ev->total;
+      g_strlcpy(g_dv.t_title, ev->title, sizeof g_dv.t_title);
+      set_finished(FALSE);
+      update_status();
+      break;
+    case TETHERED_EV_DONE: {
+      g_dv.t_syncing = 0;
+      const mc_tethered_result *r = &ev->result;
+      char text[256] = "";
+      if (r->status == MC_ERR_CANCELLED) g_strlcpy(g_dv.finished_text, mc_str(MC_STR_SYNC_CANCELLED), sizeof g_dv.finished_text);
+      else if (r->status != MC_OK) mc_format(text, sizeof text, mc_str(MC_STR_SYNC_FAILED), MC_S(mc_status_str(r->status)));
+      else g_strlcpy(g_dv.finished_text, mc_str(MC_STR_SYNC_FINISHED), sizeof g_dv.finished_text);
+      set_finished(r->status == MC_OK || r->status == MC_ERR_CANCELLED);
+      set_message(text);
+      show_tethered_result(r);
+      reload(TRUE); /* its free space and last sync time */
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 static int busy_index(const char *uid) {

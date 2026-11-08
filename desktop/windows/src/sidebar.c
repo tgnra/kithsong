@@ -352,6 +352,7 @@ static const wchar_t *row_tip(const sb_row *r) {
                    MC_S(mc_str(r->flags & SB_DEV_ONLINE ? MC_STR_DEVICE_ONLINE : MC_STR_DEVICE_OFFLINE)));
         return archive;
       }
+      if (r->flags & SB_DEV_TETHERED) return mc_wstr(r->flags & SB_DEV_ONLINE ? MC_STR_TETHERED_CONNECTED : MC_STR_TETHERED_NOT_CONNECTED);
       return r->flags & SB_DEV_ONLINE ? NULL : mc_wstr(MC_STR_DEVICE_OFFLINE);
     case ROW_NEARBY: return r->flags & SB_DEV_OTHER_GROUP ? mc_wstr(MC_STR_DEVICE_OTHER_GROUP_TIP) : NULL;
     default: return NULL;
@@ -455,7 +456,8 @@ static void push_recent(const recent *rc) {
 static void push_device(row_kind kind, const device *d) {
   static const wchar_t icons[] = {[MC_DEVICE_DESKTOP] = 0xE977, /* PC */
                                   [MC_DEVICE_PHONE] = 0xE8EA,   /* CellPhone */
-                                  [MC_DEVICE_WATCH] = 0xE823};  /* Recent: a clock face */
+                                  [MC_DEVICE_WATCH] = 0xE823,   /* Recent: a clock face */
+                                  [SB_KIND_TETHERED] = 0xEC4F}; /* MusicNote: an iPod, say */
   const wchar_t *name = d->name && *d->name ? d->name : mc_wstr(MC_STR_DEVICE_UNNAMED);
   BOOL self = kind == ROW_DEVICE && (d->flags & SB_DEV_SELF);
   sb_row *r = push_row(kind, name, self ? mc_wstr(MC_STR_WINDOWS_THIS_PC_SUFFIX) : NULL);
@@ -627,7 +629,7 @@ static void draw_row(canvas *c, int i, const RECT *rc, BOOL focused) {
       text.left += scale(ICON_W);
       /* A small glyph at the end: Sync while syncing, else NetworkOffline while offline. */
       wchar_t badge = r->flags & SB_DEV_SYNCING                               ? 0xE895
-                      : r->kind == ROW_DEVICE && !(r->flags & SB_DEV_ONLINE) ? 0xF384
+                      : r->kind == ROW_DEVICE && !(r->flags & (SB_DEV_ONLINE | SB_DEV_TETHERED)) ? 0xF384
                                                                               : 0;
       if (badge) {
         RECT at = {text.right - scale(ICON_W - 8), y, text.right - scale(4), y + h};
@@ -792,7 +794,7 @@ static BOOL ui_node(int i, uia_node *n) {
       n->flags = UIA_FOCUSABLE | UIA_SELECTABLE | (r == s.sel ? UIA_SELECTED : 0) | (enabled(r) ? 0 : UIA_DISABLED);
       if (row->flags & SB_DEV_SYNCING) lstrcpynW(n->status, mc_wstr(MC_STR_SYNCING_PROGRESS), 64);
       else if (row->kind == ROW_DEVICE && !(row->flags & SB_DEV_ONLINE))
-        lstrcpynW(n->status, mc_wstr(MC_STR_DEVICE_OFFLINE), 64);
+        lstrcpynW(n->status, mc_wstr(row->flags & SB_DEV_TETHERED ? MC_STR_TETHERED_NOT_CONNECTED : MC_STR_DEVICE_OFFLINE), 64);
       break;
     case ROW_RECENT:
     case ROW_NEARBY:

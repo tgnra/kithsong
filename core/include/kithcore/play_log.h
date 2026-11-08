@@ -18,7 +18,9 @@ typedef enum mc_play_context {
   MC_PLAY_CONTEXT_ALBUM_GROUP, /* a group's albums */
   MC_PLAY_CONTEXT_ARTIST,      /* an artist's tracks */
   MC_PLAY_CONTEXT_SHUFFLE,     /* the player's: any of these started shuffled, no track picked */
-  MC_PLAY_CONTEXT_RADIO        /* a station's, chosen by the app: mc_player_play_radio() */
+  MC_PLAY_CONTEXT_RADIO,       /* a station's, chosen by the app: mc_player_play_radio() */
+  MC_PLAY_CONTEXT_DEVICE       /* played on a tethered device and taken in when it synced
+                                * (kithcore/tethered.h); context_uid is the device's uid */
 } mc_play_context;
 
 /* How a play ended. Android's CorePlayer.PlayEnd follows this order. */

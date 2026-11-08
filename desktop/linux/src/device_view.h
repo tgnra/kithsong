@@ -33,13 +33,35 @@
  * Edits are collected and applied together shortly after, through the device's sync profile
  * (get, change, set); a failure shows as a toast, and the page reloads. The name applies
  * with its row's apply button or Enter. Outside a group this computer's page has only its
- * address, connections and name. */
+ * address, connections and name.
+ *
+ * A tethered device's page (kithcore/tethered.h), such as an iPod's:
+ *
+ *   |  [icon] Walkman                     [Sync now] [Eject] [Forget…]  |
+ *   |         Plugged in, synced 3 minutes ago                         |
+ *   |         (or, syncing: [####----] Writing track 12 of 80 · Title) |
+ *   |  5 tracks written                       (the last sync's summary)|
+ *   |  | iPod nano (2nd generation)                                 |  |
+ *   |  | 3.2 GB free of 4 GB                           [=====-----] |  |
+ *   |  Profile                                                         |
+ *   |  | Lossless files                                  [ALAC   v] |  |
+ *   |  | Lossy files                        [Copy as they are    v] |  |
+ *   |  | Re-encode to                                 [AAC 256  v] |  |
+ *   |  | Limit storage to                    [ 32 ] GB         (o) |  |
+ *   |  What to sync (as for a group member)                           |
+ *
+ * Its name is its own, so not editable, and it has no archive, format or size estimate; under
+ * Sync everything there's nothing to leave out, so the list shows only for a selection. The
+ * banner says when its plugin is off. Eject is there while it's plugged in, Forget… while it
+ * isn't. Edits are applied as for a group member, through mc_tethered_get_profile() and
+ * mc_tethered_set_profile(), with the format policy. */
 #ifndef KITHSONG_DEVICE_VIEW_H
 #define KITHSONG_DEVICE_VIEW_H
 
 #include <adwaita.h>
 
 #include "sync_bridge.h"
+#include "tethered_bridge.h"
 
 /* What the page asks of the main window. */
 typedef struct device_view_callbacks {
@@ -55,6 +77,9 @@ GtkWidget *device_view_new(const device_view_callbacks *callbacks);
  * and lib must stay valid until the next open, or until sync stops (open again with NULL,
  * which applies edits still waiting and waits for the size estimate's thread). */
 void device_view_open(mc_sync *sync, mc_library *lib, const char *uid);
+/* Shows tethered device uid's page, as device_view_open() does a group member's. teth must
+ * stay valid until the next open (open with NULL before it's freed). */
+void device_view_open_tethered(mc_tethered *teth, mc_library *lib, const char *uid);
 /* Reloads the device's details and profile, e.g. after the device list changed, keeping
  * edits not yet applied. */
 void device_view_refresh(void);
@@ -63,6 +88,9 @@ void device_view_refresh(void);
 void device_view_focus_what_to_sync(void);
 /* Updates the status and progress from a sync event about this device; others are ignored. */
 void device_view_on_sync_event(const sync_event *ev);
+/* Updates the status, progress and summary from a tethered device's event about this device;
+ * others are ignored. */
+void device_view_on_tethered_event(const tethered_event *ev);
 
 /* What's known of whether this computer and device uid (named name) can connect to each
  * other: for this computer's own uid, whether other devices can reach it. warning_only:

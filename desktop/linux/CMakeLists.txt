@@ -41,7 +41,9 @@ add_executable(kithsong
   src/brand_backdrop.c
   src/smart_editor.c
   src/first_run.c
-  src/edit_dialog.c)
+  src/edit_dialog.c
+  src/plugins_ui.c
+  src/tethered_bridge.c)
 # yyjson for the smart list editor, which reads and writes rules (smart_editor.c).
 target_link_libraries(kithsong PRIVATE kithcore mc_yyjson PkgConfig::ADW m)
 

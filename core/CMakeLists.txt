@@ -113,6 +113,8 @@ add_library(kithcore STATIC
 
   src/net/socket.c
   src/transcode/transcode.c
+  src/plugin/plugins.c
+  src/plugin/source.c
   src/discovery/discovery.c
   src/sync/sync.c
   src/sync/sync_db.c
@@ -131,6 +133,7 @@ add_library(kithcore STATIC
   src/sync/rows.c
   src/sync/session.c
   src/sync/plan.c
+  src/sync/tethered.c
   src/sync/orphans.c
   src/sync/transfer.c
   src/sync/encode.c
@@ -156,6 +159,8 @@ if(WIN32)
 endif()
 if(UNIX)
   target_link_libraries(kithcore PRIVATE m)  # art_colors.c
+  # dlopen, for plugins: part of libc since glibc 2.34, a library of its own before.
+  target_link_libraries(kithcore PRIVATE ${CMAKE_DL_LIBS})
 endif()
 kithsong_warnings(kithcore)
 

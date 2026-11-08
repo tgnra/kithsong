@@ -43,6 +43,7 @@
 
 #include "kithcore/kithcore.h"
 #include "sync_bridge.h"
+#include "tethered_bridge.h"
 
 /* What the page asks of the main window. */
 typedef struct device_view_host {
@@ -61,6 +62,30 @@ void device_view_layout(int x, int y, int w, int h, UINT dpi);
 /* Shows device uid's page, loading its details, its profile and the library's lists. sync
  * and lib must stay valid until the next open, or until sync stops (open again with NULL). */
 void device_view_open(mc_sync *sync, mc_library *lib, const char *uid);
+/* Shows a tethered device's page instead (kithcore/tethered.h): the same page, with what
+ * applies to a device such as an iPod:
+ *
+ *   | [icon] Walkman                       [Sync now] [Eject] [Forget...] |
+ *   | Plugged in, synced yesterday                                       |
+ *   | iPod nano (2nd generation) · 1.2 GB free of 3.8 GB                 |
+ *   | [#######-----]  (what's used)                                      |
+ *   | 12 tracks written, 2 removed                       (the last sync) |
+ *   | 4 plays taken in, 1 play was too old to scrobble (over 14 days)    |
+ *   | Lossless files  [ALAC                 v]                           |
+ *   | Lossy files     [Copy as they are     v]                           |
+ *   | Re-encode to    [MP3 · V0 (about 245) v]                           |
+ *   | [ ] Limit storage to [32] GB                                       |
+ *   | What to sync ...as for a group member, with no exclusions          |
+ *
+ * Its name, archive and format rows, and the size estimate, are left out (the core has none
+ * for a tethered device). The menus come from mc_tethered_choices(); edits are applied as the
+ * others are, through mc_tethered_get_profile() and mc_tethered_set_profile(). Sync now syncs
+ * it while it's plugged in and its plugin is on; Eject gets it ready to unplug (the plugin's
+ * needs, then the system's); Forget... is there while it isn't plugged in. t and lib must stay
+ * valid until the next open (open with NULL before freeing t). */
+void device_view_open_tethered(mc_tethered *t, mc_library *lib, const char *uid);
+/* Updates a tethered device's page from one of its events; others are ignored. */
+void device_view_on_tethered_event(const tethered_event *ev);
 /* Reloads the device's details and profile, e.g. after the device list changed, keeping
  * edits not yet applied. */
 void device_view_refresh(void);

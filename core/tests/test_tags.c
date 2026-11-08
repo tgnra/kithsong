@@ -177,7 +177,7 @@ int main(int argc, char **argv) {
   check_multi(other);
   char cache[1100];
   snprintf(cache, sizeof cache, "%s/test_tags_opus", dir);
-  mc_transcode_opts opts = {MC_FORMAT_OPUS, 64};
+  mc_transcode_opts opts = {.format = MC_FORMAT_OPUS, .bitrate_kbps = 64};
   char *opus = NULL;
   CHECK(mc_transcode_cached(cache, "0192f1e4-7c3a-7b21-9d4e-1f2a3b4c5d6f", path, &opts, &opus) == MC_OK);
   if (opus) check_multi(opus);

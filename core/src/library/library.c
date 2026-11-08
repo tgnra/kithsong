@@ -1436,6 +1436,37 @@ mc_status mc_library_count(mc_library *lib, mc_entity entity, int64_t *out) {
   return st;
 }
 
+mc_status mc_library_add_plays(mc_library *lib, const char *track_uid, int count,
+                               int64_t last_played_ms) {
+  if (!lib || !track_uid || count <= 0) return MC_ERR_INVALID_ARG;
+  char uid[MC_UID_STRLEN];
+  mc_status st = mc_uid_new(uid);
+  if (st != MC_OK || (st = mc_library_begin_write(lib)) != MC_OK) return st;
+  /* This device's row, as mc_library_record_play(); the last play only ever moves forward. */
+  static const char sql[] =
+    "INSERT INTO track_plays (uid, track_uid, node_uid, play_count, last_played_ms)"
+    " VALUES (?1, ?2, ?3, ?4, ?5)"
+    " ON CONFLICT (track_uid, node_uid) DO UPDATE"
+    " SET play_count = play_count + excluded.play_count,"
+    " last_played_ms = max(ifnull(last_played_ms, 0), excluded.last_played_ms)";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    mc_library_rollback(lib);
+    return MC_ERR_DB;
+  }
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, track_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 3, lib->node_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_int(stmt, 4, count);
+  sqlite3_bind_int64(stmt, 5, (sqlite3_int64)last_played_ms);
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  st = rc == SQLITE_DONE ? MC_OK : (rc & 0xff) == SQLITE_CONSTRAINT ? MC_ERR_NOT_FOUND : MC_ERR_DB;
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
+}
+
 mc_status mc_library_record_play(mc_library *lib, const char *track_uid) {
   if (!lib || !track_uid) return MC_ERR_INVALID_ARG;
   char uid[MC_UID_STRLEN];
@@ -1467,7 +1498,7 @@ mc_status mc_library_record_play(mc_library *lib, const char *track_uid) {
 /* play_events.context and .ended, indexed by mc_play_context and mc_play_end. By name, so a
  * row can be read as it is, and a value added later is one more name. */
 static const char *const k_play_contexts[] = {"unknown", "manual", "album", "playlist",
-                                              "album_group", "artist", "shuffle", "radio"};
+                                              "album_group", "artist", "shuffle", "radio", "device"};
 static const char *const k_play_ends[] = {"unknown", "finished", "skipped", "stopped", "replaced", "failed"};
 #define COUNT_OF(a) ((int)(sizeof (a) / sizeof (a)[0]))
 
