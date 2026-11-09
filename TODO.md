@@ -52,6 +52,17 @@ See "Merging libraries" in docs/sync-protocol.md.
 - Android - a new library after a library mismatch (export as zips of up to 8 GB, then restart into an empty library and Pair again) is untested on a phone: an export to a USB stick or cloud folder, cancelling, a full disk, and re-importing the zips. A single or loose track credited to no artist isn't exported, as no listing has it. Decided: the export is files only (no playlists or plays), and a failed or cancelled export deletes all its zips, not just the last
 - Android - the first run logs "Couldn't open the library" (status -5) once before the folder exists; one sync session logged status -6 straight after a good one, perhaps both sides syncing at once; opening a stress library logs "Couldn't open sync" (status -15)
 
+## Google Cast
+
+See docs/cast.md.
+- Windows and Linux - no cast button, picker or volume slider yet: the core's sender (kithcore/cast.h) is ready for them
+- Core - the sender is tested against a fake receiver only (test_cast_session), never a real Chromecast, Cast TV, speaker or Google Home speaker group. Unchecked there: QUEUE_LOAD's start time and autoplay off, QUEUE_INSERT/QUEUE_REMOVE and the item ids statuses give, the receiver going on to the queued item gaplessly, getting a dropped connection back, and another sender or Google Home stopping or taking over the cast
+- Core - not built for Windows yet: msock.c moved discovery's Winsock code unchanged, and cast_http.c uses _fseeki64
+- Core - a host firewall that blocks incoming connections (Windows asks on first use; firewalld on Fedora) stops the device fetching from the music server, whose port is random; nothing says so but the device failing every track
+- Core - FLAC over 96 kHz or 24-bit, and more than two channels, are sent as they are, which some devices can't play (each track is then skipped); they could be converted as AIFF is. Only AIFF is converted
+- Core - devices reached only over IPv6 are untested (the server listens on the connection's own address)
+- Decided: no device authentication (urn:x-cast:com.google.cast.tp.deviceauth); senders may skip it, and the certificate isn't checked
+
 ## Windows
 
 - In dark mode the About dialog's link keeps the system blue: readable, but low contrast
