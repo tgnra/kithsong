@@ -155,6 +155,26 @@ object Icons {
             "c0,-1.1 -0.9,-2 -2,-2h-1V1h-2zM19,19H5V8h14v11z",
     )
 
+    // Google Cast, on the full player.
+    val Cast = icon(
+        "Cast",
+        "M21,3H3C1.9,3 1,3.9 1,5v3h2V5h18v14h-7v2h7c1.1,0 2,-0.9 2,-2V5C23,3.9 22.1,3 21,3z" +
+            "M1,18v3h3C4,19.34 2.66,18 1,18zM1,14v2c2.76,0 5,2.24 5,5h2C8,17.13 4.87,14 1,14z" +
+            "M1,10v2c4.97,0 9,4.03 9,9h2C12,14.92 7.07,10 1,10z",
+    )
+    val CastConnected = icon(
+        "CastConnected",
+        "M1,18v3h3C4,19.34 2.66,18 1,18zM1,14v2c2.76,0 5,2.24 5,5h2C8,17.13 4.87,14 1,14z" +
+            "M19,7H5v1.63c3.96,1.28 7.09,4.41 8.37,8.37H19V7zM1,10v2c4.97,0 9,4.03 9,9h2C12,14.92 7.07,10 1,10z" +
+            "M21,3H3C1.9,3 1,3.9 1,5v3h2V5h18v14h-7v2h7c1.1,0 2,-0.9 2,-2V5C23,3.9 22.1,3 21,3z",
+    )
+    val VolumeDown = icon("VolumeDown", "M18.5,12c0,-1.77 -1.02,-3.29 -2.5,-4.03v8.05C17.48,15.29 18.5,13.77 18.5,12zM5,9v6h4l5,5V4L9,9H5z")
+    val VolumeUp = icon(
+        "VolumeUp",
+        "M3,9v6h4l5,5V4L7,9H3zM16.5,12c0,-1.77 -1.02,-3.29 -2.5,-4.03v8.05C15.48,15.29 16.5,13.77 16.5,12z" +
+            "M14,3.23v2.06c2.89,0.86 5,3.54 5,6.71s-2.11,5.85 -5,6.71v2.06c4.01,-0.91 7,-4.49 7,-8.77S18.01,4.14 14,3.23z",
+    )
+
     private fun icon(name: String, pathData: String) =
         ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f)
             .addPath(addPathNodes(pathData), fill = SolidColor(Color.Black))

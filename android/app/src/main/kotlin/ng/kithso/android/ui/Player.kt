@@ -220,7 +220,7 @@ internal fun FullPlayer(
                 if (fold != null) {
                     TabletopPlayerLayout(
                         fold,
-                        topRow = { PlayerTopRow(onCollapse, onMenu, chevron = null) },
+                        topRow = { PlayerTopRow(playback, onCollapse, onMenu, chevron = null) },
                         art = { PlayerArt(swipe, onMenu, Modifier) },
                         title = {
                             PlayerTitle(swipe, twoLineSpace = true, if (fold.titleBeside) Alignment.CenterStart else Alignment.TopStart)
@@ -234,7 +234,7 @@ internal fun FullPlayer(
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
-                    PlayerTopRow(onCollapse, onMenu, chevron = if (wide) ({ QueueChevron(slide) }) else null)
+                    PlayerTopRow(playback, onCollapse, onMenu, chevron = if (wide) ({ QueueChevron(slide) }) else null)
                     if (wide) {
                         Row(Modifier.fillMaxSize().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                             PlayerArt(swipe, onMenu, Modifier.fillMaxHeight())
@@ -272,23 +272,27 @@ internal fun FullPlayer(
 }
 
 /**
- * The close button, the menu button across from it if there's [onMenu], and between them the
- * [chevron] to the queue, where the window is too short for it at the foot.
+ * The close button, the menu button across from it if there's [onMenu], with the cast button
+ * ([CastButton]) before it where [Playback.cast] is available, and between them the [chevron]
+ * to the queue, where the window is too short for it at the foot.
  */
 @Composable
-private fun PlayerTopRow(onCollapse: () -> Unit, onMenu: (() -> Unit)?, chevron: (@Composable () -> Unit)?) {
-    // Nudged so the icons, not their touch targets, line up with the art.
+private fun PlayerTopRow(playback: Playback, onCollapse: () -> Unit, onMenu: (() -> Unit)?, chevron: (@Composable () -> Unit)?) {
+    // Nudged so the icons, not their touch targets, line up with the art. The ends share the
+    // width evenly, so the chevron stays in the middle with two buttons at one end.
     Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-        IconButton(onClick = onCollapse, modifier = Modifier.offset(x = (-12).dp)) {
-            Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.close_player))
+        Row(Modifier.weight(1f)) {
+            IconButton(onClick = onCollapse, modifier = Modifier.offset(x = (-12).dp)) {
+                Icon(Icons.ExpandMore, contentDescription = stringResource(R.string.close_player))
+            }
         }
-        Spacer(Modifier.weight(1f))
-        if (chevron != null) {
-            chevron()
-            Spacer(Modifier.weight(1f))
-        }
-        if (onMenu != null) IconButton(onClick = onMenu, modifier = Modifier.offset(x = 12.dp)) {
-            Icon(Icons.MoreVert, contentDescription = stringResource(R.string.track_menu))
+        chevron?.invoke()
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
+            // Nudged with the menu button, so their touch targets still meet.
+            if (playback.cast.available) CastButton(playback.cast, Modifier.offset(x = 12.dp))
+            if (onMenu != null) IconButton(onClick = onMenu, modifier = Modifier.offset(x = 12.dp)) {
+                Icon(Icons.MoreVert, contentDescription = stringResource(R.string.track_menu))
+            }
         }
     }
 }
@@ -584,9 +588,45 @@ private fun PlayerTitle(swipe: TrackSwipeState, twoLineSpace: Boolean, alignment
     }
 }
 
+/**
+ * The seekbar and the buttons under it and, while casting, the cast volume ([CastVolume]) under
+ * those, if there's room for it. It's left out sooner than it squeezes the buttons, as on a
+ * window short for its width, where the volume buttons and the cast picker still have it.
+ */
 @Composable
 private fun PlayerControls(playback: Playback, track: Track, onAddToPlaylist: (() -> Unit)?, modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
+    val cast = playback.cast
+    UnlessShort(
+        main = { TransportControls(playback, track, onAddToPlaylist) },
+        extra = { if (cast.casting) CastVolume(cast) },
+        modifier = modifier,
+    )
+}
+
+/**
+ * [main] and under it, [ControlsGap] away and centred, [extra], if what [main] leaves of the
+ * height has room for it; if not, [extra] isn't placed, and takes no height.
+ */
+@Composable
+private fun UnlessShort(main: @Composable () -> Unit, extra: @Composable () -> Unit, modifier: Modifier) {
+    Layout(listOf(main, extra), modifier) { (mainItems, extraItems), constraints ->
+        val mainPlaced = mainItems.single().measure(constraints.copy(minHeight = 0))
+        val gap = ControlsGap.roundToPx()
+        val extraPlaced = extraItems.singleOrNull()
+            ?.measure(constraints.copy(minWidth = 0, minHeight = 0, maxHeight = Constraints.Infinity))
+            ?.takeIf { !constraints.hasBoundedHeight || mainPlaced.height + gap + it.height <= constraints.maxHeight }
+        val width = constraints.constrainWidth(maxOf(mainPlaced.width, extraPlaced?.width ?: 0))
+        val height = constraints.constrainHeight(mainPlaced.height + (extraPlaced?.let { gap + it.height } ?: 0))
+        layout(width, height) {
+            mainPlaced.place(0, 0)
+            if (extraPlaced != null) extraPlaced.place((width - extraPlaced.width) / 2, mainPlaced.height + gap)
+        }
+    }
+}
+
+@Composable
+private fun TransportControls(playback: Playback, track: Track, onAddToPlaylist: (() -> Unit)?) {
+    Column(verticalArrangement = Arrangement.spacedBy(ControlsGap)) {
         SeekbarWithTimes(
             positionMs = { playback.positionMs },
             durationMs = track.durationMs,
