@@ -58,6 +58,10 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
     val libraryDir: File get() = stressDir ?: realLibraryDir
     private var stressDir: File? = null
 
+    /** Whether [libraryDir] is the demo library, for store screenshots ([Testing.storeDemo]). */
+    var demoLibrary = false
+        private set
+
     /** Settings' Testing section. */
     lateinit var testing: Testing
         private set
@@ -121,7 +125,10 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         BackStack.onPush = { page ->
             if (CoreTesting.enabled()) CoreTesting.viewBegin(page.toString().substringBefore('('))
         }
-        stressDir =settings.stressLibrary?.takeIf(CoreTesting::isComplete)?.let(::File)
+        // A stress library, or the demo library (Testing.storeDemo), which opens the same way.
+        val other = settings.stressLibrary
+        demoLibrary = other != null && CoreTesting.isDemoComplete(other)
+        stressDir = other?.takeIf { CoreTesting.isComplete(it) || demoLibrary }?.let(::File)
         val core = CoreLibrarySource(
             libraryDir,
             playlistArtDir,

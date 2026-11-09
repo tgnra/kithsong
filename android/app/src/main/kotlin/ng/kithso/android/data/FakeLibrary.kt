@@ -148,28 +148,41 @@ class FakeLibrary(empty: Boolean = false) : LibrarySource {
         )
     }
 
+    // Made-up names only, never a real artist's or album's: these end up in screenshots. Each
+    // artist and each album's first word is an invented one; one artist starts with "The" and
+    // one has an "&", for sorting and escaping.
     private companion object {
         val ARTISTS = listOf(
-            "Aurora Lane", "The Paper Kites", "Neon Harbour", "Juniper Hollow", "Mara Vey",
-            "Glass Pilots", "Owl & Ember", "Saltwater Choir", "Kite Theory", "Low Orbit",
-            "Fennel", "Hollis Gray", "Velvet Static", "North Ward", "Cassia Bloom", "Tidelines",
+            "Wrenfold Assembly", "The Marrowlight Kites", "Neon Larkspur Club", "Juniper Quillon",
+            "Mara Vellinhoff", "Glasspine Pilots", "Owlhaven & Ember", "Saltmarrow Choir",
+            "Kitefield Theory", "Orbitwhistle", "Fennel Arbrook", "Hollis Graymantle",
+            "Velvet Stasis Union", "Northwold Ward", "Cassia Bloomfeather", "Tideloom",
         )
         val ALBUM_WORDS = listOf(
-            "Northern", "Lights", "Paper", "Houses", "Afterglow", "Static", "Summer", "Rivers",
-            "Quiet", "Machines", "Golden", "Hour", "Midnight", "Garden", "Small", "Weather",
-            "Distant", "Signals", "Hollow", "Bones", "Silver", "Linings", "Late", "Bloom",
+            "Brackenmoor", "Lanternfall", "Quillhaven", "Tidewhistle", "Emberglass", "Saltmeadow",
+            "Thornwick", "Larkspire", "Copperfern", "Mistlowe", "Harrowdene", "Windlestraw",
+            "Gloamfield", "Driftmantle", "Cinderlark", "Fernwhistle", "Hollowmere", "Brindlecove",
+            "Wickerlight", "Duskmarrow", "Pebbleweir", "Stillhallow", "Orchardine", "Vellumvale",
         )
+        // The second word of an album's title: ordinary, after an invented first one.
+        val ALBUM_NOUNS = listOf(
+            "Lights", "Houses", "Afterglow", "Static", "Summer", "Rivers", "Machines", "Hours",
+            "Gardens", "Weather", "Signals", "Bones", "Linings", "Bloom", "Harbours", "Letters",
+            "Tides", "Engines", "Fields", "Mirrors", "Orchards", "Lanterns", "Radio", "Shadows",
+        )
+        // Track titles, and the singles' albums, which take their track's title: invented too.
         val TRACK_WORDS = listOf(
-            "Harbour", "Lanterns", "Undertow", "Wildfire", "Monday", "Satellite", "Echoes",
-            "Driftwood", "Paperweight", "Fever", "Comets", "Overgrown", "Lullaby", "Arrows",
-            "Ferris", "Copper", "Glasshouse", "Sundown", "Tremor", "Velvet", "Ivory", "Atlas",
+            "Harbourlight", "Lanternmoth", "Undertide", "Wildbramble", "Mondayglass", "Satellark",
+            "Echowood", "Driftwillow", "Paperwing", "Feverfern", "Cometmoss", "Overgrove",
+            "Lullabrook", "Arrowmere", "Ferrisdown", "Copperlark", "Glasshollow", "Sunmarrow",
+            "Tremorline", "Velvetine", "Ivorywick", "Atlasfern",
         )
 
         fun build(): Library {
             val albums = (0 until 42).map { i ->
                 // Distinct for i < 2 * ALBUM_WORDS.size.
                 val title = ALBUM_WORDS[i % ALBUM_WORDS.size] + " " +
-                    ALBUM_WORDS[(i * 7 + i / ALBUM_WORDS.size + 3) % ALBUM_WORDS.size].lowercase()
+                    ALBUM_NOUNS[(i * 7 + i / ALBUM_WORDS.size + 3) % ALBUM_NOUNS.size].lowercase()
                 val uid = "album-$i"
                 Album(uid, title, ARTISTS[i % ARTISTS.size], 1994 + (i * 7) % 31, ArtRef(uid, title))
             }.sortedBy { it.title } // as the real library has them

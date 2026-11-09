@@ -1,6 +1,8 @@
 package ng.kithso.wear
 
 import android.app.Application
+import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.os.Build
 import android.provider.Settings
@@ -8,12 +10,15 @@ import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ng.kithso.core.CoreLibrary
+import ng.kithso.core.CoreTesting
 import ng.kithso.core.NativeCore
 import ng.kithso.wear.playback.AudioOutputs
 import ng.kithso.wear.playback.Scrobbling
@@ -33,7 +38,13 @@ class KithsongApp : Application() {
      * no-backup storage, as on the phone: the music is far too big for Auto Backup, and a
      * library.db restored onto another watch would carry this one's sync node id with it.
      */
-    val libraryDir: File get() = File(noBackupFilesDir, "library")
+    val libraryDir: File get() = demoDir ?: File(noBackupFilesDir, "library")
+
+    /**
+     * Debug builds: the demo library (kithcore/demo.h) in place of the real one, for store
+     * screenshots, while [storeDemo] has it on. Only ever a folder its generator finished.
+     */
+    private var demoDir: File? = null
 
     /** What has files on the watch, and the library's reading thread. */
     lateinit var library: WatchLibrary
@@ -64,6 +75,9 @@ class KithsongApp : Application() {
         if (status != 0) Log.e(TAG, "kithcore init failed: $status")
         NativeCore.followLocale(resources.configuration)
         moveOldLibrary()
+        if (debuggable() && prefs.getBoolean(KEY_STORE_DEMO, false)) {
+            demoDir = File(noBackupFilesDir, CoreTesting.DEMO_DIR_NAME).takeIf { CoreTesting.isDemoComplete(it.path) }
+        }
         val scope = MainScope()
         library = WatchLibrary(libraryDir, scope)
         // sync.db holds this watch's keys, so it's in no-backup storage like the library: a
@@ -102,6 +116,31 @@ class KithsongApp : Application() {
         return name?.takeIf { it.isNotBlank() } ?: Build.MODEL
     }
 
+    private fun debuggable() = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+
+    /**
+     * Debug builds' `--ez store_demo true` (MainActivity): makes the demo library, unless it's
+     * there from before, and starts the app again on it, as the library can't be swapped under
+     * the player and sync; `false` goes back to the real library the same way.
+     */
+    fun storeDemo(on: Boolean) {
+        if (!debuggable() || on == (demoDir != null)) return
+        val dir = File(noBackupFilesDir, CoreTesting.DEMO_DIR_NAME)
+        MainScope().launch {
+            val status = if (!on || CoreTesting.isDemoComplete(dir.path)) 0
+            else withContext(Dispatchers.IO) { CoreTesting.demoCreate(dir.path, cacheDir.path) }
+            if (status != 0) {
+                Log.e(TAG, "Couldn't make the demo library: $status")
+                return@launch
+            }
+            prefs.edit().putBoolean(KEY_STORE_DEMO, on).commit()
+            Log.i(TAG, "Restarting for ${if (on) "the demo library" else "the real library"}")
+            val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return@launch
+            startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
+            Runtime.getRuntime().exit(0)
+        }
+    }
+
     // The prototype kept the library in filesDir, where Auto Backup would take it: moved once.
     private fun moveOldLibrary() {
         val old = File(filesDir, "library")
@@ -117,5 +156,6 @@ class KithsongApp : Application() {
     private companion object {
         const val TAG = "kithsong"
         const val KEY_DEVICE_NAME = "device_name"
+        const val KEY_STORE_DEMO = "store_demo"
     }
 }

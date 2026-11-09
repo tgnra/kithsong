@@ -55,6 +55,11 @@ import ng.kithso.wear.ui.SyncScreen
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Debug builds: `adb shell am start -n ng.kithso.wear/.MainActivity --ez store_demo true`
+        // makes and opens the demo library, for store screenshots; `false` goes back.
+        if (savedInstanceState == null && intent.hasExtra("store_demo")) {
+            (application as KithsongApp).storeDemo(intent.getBooleanExtra("store_demo", true))
+        }
         setContent {
             MaterialTheme {
                 WearApp()

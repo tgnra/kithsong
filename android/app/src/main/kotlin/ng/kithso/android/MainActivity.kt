@@ -69,6 +69,10 @@ class MainActivity : ComponentActivity() {
                 app.testing.generate(intent.getIntExtra("stress_preset", CoreTesting.PRESET_10K))
             }
             if (intent.getBooleanExtra("perf_run", false)) ng.kithso.android.ui.PerfRun.requested = true
+            // `--ez store_demo true` makes and opens the demo library (kithcore/demo.h), six
+            // made-up albums for store screenshots, restarting the app into it; `false` goes
+            // back to the real library.
+            if (intent.hasExtra("store_demo")) app.testing.storeDemo(intent.getBooleanExtra("store_demo", true))
         }
         // Debug builds: `--es fake_merge <scenario>` shows one of the merge's screens with
         // made-up data (see Syncer.debugShowMerge).

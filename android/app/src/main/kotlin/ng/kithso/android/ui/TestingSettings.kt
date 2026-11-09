@@ -201,7 +201,7 @@ fun TestingSettings(onRunTest: () -> Unit) {
         },
         modifier = Modifier.clickable { if (generating != null) testing.cancel() else testing.generate(preset) },
     )
-    if (testing.inStress) ListItem(
+    if (testing.inStress || testing.inDemo) ListItem(
         headlineContent = { Text(stringResource(R.string.stress_back)) },
         modifier = Modifier.clickable(onClick = testing::back),
     )

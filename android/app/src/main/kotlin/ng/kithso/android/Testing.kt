@@ -41,7 +41,36 @@ class Testing(
     @Volatile private var job = 0L
 
     /** Whether a stress library is open. */
-    val inStress: Boolean get() = app.libraryDir != app.realLibraryDir
+    val inStress: Boolean get() = app.libraryDir != app.realLibraryDir && !app.demoLibrary
+
+    /**
+     * Whether the demo library (kithcore/demo.h) is open, for store screenshots. It's opened as
+     * a stress library is, but nothing says so on screen: it's there to look like a real one.
+     */
+    val inDemo: Boolean get() = app.demoLibrary
+
+    /**
+     * Debug builds' `--ez store_demo true`: makes the demo library under [configDir], unless
+     * it's there from before, and opens it; `false` goes back to the real library.
+     */
+    fun storeDemo(on: Boolean) {
+        if (!on) {
+            if (inDemo) back()
+            return
+        }
+        if (inDemo || mutableState.value.percent != null) return
+        val dir = File(configDir, CoreTesting.DEMO_DIR_NAME).path
+        if (CoreTesting.isDemoComplete(dir)) {
+            open(dir)
+            return
+        }
+        mutableState.value = mutableState.value.copy(percent = 0, failure = null, deleted = null)
+        scope.launch {
+            val status = withContext(Dispatchers.IO) { CoreTesting.demoCreate(dir, app.cacheDir.path) }
+            mutableState.value = mutableState.value.copy(percent = null, failure = status.takeIf { it != 0 })
+            if (status == 0) open(dir) else Log.e(TAG, "Couldn't make the demo library: $status")
+        }
+    }
 
     fun setProfiling(on: Boolean) {
         CoreTesting.setEnabled(on)

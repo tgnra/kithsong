@@ -137,8 +137,9 @@ fun NewLibraryDialogs(syncer: Syncer): NewLibraryActions {
         )
     }
 
-    // As could_join on the desktops; never in a stress library, which doesn't sync.
-    val canStart = status.libraryState == CoreSync.LibraryState.NoGroup && !app.testing.inStress
+    // As could_join on the desktops; never in a stress library, which doesn't sync, nor in the
+    // demo library, which isn't the phone's own.
+    val canStart = status.libraryState == CoreSync.LibraryState.NoGroup && !app.testing.inStress && !app.testing.inDemo
     val latestPicker by rememberUpdatedState(picker)
     return remember(canStart) {
         NewLibraryActions(

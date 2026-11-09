@@ -229,3 +229,26 @@ JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreLibrary_nativeIsStress(JNIEnv
   (void)cls;
   return mc_library_is_stress(jni_lib_of(handle)) ? JNI_TRUE : JNI_FALSE;
 }
+
+/* The demo library (kithcore/demo.h), for debug builds' store_demo extra. */
+
+JNIEXPORT jint JNICALL Java_ng_kithso_core_CoreTesting_demoCreate(JNIEnv *env, jobject self, jstring dir,
+                                                                 jstring staging_dir) {
+  (void)self;
+  int ok = 1;
+  const char *d = jni_chars(env, dir, &ok), *s = ok ? jni_chars(env, staging_dir, &ok) : NULL;
+  mc_status st = ok ? mc_demo_create(d, s) : MC_ERR_NOMEM;
+  jni_release(env, dir, d);
+  jni_release(env, staging_dir, s);
+  return st;
+}
+
+JNIEXPORT jboolean JNICALL Java_ng_kithso_core_CoreTesting_isDemoComplete(JNIEnv *env, jobject self, jstring dir) {
+  (void)self;
+  int ok = 1;
+  const char *c = jni_chars(env, dir, &ok);
+  if (!ok) return JNI_FALSE;
+  int yes = mc_demo_is_complete(c);
+  jni_release(env, dir, c);
+  return yes ? JNI_TRUE : JNI_FALSE;
+}

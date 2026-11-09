@@ -55,4 +55,14 @@ object CoreTesting {
 
     /** Deletes the stress libraries under [configDir] but [openDir]; says how many. */
     @JvmStatic external fun deleteAll(configDir: String, openDir: String?): Int
+
+    /** The demo library's folder's name, under a config folder (MC_DEMO_DIR_NAME). */
+    const val DEMO_DIR_NAME = "demo-library"
+    /**
+     * Makes the demo library (kithcore/demo.h) in [dir], with its files staged in a folder made
+     * in [stagingDir]: a status, 0 when made. Blocks for a few seconds, so off the main thread.
+     */
+    @JvmStatic external fun demoCreate(dir: String, stagingDir: String): Int
+    /** Whether [dir] holds a demo library [demoCreate] finished. */
+    @JvmStatic external fun isDemoComplete(dir: String): Boolean
 }

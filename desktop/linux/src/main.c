@@ -1898,6 +1898,109 @@ static void on_page_changed(GObject *pages, GParamSpec *pspec, gpointer user) {
   app_update_waiting(a);
 }
 
+/* --page's page (see main()), once the window is up: home, albums, artists, album:<title>,
+ * artist:<name> or search:<text>. An unknown page, or a title not there, is passed over. */
+static gboolean open_start_page(gpointer user) {
+  app *a = user;
+  const char *page = a->start_page;
+  if (!page || !a->lib) {
+  } else if (!strcmp(page, "home")) {
+    GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->top_nav, TOP_NAV_HOME);
+    gtk_list_box_select_row(a->top_nav, row);
+    on_top_nav_activated(a->top_nav, row, a);
+  } else if (!strcmp(page, "albums")) {
+    open_view(a, APP_VIEW_ALBUMS);
+  } else if (!strcmp(page, "artists")) {
+    open_view(a, APP_VIEW_ARTISTS);
+  } else if (g_str_has_prefix(page, "search:")) {
+    open_search(a);
+    search_view_start(page + 7);
+  } else if (g_str_has_prefix(page, "album:")) {
+    char uid[MC_UID_STRLEN] = "";
+    mc_album_list *list = NULL;
+    if (mc_library_list_albums(a->lib, &list) == MC_OK)
+      for (int i = 0; i < list->count && !uid[0]; i++)
+        if (list->items[i].title && !strcmp(list->items[i].title, page + 6)) g_strlcpy(uid, list->items[i].uid, sizeof uid);
+    mc_album_list_free(list);
+    if (uid[0]) app_open(a, FALSE, uid);
+  } else if (g_str_has_prefix(page, "artist:")) {
+    char uid[MC_UID_STRLEN] = "";
+    mc_artist_list *list = NULL;
+    if (mc_library_list_artists(a->lib, &list) == MC_OK)
+      for (int i = 0; i < list->count && !uid[0]; i++)
+        if (list->items[i].name && !strcmp(list->items[i].name, page + 7)) g_strlcpy(uid, list->items[i].uid, sizeof uid);
+    mc_artist_list_free(list);
+    if (uid[0]) app_open_artist(a, uid);
+  }
+  g_free(a->start_page);
+  a->start_page = NULL;
+  return G_SOURCE_REMOVE;
+}
+
+/* --demo-library (see main()): the demo library in settings_dir/demo-library, made if it
+ * isn't there, as the settings' library. NULL if so, else why not, to free: the settings
+ * name another library already (a real settings folder never loses its library to it), or
+ * it couldn't be made. */
+static char *use_demo_library(const char *settings_dir, mc_settings *settings) {
+  char *dir = g_build_filename(settings_dir, MC_DEMO_DIR_NAME, NULL), *why = NULL;
+  const char *current = mc_settings_library_dir(settings);
+  if (current && strcmp(current, dir)) {
+    why = mc_format_alloc(mc_str(MC_STR_DEMO_LIBRARY_OTHER), MC_S(current));
+  } else {
+    mc_status st = mc_demo_is_complete(dir) ? MC_OK : mc_demo_create(dir, NULL);
+    if (st != MC_OK) why = mc_format_alloc(mc_str(MC_STR_DEMO_LIBRARY_FAILED), MC_S(dir), MC_S(mc_status_str(st)));
+    else if (!current && mc_settings_set_library_dir(settings, dir) == MC_OK) mc_settings_save(settings);
+  }
+  g_free(dir);
+  return why;
+}
+
+/* Takes the screenshot options out of argv, which GApplication would refuse:
+ * --demo-library, --window-size WxH and --page <page> (each also as --x=value). FALSE, having
+ * said why, for a bad one. */
+static gboolean take_options(int *argc, char **argv, app *a, gboolean *demo) {
+  int out = 1;
+  for (int i = 1; i < *argc; i++) {
+    const char *arg = argv[i], *value = NULL;
+    if (!strcmp(arg, "--")) { /* the rest are GApplication's */
+      while (i < *argc) argv[out++] = argv[i++];
+      break;
+    }
+    if (!strcmp(arg, "--demo-library")) {
+      *demo = TRUE;
+      continue;
+    }
+    gboolean size = !strcmp(arg, "--window-size") || g_str_has_prefix(arg, "--window-size=");
+    gboolean page = !strcmp(arg, "--page") || g_str_has_prefix(arg, "--page=");
+    if (!size && !page) {
+      argv[out++] = argv[i];
+      continue;
+    }
+    const char *eq = strchr(arg, '=');
+    value = eq ? eq + 1 : i + 1 < *argc ? argv[++i] : NULL;
+    if (!value || !*value) {
+      g_printerr("%s: %s needs a value\n", g_get_prgname() ? g_get_prgname() : "kithsong", arg);
+      return FALSE;
+    }
+    if (page) {
+      g_free(a->start_page);
+      a->start_page = g_strdup(value);
+      continue;
+    }
+    int w = 0, h = 0;
+    char end = 0;
+    if (sscanf(value, "%dx%d%c", &w, &h, &end) != 2 || w < 320 || h < 240 || w > 16384 || h > 16384) {
+      g_printerr("%s: --window-size wants <width>x<height>, not %s\n", g_get_prgname() ? g_get_prgname() : "kithsong", value);
+      return FALSE;
+    }
+    a->window_w = w;
+    a->window_h = h;
+  }
+  argv[out] = NULL;
+  *argc = out;
+  return TRUE;
+}
+
 static void on_activate(GtkApplication *gapp, gpointer user) {
   app *a = user;
   if (a->win) { /* launched again: the app was already running */
@@ -1908,6 +2011,12 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   /* In the primary instance only (one launched again just hands over), before sync and the
    * tethered devices start. */
   plugins_ui_load(a->settings_dir);
+  /* KITHSONG_THEME=light or dark overrides the desktop's style, for testing and screenshots,
+   * as on Windows. */
+  const char *theme = g_getenv("KITHSONG_THEME");
+  if (theme && (!strcmp(theme, "light") || !strcmp(theme, "dark")))
+    adw_style_manager_set_color_scheme(adw_style_manager_get_default(),
+                                       !strcmp(theme, "dark") ? ADW_COLOR_SCHEME_FORCE_DARK : ADW_COLOR_SCHEME_FORCE_LIGHT);
 
   GtkCssProvider *provider = gtk_css_provider_new();
   gtk_css_provider_load_from_string(provider, css);
@@ -2013,7 +2122,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   a->win = GTK_WINDOW(win);
   add_smart_actions(a);
   gtk_window_set_title(a->win, mc_str(MC_STR_APP_NAME));
-  gtk_window_set_default_size(a->win, 1200, 800);
+  gtk_window_set_default_size(a->win, a->window_w ? a->window_w : 1200, a->window_h ? a->window_h : 800);
   GtkWidget *toasts = adw_toast_overlay_new();
   a->toasts = ADW_TOAST_OVERLAY(toasts);
   adw_toast_overlay_set_child(a->toasts, toolbar);
@@ -2074,6 +2183,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   g_signal_connect(win, "destroy", G_CALLBACK(on_window_destroy), a);
   gtk_window_present(a->win);
   mc_perf_mark("window_shown");
+  if (a->start_page) g_timeout_add(500, open_start_page, a); /* once the window has settled */
   if (a->first_run) first_run_present(win, on_first_run_done, a);
   if (a->reset_failed) {
     AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_SETTINGS_RESET), a->reset_failed);
@@ -2092,12 +2202,23 @@ static void set_strings_locale(void) {
 }
 
 /* Settings from before the app was called Kithsong move over once. If the move fails, the
- * new folder starts out empty as on a first run. */
+ * new folder starts out empty as on a first run.
+ *
+ * For screenshots (scripts/store-screenshots), as on Windows: --demo-library opens the demo
+ * library (kithcore/demo.h) in <settings folder>/demo-library, making it first, and refuses a
+ * settings folder that names another library; point XDG_CONFIG_HOME at a new folder for it.
+ * --window-size WxH is the window's starting size, --page what it opens on: home, albums,
+ * artists, album:<title>, artist:<name> or search:<text>. */
 int main(int argc, char **argv) {
   uint64_t main_us = mc_perf_now_us();
   app a = {0};
   mc_init();
   set_strings_locale(); /* before the player's and import's threads look anything up */
+  gboolean demo = FALSE;
+  if (!take_options(&argc, argv, &a, &demo)) {
+    mc_shutdown();
+    return 2;
+  }
 
   /* Settings in ~/.config/kithsong say where the library folder is. With none yet, the first
    * run asks, once the window is up. Run from a checkout, settings are in kithsong-debug
@@ -2118,8 +2239,23 @@ int main(int argc, char **argv) {
   mc_free(left);
   mc_settings *settings = NULL;
   mc_status loaded = mc_settings_load(settings_dir, &settings);
+  if (demo) {
+    char *why = loaded != MC_OK ? mc_format_alloc(mc_str(MC_STR_DEMO_LIBRARY_FAILED), MC_S(settings_dir),
+                                                  MC_S(mc_status_str(loaded)))
+                                : use_demo_library(settings_dir, settings);
+    if (why) {
+      g_printerr("%s\n", why);
+      mc_free(why);
+      mc_settings_free(settings);
+      g_free(settings_dir);
+      g_free(a.start_page);
+      mc_free(a.reset_failed);
+      mc_shutdown();
+      return 2;
+    }
+  }
   /* If that fails the first run asks, with no Music folder to offer. */
-  if (loaded == MC_OK && from_source) mc_source_library_prepare(settings_dir, settings);
+  if (loaded == MC_OK && from_source && !demo) mc_source_library_prepare(settings_dir, settings);
   a.first_run = loaded == MC_OK && !mc_settings_library_dir(settings);
   /* As early as it can be known; the start itself comes from the system. */
   mc_perf_set_enabled(mc_settings_bool(settings, MC_PERF_SETTING, 0) || mc_perf_env_enabled());
@@ -2134,8 +2270,9 @@ int main(int argc, char **argv) {
   mc_perf_mark("library_opened");
 
   /* Its own id from a checkout, or this would only bring an installed copy forward. */
+  /* The demo library is never handed to a running copy, which has its own library. */
   AdwApplication *gapp = adw_application_new(from_source ? "ng.kithso.Kithsong.Debug" : "ng.kithso.Kithsong",
-                                             G_APPLICATION_DEFAULT_FLAGS);
+                                             demo ? G_APPLICATION_NON_UNIQUE : G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect(gapp, "activate", G_CALLBACK(on_activate), &a);
   g_signal_connect(gapp, "shutdown", G_CALLBACK(on_shutdown), &a);
   int status = g_application_run(G_APPLICATION(gapp), argc, argv);
@@ -2148,6 +2285,7 @@ int main(int argc, char **argv) {
   plugins_ui_unload(); /* sync and the tethered devices have stopped with the window */
   g_free(a.settings_dir);
   g_free(a.art_dir);
+  g_free(a.start_page);
   mc_free(a.reset_failed);
   mc_shutdown();
   return status;
