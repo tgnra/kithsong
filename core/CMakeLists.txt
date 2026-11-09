@@ -115,6 +115,7 @@ add_library(kithcore STATIC
   src/transcode/transcode.c
   src/plugin/plugins.c
   src/plugin/source.c
+  src/discovery/msock.c
   src/discovery/discovery.c
   src/sync/sync.c
   src/sync/sync_db.c

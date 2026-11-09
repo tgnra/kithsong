@@ -19,7 +19,8 @@
  *
  * The thread sleeps in select() until the next scan, announcement or peer expiry, or until
  * a byte arrives on a loopback "wake" socket (portable, unlike a pipe, which Windows can't
- * select on); stop and set_group send that byte.
+ * select on); stop and set_group send that byte. The sockets themselves are msock.c's, which
+ * the Google Cast browser (cast/cast_browse.c) shares.
  *
  * Staying visible. Every scan browses and also announces our records again, so others keep
  * us online even when their queries don't reach us, and two packets a scan can be lost on
@@ -32,10 +33,10 @@
  * 1.5 scan intervals, or that failed to send, is reopened. Discovery starts even with no
  * socket open (no network yet) and opens them once there is one.
  *
- * Android: getifaddrs() needs API level 24, and the frontend must hold a
- * WifiManager.MulticastLock, or incoming multicast is filtered. */
+ * Android: the frontend must hold a WifiManager.MulticastLock, or incoming multicast is
+ * filtered. */
 #ifndef _WIN32
-#define _DEFAULT_SOURCE /* getifaddrs, IFF_*, inet_ntop */
+#define _DEFAULT_SOURCE /* inet_ntop */
 #endif
 
 #include "kithcore/discovery.h"
@@ -48,13 +49,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <iphlpapi.h>
 #else
 #include <arpa/inet.h>
-#include <fcntl.h>
-#include <ifaddrs.h>
-#include <net/if.h>
-#include <sys/select.h>
 #include <sys/socket.h>
 #endif
 
@@ -62,6 +58,7 @@
 
 #include "discovery/discovery_test.h"
 #include "discovery/local_addr.h"
+#include "discovery/msock.h"
 #include "mdns.h"
 #include "util/platform.h"
 
@@ -69,7 +66,6 @@
 #define DNS_SD "_services._dns-sd._udp.local."
 
 enum {
-  MAX_SOCKS = 16,
   NAME_MAX_BYTES = 63,   /* of the device name we announce */
   LABEL_NAME_BYTES = 52, /* of the name in the instance label: 63 minus " (12345678)" */
   SHORT_UID = 8,
@@ -81,17 +77,8 @@ enum {
   TXT_COUNT = 6, /* the records we send: v, dev, name, kind, grp, host */
   SEND_BYTES = 2048,
   RECV_BYTES = 9216,    /* the largest mDNS packet (RFC 6762) */
-  REANNOUNCE_MS = 1000, /* announcements go out twice, a second apart (RFC 6762 8.3) */
-  NO_WAKE_MS = 200      /* select() timeout cap if the wake socket couldn't be opened */
+  REANNOUNCE_MS = 1000 /* announcements go out twice, a second apart (RFC 6762 8.3) */
 };
-
-typedef struct msock {
-  int fd;
-  int ipv6;
-  struct in_addr addr4; /* interface this socket sends from; INADDR_ANY for the default */
-  uint64_t heard_ms;    /* opened, or last had a packet (our own looped back included) */
-  int send_failed;
-} msock;
 
 typedef struct peer {
   char dev[MC_UID_STRLEN];
@@ -157,18 +144,11 @@ struct mc_discovery {
   /* Discovery thread only (and start, before the thread exists). */
   char grp[MC_GROUP_HASH_STRLEN];
   char name[NAME_MAX_BYTES + 1]; /* TXT "name" */
-  int wake_fd;
-  struct sockaddr_in wake_addr;
-  msock socks[MAX_SOCKS];
-  int nsocks;
-  struct in_addr addrs4[MAX_SOCKS]; /* this device's interface addresses */
-  int naddrs4;
-  struct in6_addr addr6; /* a global IPv6 address, for AAAA */
-  int has_addr6;
+  mc_msocks ms; /* the sockets, and this device's addresses */
   peer *peers;
   int npeers;
   /* The packet being read. */
-  const msock *cur;
+  const mc_msock *cur;
   rx_service rx[RX_MAX];
   int nrx;
   rx_host rxh[RX_MAX];
@@ -224,202 +204,6 @@ static int valid_kind(const char *kind) {
   return kind && (!strcmp(kind, "desktop") || !strcmp(kind, "phone") || !strcmp(kind, "watch"));
 }
 
-static void set_nonblocking(int fd) {
-#ifdef _WIN32
-  u_long on = 1;
-  ioctlsocket((SOCKET)fd, FIONBIO, &on);
-#else
-  fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-#endif
-}
-
-static int usable_ipv6(const struct in6_addr *a) {
-  static const unsigned char loopback[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
-  static const unsigned char any[16] = {0};
-  const unsigned char *b = a->s6_addr;
-  if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80) return 0; /* link-local: needs a scope id */
-  if (b[0] == 0 && b[1] == 0 && b[10] == 0xff && b[11] == 0xff) return 0; /* v4-mapped */
-  return memcmp(b, loopback, 16) != 0 && memcmp(b, any, 16) != 0;
-}
-
-/* --- Interfaces and sockets ----------------------------------------------------------- */
-
-/* This device's IPv4 interface addresses, and its first global IPv6 address. Skips
- * point-to-point interfaces and those that are down or can't multicast. */
-static void list_addresses(struct in_addr *v4, int max, int *n4, struct in6_addr *v6,
-                           int *has6) {
-  *n4 = 0;
-  *has6 = 0;
-#ifdef _WIN32
-  ULONG size = 16 * 1024;
-  IP_ADAPTER_ADDRESSES *list = NULL;
-  ULONG ret = ERROR_BUFFER_OVERFLOW;
-  for (int tries = 0; tries < 4 && ret == ERROR_BUFFER_OVERFLOW; tries++) {
-    free(list);
-    list = malloc(size);
-    if (!list) return;
-    ret = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_ANYCAST |
-                                              GAA_FLAG_SKIP_DNS_SERVER,
-                               NULL, list, &size);
-  }
-  if (ret != NO_ERROR) {
-    free(list);
-    return;
-  }
-  for (IP_ADAPTER_ADDRESSES *ad = list; ad; ad = ad->Next) {
-    if (ad->OperStatus != IfOperStatusUp || ad->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
-    if (ad->IfType == IF_TYPE_PPP || ad->TunnelType == TUNNEL_TYPE_TEREDO) continue;
-    if (ad->Flags & IP_ADAPTER_NO_MULTICAST) continue;
-    for (IP_ADAPTER_UNICAST_ADDRESS *u = ad->FirstUnicastAddress; u; u = u->Next) {
-      const struct sockaddr *sa = u->Address.lpSockaddr;
-      if (sa->sa_family == AF_INET && *n4 < max) {
-        struct sockaddr_in in;
-        memcpy(&in, sa, sizeof in);
-        v4[(*n4)++] = in.sin_addr;
-      } else if (sa->sa_family == AF_INET6 && !*has6) {
-        struct sockaddr_in6 in6;
-        memcpy(&in6, sa, sizeof in6);
-        if (usable_ipv6(&in6.sin6_addr)) {
-          *v6 = in6.sin6_addr;
-          *has6 = 1;
-        }
-      }
-    }
-  }
-  free(list);
-#else
-  /* Loopback is included, although it lacks IFF_MULTICAST (it carries multicast fine), so
-   * instances on one machine find each other even where a host firewall drops multicast
-   * looped back on the LAN interface, as NixOS's default one does. Only local processes
-   * hear it. */
-  struct ifaddrs *list = NULL;
-  if (getifaddrs(&list) != 0) return;
-  for (struct ifaddrs *ifa = list; ifa; ifa = ifa->ifa_next) {
-    unsigned flags = ifa->ifa_flags;
-    if (!ifa->ifa_addr) continue;
-    if (!(flags & IFF_UP) || !(flags & IFF_RUNNING)) continue;
-    if (!(flags & (IFF_MULTICAST | IFF_LOOPBACK)) || (flags & IFF_POINTOPOINT)) continue;
-    if (ifa->ifa_addr->sa_family == AF_INET && *n4 < max) {
-      struct sockaddr_in in;
-      memcpy(&in, ifa->ifa_addr, sizeof in);
-      v4[(*n4)++] = in.sin_addr;
-    } else if (ifa->ifa_addr->sa_family == AF_INET6 && !*has6) {
-      struct sockaddr_in6 in6;
-      memcpy(&in6, ifa->ifa_addr, sizeof in6);
-      if (usable_ipv6(&in6.sin6_addr)) {
-        *v6 = in6.sin6_addr;
-        *has6 = 1;
-      }
-    }
-  }
-  freeifaddrs(list);
-#endif
-}
-
-static void add_sock(mc_discovery *d, int fd, int ipv6, struct in_addr addr4) {
-  if (d->nsocks == MAX_SOCKS) {
-    mdns_socket_close(fd);
-    return;
-  }
-  msock *s = &d->socks[d->nsocks++];
-  s->fd = fd;
-  s->ipv6 = ipv6;
-  s->addr4 = addr4;
-  s->heard_ms = mc_mono_ms();
-  s->send_failed = 0;
-}
-
-/* An mDNS socket on IPv4 interface addr4 (INADDR_ANY: the default one), or on the default
- * IPv6 interface. -1 if it can't be opened. */
-static int open_one(int ipv6, struct in_addr addr4) {
-  if (ipv6) {
-    struct sockaddr_in6 sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sin6_family = AF_INET6;
-    sa.sin6_addr = in6addr_any;
-    sa.sin6_port = htons(MDNS_PORT);
-    return mdns_socket_open_ipv6(&sa);
-  }
-  struct sockaddr_in sa;
-  memset(&sa, 0, sizeof sa);
-  sa.sin_family = AF_INET;
-  sa.sin_port = htons(MDNS_PORT);
-  sa.sin_addr = addr4;
-  int fd = mdns_socket_open_ipv4(&sa);
-#ifdef IP_MULTICAST_ALL
-  /* Linux otherwise delivers every interface's multicast to every socket on the port. */
-  if (fd >= 0 && addr4.s_addr != htonl(INADDR_ANY)) {
-    int off = 0;
-    setsockopt(fd, IPPROTO_IP, IP_MULTICAST_ALL, &off, sizeof off);
-  }
-#endif
-  return fd;
-}
-
-/* One socket per IPv4 interface address, or one on the default interface if none opens. */
-static void open_ipv4(mc_discovery *d) {
-  int opened = 0;
-  for (int i = 0; i < d->naddrs4 && d->nsocks < MAX_SOCKS; i++) {
-    int fd = open_one(0, d->addrs4[i]);
-    if (fd < 0) continue;
-    add_sock(d, fd, 0, d->addrs4[i]);
-    opened++;
-  }
-  if (opened) return;
-  struct in_addr any;
-  any.s_addr = htonl(INADDR_ANY);
-  int fd = open_one(0, any);
-  if (fd >= 0) add_sock(d, fd, 0, any);
-}
-
-static void open_ipv6(mc_discovery *d) {
-  struct in_addr none;
-  none.s_addr = htonl(INADDR_ANY);
-  int fd = open_one(1, none);
-  if (fd >= 0) add_sock(d, fd, 1, none);
-}
-
-static int has_ipv6(const mc_discovery *d) {
-  for (int i = 0; i < d->nsocks; i++)
-    if (d->socks[i].ipv6) return 1;
-  return 0;
-}
-
-static void close_socks(mc_discovery *d, int ipv6) {
-  int kept = 0;
-  for (int i = 0; i < d->nsocks; i++) {
-    if (d->socks[i].ipv6 == ipv6)
-      mdns_socket_close(d->socks[i].fd);
-    else
-      d->socks[kept++] = d->socks[i];
-  }
-  d->nsocks = kept;
-}
-
-/* A loopback UDP socket that other threads send a byte to, to wake select(). */
-static int open_wake(mc_discovery *d) {
-  int fd = (int)socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-  if (fd < 0) return -1;
-  struct sockaddr_in sa;
-  memset(&sa, 0, sizeof sa);
-  sa.sin_family = AF_INET;
-  sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  socklen_t len = sizeof sa;
-  if (bind(fd, (struct sockaddr *)&sa, sizeof sa) != 0 ||
-      getsockname(fd, (struct sockaddr *)&sa, &len) != 0) {
-    mdns_socket_close(fd);
-    return -1;
-  }
-  set_nonblocking(fd);
-  d->wake_addr = sa;
-  return fd;
-}
-
-static void wake(mc_discovery *d) {
-  if (d->wake_fd >= 0)
-    sendto(d->wake_fd, "w", 1, 0, (const struct sockaddr *)&d->wake_addr, sizeof d->wake_addr);
-}
-
 /* --- Our records ---------------------------------------------------------------------- */
 
 typedef struct records {
@@ -446,7 +230,7 @@ static mdns_record_t txt_record(const mc_discovery *d, const char *key, const ch
 }
 
 /* The records as sent from socket s: its A record is that socket's interface address. */
-static void make_records(const mc_discovery *d, const msock *s, records *r) {
+static void make_records(const mc_discovery *d, const mc_msock *s, records *r) {
   memset(r, 0, sizeof *r);
   r->ptr.name = mstr(SERVICE);
   r->ptr.type = MDNS_RECORDTYPE_PTR;
@@ -459,8 +243,8 @@ static void make_records(const mc_discovery *d, const msock *s, records *r) {
 
   /* A socket not tied to one interface advertises the first non-loopback address. */
   struct in_addr a4 = s->addr4;
-  for (int i = 0; a4.s_addr == htonl(INADDR_ANY) && i < d->naddrs4; i++)
-    if ((ntohl(d->addrs4[i].s_addr) >> 24) != 127) a4 = d->addrs4[i];
+  for (int i = 0; a4.s_addr == htonl(INADDR_ANY) && i < d->ms.naddrs4; i++)
+    if ((ntohl(d->ms.addrs4[i].s_addr) >> 24) != 127) a4 = d->ms.addrs4[i];
   if (a4.s_addr != htonl(INADDR_ANY)) {
     r->a.name = mstr(d->hostname);
     r->a.type = MDNS_RECORDTYPE_A;
@@ -468,11 +252,11 @@ static void make_records(const mc_discovery *d, const msock *s, records *r) {
     r->a.data.a.addr.sin_addr = a4;
     r->has_a = 1;
   }
-  if (d->has_addr6) {
+  if (d->ms.has_addr6) {
     r->aaaa.name = mstr(d->hostname);
     r->aaaa.type = MDNS_RECORDTYPE_AAAA;
     r->aaaa.data.aaaa.addr.sin6_family = AF_INET6;
-    r->aaaa.data.aaaa.addr.sin6_addr = d->addr6;
+    r->aaaa.data.aaaa.addr.sin6_addr = d->ms.addr6;
     r->has_aaaa = 1;
   }
 
@@ -499,27 +283,26 @@ static size_t extras(const records *r, int with_srv, int with_a, int with_aaaa,
 typedef enum send_mode { SEND_ANNOUNCE, SEND_GOODBYE } send_mode;
 
 static void announce(mc_discovery *d, send_mode mode) {
-  for (int i = 0; i < d->nsocks; i++) {
+  for (int i = 0; i < d->ms.nsocks; i++) {
+    mc_msock *s = &d->ms.socks[i];
     records r;
     mdns_record_t extra[4 + TXT_COUNT];
-    make_records(d, &d->socks[i], &r);
+    make_records(d, s, &r);
     size_t n = extras(&r, 1, 1, 1, extra);
     int ret;
     if (mode == SEND_ANNOUNCE)
-      ret = mdns_announce_multicast(d->socks[i].fd, d->sendbuf, sizeof d->sendbuf, r.ptr, NULL,
-                                    0, extra, n);
+      ret = mdns_announce_multicast(s->fd, d->sendbuf, sizeof d->sendbuf, r.ptr, NULL, 0, extra, n);
     else
-      ret = mdns_goodbye_multicast(d->socks[i].fd, d->sendbuf, sizeof d->sendbuf, r.ptr, NULL,
-                                   0, extra, n);
-    if (ret < 0) d->socks[i].send_failed = 1;
+      ret = mdns_goodbye_multicast(s->fd, d->sendbuf, sizeof d->sendbuf, r.ptr, NULL, 0, extra, n);
+    if (ret < 0) s->send_failed = 1;
   }
 }
 
 static void browse(mc_discovery *d) {
-  for (int i = 0; i < d->nsocks; i++)
-    if (mdns_query_send(d->socks[i].fd, MDNS_RECORDTYPE_PTR, MDNS_STRING_CONST(SERVICE),
+  for (int i = 0; i < d->ms.nsocks; i++)
+    if (mdns_query_send(d->ms.socks[i].fd, MDNS_RECORDTYPE_PTR, MDNS_STRING_CONST(SERVICE),
                         d->sendbuf, sizeof d->sendbuf, 0) < 0)
-      d->socks[i].send_failed = 1;
+      d->ms.socks[i].send_failed = 1;
 }
 
 /* Answers a question about our service type, instance or host name, unicast if the
@@ -674,7 +457,7 @@ static int on_record(int sock, const struct sockaddr *from, size_t addrlen,
     struct sockaddr_in6 a6;
     mdns_record_parse_aaaa(data, size, record_offset, record_length, &a6);
     h->aaaa = a6.sin6_addr;
-    h->has_aaaa = usable_ipv6(&a6.sin6_addr);
+    h->has_aaaa = mc_msocks_usable_ipv6(&a6.sin6_addr);
   }
   return 0;
 }
@@ -810,102 +593,30 @@ static uint64_t expire_peers(mc_discovery *d, uint64_t now) {
 
 /* --- Thread --------------------------------------------------------------------------- */
 
-static void fd_add(fd_set *set, int fd, int *maxfd) {
-#ifdef _WIN32
-  FD_SET((SOCKET)fd, set);
-#else
-  FD_SET(fd, set);
-#endif
-  if (fd > *maxfd) *maxfd = fd;
-}
-
-static int fd_ready(fd_set *set, int fd) {
-#ifdef _WIN32
-  return FD_ISSET((SOCKET)fd, set);
-#else
-  return FD_ISSET(fd, set);
-#endif
-}
-
-/* Waits up to ms for packets or a wake-up, and handles whatever arrived. */
-static void wait_and_read(mc_discovery *d, uint64_t ms) {
-  if (d->wake_fd < 0 && ms > NO_WAKE_MS) ms = NO_WAKE_MS;
-  fd_set set;
-  FD_ZERO(&set);
-  int maxfd = -1;
-  for (int i = 0; i < d->nsocks; i++) fd_add(&set, d->socks[i].fd, &maxfd);
-  if (d->wake_fd >= 0) fd_add(&set, d->wake_fd, &maxfd);
-  if (maxfd < 0) { /* no socket at all: Windows' select() would fail at once */
-    mc_sleep_ms((uint32_t)(ms > NO_WAKE_MS ? NO_WAKE_MS : ms));
-    return;
-  }
-  struct timeval tv;
-  tv.tv_sec = (long)(ms / 1000);
-  tv.tv_usec = (long)(ms % 1000 * 1000);
-  if (select(maxfd + 1, &set, NULL, NULL, &tv) <= 0) return;
-
-  if (d->wake_fd >= 0 && fd_ready(&set, d->wake_fd)) {
-    char junk[16];
-    while (recv(d->wake_fd, junk, sizeof junk, 0) > 0) {
-    }
-  }
-  for (int i = 0; i < d->nsocks; i++) {
-    if (!fd_ready(&set, d->socks[i].fd)) continue;
-    d->socks[i].heard_ms = mc_mono_ms();
-    d->cur = &d->socks[i];
-    d->nrx = d->nrxh = 0;
-    d->rx_from_len = 0;
-    mdns_socket_listen(d->socks[i].fd, d->recvbuf, sizeof d->recvbuf, on_record, d);
-    merge_packet(d);
-  }
-}
-
-/* Re-lists interfaces, and reopens every socket if their addresses changed. Opens an IPv6
- * socket if there's none yet. Returns whether the sockets changed. */
-static int refresh_interfaces(mc_discovery *d) {
-  struct in_addr v4[MAX_SOCKS];
-  int n4;
-  list_addresses(v4, MAX_SOCKS, &n4, &d->addr6, &d->has_addr6);
-  if (n4 == d->naddrs4 && !memcmp(v4, d->addrs4, (size_t)n4 * sizeof v4[0]) && d->nsocks) {
-    if (has_ipv6(d)) return 0;
-    int before = d->nsocks;
-    open_ipv6(d);
-    return d->nsocks != before;
-  }
-  memcpy(d->addrs4, v4, sizeof v4);
-  d->naddrs4 = n4;
-  /* The IPv6 socket too: it joined the group on whatever was the default interface. */
-  close_socks(d, 0);
-  close_socks(d, 1);
-  open_ipv4(d);
-  open_ipv6(d);
-  return 1;
+/* A packet has arrived on s: answers what it asks, and merges what it says. */
+static void on_packet(void *user, mc_msock *s) {
+  mc_discovery *d = user;
+  d->cur = s;
+  d->nrx = d->nrxh = 0;
+  d->rx_from_len = 0;
+  mdns_socket_listen(s->fd, d->recvbuf, sizeof d->recvbuf, on_record, d);
+  merge_packet(d);
 }
 
 /* Reopens each socket that has heard nothing for 1.5 scan intervals, although it browsed
- * (and loops its own packets back), or that failed to send. A new socket is opened before
- * the old one closes; if it can't be, the old one stays and is tried again next scan. */
+ * (and loops its own packets back), or that failed to send. */
 static void reopen_deaf(mc_discovery *d, uint64_t now) {
-  uint64_t deaf_ms = d->interval_ms + d->interval_ms / 2;
-  for (int i = 0; i < d->nsocks; i++) {
-    msock *s = &d->socks[i];
-    if (!s->send_failed && now - s->heard_ms < deaf_ms) continue;
-    int fd = open_one(s->ipv6, s->addr4);
-    s->heard_ms = now;
-    if (fd < 0) continue;
-    s->send_failed = 0;
-    mdns_socket_close(s->fd);
-    s->fd = fd;
-    mc_mutex_lock(&d->lock);
-    d->reopened++;
-    mc_mutex_unlock(&d->lock);
-  }
+  int n = mc_msocks_reopen_deaf(&d->ms, now, d->interval_ms + d->interval_ms / 2);
+  if (!n) return;
+  mc_mutex_lock(&d->lock);
+  d->reopened += n;
+  mc_mutex_unlock(&d->lock);
 }
 
 /* For tests: leaves the multicast group on every socket, so they hear nothing. */
 static void deafen(mc_discovery *d) {
-  for (int i = 0; i < d->nsocks; i++) {
-    const msock *s = &d->socks[i];
+  for (int i = 0; i < d->ms.nsocks; i++) {
+    const mc_msock *s = &d->ms.socks[i];
     if (s->ipv6) {
       struct ipv6_mreq req;
       memset(&req, 0, sizeof req);
@@ -941,7 +652,7 @@ static void run(void *arg) {
 
     now = mc_mono_ms();
     if (now >= next_scan) {
-      if (refresh_interfaces(d))
+      if (mc_msocks_refresh(&d->ms))
         changed = 1;
       else
         reopen_deaf(d, now);
@@ -961,7 +672,7 @@ static void run(void *arg) {
     uint64_t deadline = expire_peers(d, now);
     if (next_scan < deadline) deadline = next_scan;
     if (reannounce && reannounce < deadline) deadline = reannounce;
-    wait_and_read(d, deadline > now ? deadline - now : 0);
+    mc_msocks_wait(&d->ms, deadline > now ? deadline - now : 0, on_packet, d);
   }
   announce(d, SEND_GOODBYE);
 }
@@ -969,9 +680,7 @@ static void run(void *arg) {
 /* --- API ------------------------------------------------------------------------------ */
 
 static void discovery_free(mc_discovery *d) {
-  close_socks(d, 0);
-  close_socks(d, 1);
-  if (d->wake_fd >= 0) mdns_socket_close(d->wake_fd);
+  mc_msocks_close(&d->ms);
   free(d->peers);
   mc_mutex_destroy(&d->lock);
 #ifdef _WIN32
@@ -990,7 +699,7 @@ mc_status mc_discovery_start(const char *device_uid, const char *device_name, co
     return MC_ERR_INVALID_ARG;
   mc_discovery *d = calloc(1, sizeof *d);
   if (!d) return MC_ERR_NOMEM;
-  d->wake_fd = -1;
+  d->ms.wake_fd = -1;
   mc_mutex_init(&d->lock);
 #ifdef _WIN32
   WSADATA wsa;
@@ -1028,10 +737,7 @@ mc_status mc_discovery_start(const char *device_uid, const char *device_name, co
   snprintf(d->hostname, sizeof d->hostname, "kithsong-%s.local.", tail);
 
   /* With no network yet there may be no socket at all; every scan tries again. */
-  list_addresses(d->addrs4, MAX_SOCKS, &d->naddrs4, &d->addr6, &d->has_addr6);
-  open_ipv4(d);
-  open_ipv6(d);
-  d->wake_fd = open_wake(d);
+  mc_msocks_open(&d->ms);
   mc_status st = mc_thread_start(&d->thread, run, d);
   if (st != MC_OK) {
     discovery_free(d);
@@ -1047,7 +753,7 @@ mc_status mc_discovery_set_group(mc_discovery *disc, const char *group_hash) {
   strcpy(disc->next_grp, group_hash ? group_hash : "");
   disc->group_changed = 1;
   mc_mutex_unlock(&disc->lock);
-  wake(disc);
+  mc_msocks_wake(&disc->ms);
   return MC_OK;
 }
 
@@ -1058,7 +764,7 @@ mc_status mc_discovery_set_name(mc_discovery *disc, const char *device_name) {
            utf8_cut(device_name, NAME_MAX_BYTES));
   disc->name_changed = 1;
   mc_mutex_unlock(&disc->lock);
-  wake(disc);
+  mc_msocks_wake(&disc->ms);
   return MC_OK;
 }
 
@@ -1067,7 +773,7 @@ void mc_discovery_stop(mc_discovery *disc) {
   mc_mutex_lock(&disc->lock);
   disc->stop = 1;
   mc_mutex_unlock(&disc->lock);
-  wake(disc);
+  mc_msocks_wake(&disc->ms);
   mc_thread_join(&disc->thread);
   discovery_free(disc);
 }
@@ -1076,7 +782,7 @@ void mc_discovery_test_deafen(mc_discovery *disc) {
   mc_mutex_lock(&disc->lock);
   disc->deafen = 1;
   mc_mutex_unlock(&disc->lock);
-  wake(disc);
+  mc_msocks_wake(&disc->ms);
 }
 
 int mc_discovery_test_reopened(mc_discovery *disc) {
@@ -1101,10 +807,10 @@ mc_status mc_discovery_group_hash(const char *group_uid, char out[MC_GROUP_HASH_
 }
 
 int mc_local_addresses(char (*out)[MC_LOCAL_ADDR_STRLEN], int max) {
-  struct in_addr v4[MAX_SOCKS];
+  struct in_addr v4[MC_MSOCKS_MAX];
   struct in6_addr v6;
   int n4 = 0, has6 = 0, n = 0;
-  list_addresses(v4, MAX_SOCKS, &n4, &v6, &has6);
+  mc_msocks_list_addresses(v4, MC_MSOCKS_MAX, &n4, &v6, &has6);
   for (int i = 0; i < n4 && n < max; i++) {
     if ((ntohl(v4[i].s_addr) >> 24) == 127) continue; /* loopback reaches no one else */
     if (inet_ntop(AF_INET, &v4[i], out[n], MC_LOCAL_ADDR_STRLEN)) n++;

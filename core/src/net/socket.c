@@ -221,16 +221,30 @@ static mc_status wrap(sock_t fd, const struct sockaddr *peer, mc_socket **out) {
 
 /* --- Listener --- */
 
-static sock_t listen_on(int family, uint16_t port) {
-  sock_t fd = socket(family, SOCK_STREAM, IPPROTO_TCP);
+/* A listening socket on address (port included). */
+static sock_t listen_at(const struct sockaddr *address, socklen_t len) {
+  sock_t fd = socket(address->sa_family, SOCK_STREAM, IPPROTO_TCP);
   if (fd == BAD_SOCK) return BAD_SOCK;
   int one = 1;
+  /* A separate IPv4 socket takes the v4 traffic, so an IPv6 one is v6 only everywhere. */
+  if (address->sa_family == AF_INET6) setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&one, sizeof one);
+#ifndef _WIN32
+  /* Lets a fixed port be reused straight after a restart. On Windows this option would let
+   * another process steal the port, and the default already behaves. */
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+#endif
+  if (prepare(fd) != 0 || bind(fd, address, len) != 0 || listen(fd, SOMAXCONN) != 0) {
+    close_sock(fd);
+    return BAD_SOCK;
+  }
+  return fd;
+}
+
+static sock_t listen_on(int family, uint16_t port) {
   struct sockaddr_storage ss;
   memset(&ss, 0, sizeof ss);
   socklen_t len;
   if (family == AF_INET6) {
-    /* A separate IPv4 socket takes the v4 traffic, so this one is v6 only everywhere. */
-    setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&one, sizeof one);
     struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&ss;
     in6->sin6_family = AF_INET6;
     in6->sin6_addr = in6addr_any;
@@ -243,16 +257,21 @@ static sock_t listen_on(int family, uint16_t port) {
     in->sin_port = htons(port);
     len = sizeof *in;
   }
-#ifndef _WIN32
-  /* Lets a fixed port be reused straight after a restart. On Windows this option would let
-   * another process steal the port, and the default already behaves. */
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-#endif
-  if (prepare(fd) != 0 || bind(fd, (struct sockaddr *)&ss, len) != 0 || listen(fd, SOMAXCONN) != 0) {
-    close_sock(fd);
-    return BAD_SOCK;
-  }
-  return fd;
+  return listen_at((struct sockaddr *)&ss, len);
+}
+
+/* The listener's wake-up socket: see struct mc_listener. */
+static int open_wake(mc_listener *l) {
+  l->wake = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (l->wake == BAD_SOCK || prepare(l->wake) != 0) return -1;
+  memset(&l->wake_addr, 0, sizeof l->wake_addr);
+  l->wake_addr.sin_family = AF_INET;
+  l->wake_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  socklen_t len = sizeof l->wake_addr;
+  if (bind(l->wake, (struct sockaddr *)&l->wake_addr, len) != 0 ||
+      getsockname(l->wake, (struct sockaddr *)&l->wake_addr, &len) != 0)
+    return -1;
+  return 0;
 }
 
 mc_status mc_listener_open(uint16_t port, mc_listener **out) {
@@ -278,21 +297,54 @@ mc_status mc_listener_open(uint16_t port, mc_listener **out) {
   l->fds[1] = listen_on(AF_INET6, l->port);
   if (l->fds[1] != BAD_SOCK) l->nfds = 2;
 
-  l->wake = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-  if (l->wake == BAD_SOCK || prepare(l->wake) != 0) goto fail;
-  memset(&l->wake_addr, 0, sizeof l->wake_addr);
-  l->wake_addr.sin_family = AF_INET;
-  l->wake_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  len = sizeof l->wake_addr;
-  if (bind(l->wake, (struct sockaddr *)&l->wake_addr, len) != 0 ||
-      getsockname(l->wake, (struct sockaddr *)&l->wake_addr, &len) != 0)
-    goto fail;
+  if (open_wake(l) != 0) goto fail;
 
   *out = l;
   return MC_OK;
 
 fail:
   fprintf(stderr, "kithcore: listen on port %u failed (error %d)\n", (unsigned)port,
+          sock_error());
+  mc_listener_close(l);
+  return MC_ERR_NET;
+}
+
+mc_status mc_listener_open_on(const char *address, uint16_t port, mc_listener **out) {
+  if (!address || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  mc_status st = mc_socket_init();
+  if (st != MC_OK) return st;
+  char service[8];
+  snprintf(service, sizeof service, "%u", (unsigned)port);
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV | AI_PASSIVE;
+  if (getaddrinfo(address, service, &hints, &res) != 0 || !res) return MC_ERR_INVALID_ARG;
+
+  mc_listener *l = calloc(1, sizeof *l);
+  if (!l) {
+    freeaddrinfo(res);
+    return MC_ERR_NOMEM;
+  }
+  l->fds[0] = l->fds[1] = l->wake = BAD_SOCK;
+  mc_mutex_init(&l->lock);
+  l->fds[0] = listen_at(res->ai_addr, (socklen_t)res->ai_addrlen);
+  freeaddrinfo(res);
+  if (l->fds[0] == BAD_SOCK) goto fail;
+  l->nfds = 1;
+  struct sockaddr_storage bound;
+  socklen_t len = sizeof bound;
+  if (getsockname(l->fds[0], (struct sockaddr *)&bound, &len) != 0) goto fail;
+  l->port = ntohs(bound.ss_family == AF_INET6 ? ((struct sockaddr_in6 *)&bound)->sin6_port
+                                               : ((struct sockaddr_in *)&bound)->sin_port);
+  if (open_wake(l) != 0) goto fail;
+  *out = l;
+  return MC_OK;
+
+fail:
+  fprintf(stderr, "kithcore: listen on %s port %u failed (error %d)\n", address, (unsigned)port,
           sock_error());
   mc_listener_close(l);
   return MC_ERR_NET;
@@ -650,6 +702,20 @@ mc_status mc_socket_recv_exact(mc_socket *s, void *buf, size_t len, int timeout_
   return MC_OK;
 }
 
+long mc_socket_recv_some(mc_socket *s, void *buf, size_t len, int timeout_ms) {
+  if (!s || !buf || !len) return -1;
+  uint64_t deadline = deadline_of(timeout_ms);
+  io_len chunk = (io_len)(len > IO_MAX ? IO_MAX : len);
+  for (;;) {
+    long n = (long)recv(s->fd, buf, chunk, 0);
+    if (n > 0) return n;
+    if (n == 0 || !WOULD_BLOCK(sock_error())) return -1; /* 0 is the peer closing */
+    int left = remaining(deadline, timeout_ms);
+    if (left == 0) return 0;
+    if (wait_ready(&s->fd, 1, 0, slice(left)) == -2) return -1;
+  }
+}
+
 int mc_socket_wait_readable(mc_socket *s, int timeout_ms) {
   uint64_t deadline = deadline_of(timeout_ms);
   for (;;) {
@@ -663,6 +729,20 @@ int mc_socket_wait_readable(mc_socket *s, int timeout_ms) {
 
 const char *mc_socket_peer(const mc_socket *s) {
   return s->peer;
+}
+
+mc_status mc_socket_local_address(const mc_socket *s, char *out, size_t cap) {
+  if (!s || !out || !cap) return MC_ERR_INVALID_ARG;
+  struct sockaddr_storage ss;
+  socklen_t len = sizeof ss;
+  if (getsockname(s->fd, (struct sockaddr *)&ss, &len) != 0) return MC_ERR_NET;
+  const void *addr = ss.ss_family == AF_INET6 ? (const void *)&((struct sockaddr_in6 *)&ss)->sin6_addr
+                                              : (const void *)&((struct sockaddr_in *)&ss)->sin_addr;
+  char text[INET6_ADDRSTRLEN];
+  if (!inet_ntop(ss.ss_family, addr, text, sizeof text)) return MC_ERR_NET;
+  if (strlen(text) >= cap) return MC_ERR_INVALID_ARG;
+  strcpy(out, text);
+  return MC_OK;
 }
 
 void mc_socket_shutdown(mc_socket *s) {

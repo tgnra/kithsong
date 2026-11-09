@@ -23,6 +23,10 @@ mc_status mc_socket_init(void);
 /* Listens on all interfaces: IPv4, plus IPv6 on the same port where the OS has it.
  * port 0 picks an ephemeral port; mc_listener_port() tells which. */
 mc_status mc_listener_open(uint16_t port, mc_listener **out);
+/* Listens on one local address only, a numeric IPv4 or IPv6 one (from
+ * mc_socket_local_address(), say), so only that interface's network can connect. port as for
+ * mc_listener_open(). */
+mc_status mc_listener_open_on(const char *address, uint16_t port, mc_listener **out);
 uint16_t mc_listener_port(const mc_listener *l);
 /* Waits for one connection. Returns MC_OK with *out = NULL if the timeout passed or the
  * listener was stopped (see mc_listener_stopped()). */
@@ -53,11 +57,18 @@ extern uint32_t mc_socket_test_lookup_delay_ms;
 mc_status mc_socket_send_all(mc_socket *s, const void *buf, size_t len, int timeout_ms);
 /* Receives exactly len bytes. MC_ERR_NET on error, timeout or a closed peer. */
 mc_status mc_socket_recv_exact(mc_socket *s, void *buf, size_t len, int timeout_ms);
+/* Receives what has arrived, up to len bytes, waiting up to timeout_ms (no restarts) for the
+ * first of it: how many bytes (at least 1), 0 if the time ran out, -1 on error or a closed
+ * peer. For a reader that can't know a message's length ahead, such as a TLS library. */
+long mc_socket_recv_some(mc_socket *s, void *buf, size_t len, int timeout_ms);
 /* Waits up to timeout_ms for something to receive. 1 once there is, or the connection has
  * failed or closed, for the next receive to report; 0 if the time ran out. */
 int mc_socket_wait_readable(mc_socket *s, int timeout_ms);
 /* The peer's address as text, for logs. */
 const char *mc_socket_peer(const mc_socket *s);
+/* This end's address of the connection, numeric and without the port: the address of the
+ * interface the peer is reached through, which it can connect back to. */
+mc_status mc_socket_local_address(const mc_socket *s, char *out, size_t cap);
 /* Shuts the connection down both ways, so a send or receive blocked on another thread
  * fails at once. The only socket function that may be called from another thread; s must
  * stay open (not closed) until that thread is done with it. */
