@@ -398,7 +398,7 @@ static const char *body_of(const char *answer, long len, long *body_len) {
     return "";
   }
   b += 4;
-  *body_len = len - (b - answer);
+  *body_len = (long)(len - (b - answer)); /* long is 32 bits on Windows */
   return b;
 }
 

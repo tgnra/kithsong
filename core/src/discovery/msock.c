@@ -33,7 +33,7 @@ enum { NO_WAKE_MS = 200 }; /* select() timeout cap if the wake socket couldn't b
 static void set_nonblocking(int fd) {
 #ifdef _WIN32
   u_long on = 1;
-  ioctlsocket((SOCKET)fd, FIONBIO, &on);
+  ioctlsocket((SOCKET)fd, (long)FIONBIO, &on); /* as socket.c: FIONBIO is unsigned, MinGW GCC warns */
 #else
   fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
 #endif

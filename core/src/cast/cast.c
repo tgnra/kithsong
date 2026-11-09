@@ -517,6 +517,8 @@ static int make_item(session *s, unsigned id, const char *path, int64_t duration
 #ifdef _WIN32
   char *bslash = dir ? strrchr(dir, '\\') : NULL;
   if (bslash && (!slash || bslash > slash)) slash = bslash;
+  /* A file at a drive's root keeps its folder's backslash: "C:" alone is the drive's current folder. */
+  if (slash == dir + 2 && dir[1] == ':') slash++;
 #endif
   if (slash) *slash = '\0';
   char *cover = slash ? mc_coverart_find(dir) : NULL;
