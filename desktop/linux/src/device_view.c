@@ -82,6 +82,10 @@ static DvItem *dv_item_new(const char *uid, const char *text, const char *detail
   return item;
 }
 
+static gboolean dv_item_same(const DvItem *a, const DvItem *b) {
+  return !strcmp(a->uid, b->uid) && !g_strcmp0(a->text, b->text) && !g_strcmp0(a->detail, b->detail);
+}
+
 /* --- State --- */
 
 static struct {
@@ -97,6 +101,7 @@ static struct {
   GtkWidget *what_group, *sync_all_row, *picker, *tabs[NUM_TABS], *select_box, *select_all, *select_none, *list_stack,
     *empty, *count;
   GListStore *store;
+  GPtrArray *checks; /* every row's check button, bound or not */
   gboolean filling; /* ignore the controls' signals while we set them */
 
   mc_sync *sync;
@@ -963,8 +968,23 @@ static const char *row_detail(const char *uid, const char *detail) {
   return g_hash_table_contains(g_dv.removed_items[g_dv.tab], uid) ? mc_str(MC_STR_PROFILE_ITEM_REMOVED) : detail;
 }
 
+/* Ticks the bound rows again, from what's stored and pending now. */
+static void retick_rows(void) {
+  if (!g_dv.checks) return;
+  gboolean was = g_dv.filling;
+  g_dv.filling = TRUE;
+  for (guint i = 0; i < g_dv.checks->len; i++) {
+    GtkCheckButton *check = g_dv.checks->pdata[i];
+    DvItem *item = g_object_get_data(G_OBJECT(check), "item");
+    if (item) gtk_check_button_set_active(check, row_ticked(g_dv.rows_tab, item->uid));
+  }
+  g_dv.filling = was;
+}
+
 /* The list's rows: the current tab's items, "Artist – Title (year)" or a name, and a count.
- * A list view keeps its scroll position when the rows are replaced by as many. */
+ * A list view keeps its scroll position by the item at the top, and goes back to the top when
+ * that item leaves the store, even for an equal one; so the rows that haven't changed stay,
+ * and only the run between the unchanged start and end is replaced. */
 static void fill_list(void) {
   GPtrArray *items = g_ptr_array_new_with_free_func(g_object_unref);
   mc_status st = MC_ERR_INVALID_ARG;
@@ -1020,7 +1040,25 @@ static void fill_list(void) {
   }
   g_dv.rows_status = st;
   g_dv.rows_tab = g_dv.tab; /* before the splice, which binds the rows */
-  g_list_store_splice(g_dv.store, 0, g_list_model_get_n_items(G_LIST_MODEL(g_dv.store)), items->pdata, items->len);
+  GListModel *old = G_LIST_MODEL(g_dv.store);
+  guint n_old = g_list_model_get_n_items(old), n_new = items->len, head = 0, tail = 0;
+  while (head < n_old && head < n_new) {
+    DvItem *item = g_list_model_get_item(old, head);
+    gboolean same = dv_item_same(item, items->pdata[head]);
+    g_object_unref(item);
+    if (!same) break;
+    head++;
+  }
+  while (tail < n_old - head && tail < n_new - head) {
+    DvItem *item = g_list_model_get_item(old, n_old - 1 - tail);
+    gboolean same = dv_item_same(item, items->pdata[n_new - 1 - tail]);
+    g_object_unref(item);
+    if (!same) break;
+    tail++;
+  }
+  if (head + tail < n_old || head + tail < n_new)
+    g_list_store_splice(g_dv.store, head, n_old - head - tail, items->pdata + head, n_new - head - tail);
+  retick_rows(); /* the rows kept: the profile, or the tab, may have changed */
 
   if (st == MC_OK) {
     gtk_label_set_text(GTK_LABEL(g_dv.empty), mc_str(k_tab_none[g_dv.tab]));
@@ -1086,6 +1124,7 @@ static void on_item_setup(GtkSignalListItemFactory *factory, GtkListItem *li, gp
   gtk_widget_set_margin_start(check, 6);
   gtk_widget_set_margin_end(check, 6);
   g_signal_connect(check, "toggled", G_CALLBACK(on_item_toggled), NULL);
+  if (g_dv.checks) g_ptr_array_add(g_dv.checks, check);
   gtk_list_item_set_child(li, check);
   gtk_list_item_set_activatable(li, FALSE);
 }
@@ -1110,6 +1149,12 @@ static void on_item_unbind(GtkSignalListItemFactory *factory, GtkListItem *li, g
   (void)factory, (void)data;
   GtkWidget *check = gtk_list_item_get_child(li);
   if (check) g_object_set_data(G_OBJECT(check), "item", NULL);
+}
+
+static void on_item_teardown(GtkSignalListItemFactory *factory, GtkListItem *li, gpointer data) {
+  (void)factory, (void)data;
+  GtkWidget *check = gtk_list_item_get_child(li);
+  if (check && g_dv.checks) g_ptr_array_remove_fast(g_dv.checks, check);
 }
 
 /* Reloads everything, keeping the pending edits. keep: it's the same device, so a focused name
@@ -1850,6 +1895,7 @@ static void on_destroy(GtkWidget *widget, gpointer data) {
   free_profile();
   g_clear_pointer(&g_dv.choices, mc_tethered_choice_list_free);
   g_clear_object(&g_dv.store);
+  g_clear_pointer(&g_dv.checks, g_ptr_array_unref);
   g_dv.root = NULL;
 }
 
@@ -2052,10 +2098,12 @@ static GtkWidget *build_what_group(void) {
   gtk_box_append(GTK_BOX(g_dv.picker), select);
 
   g_dv.store = g_list_store_new(DV_TYPE_ITEM);
+  g_dv.checks = g_ptr_array_new();
   GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
   g_signal_connect(factory, "setup", G_CALLBACK(on_item_setup), NULL);
   g_signal_connect(factory, "bind", G_CALLBACK(on_item_bind), NULL);
   g_signal_connect(factory, "unbind", G_CALLBACK(on_item_unbind), NULL);
+  g_signal_connect(factory, "teardown", G_CALLBACK(on_item_teardown), NULL);
   GtkNoSelection *model = gtk_no_selection_new(G_LIST_MODEL(g_object_ref(g_dv.store)));
   GtkWidget *list = gtk_list_view_new(GTK_SELECTION_MODEL(model), factory);
   gtk_widget_add_css_class(list, "sync-picker");
