@@ -13,10 +13,6 @@ python -m venv .venv
 .venv/Scripts/python -m unittest
 ```
 
-On Linux the flake's dev shell provides Python with both dependencies instead, so there's
-no venv: `nix develop -c python -m ssg build`, run from `site/`. That's what the VS Code
-`site: build` task runs.
-
 ## Layout
 
 | Path | What it is |

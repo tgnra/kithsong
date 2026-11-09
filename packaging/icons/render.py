@@ -2,7 +2,7 @@
 dark) to the PNGs the Windows app embeds.
 
 Run by hand after generate.sh; nothing in the build calls it. Renders with resvg if it's on
-PATH (e.g. nix shell nixpkgs#resvg), else Microsoft Edge (or Chrome, via $BROWSER); needs
+PATH (your distro's package, or `cargo install resvg`), else Microsoft Edge (or Chrome, via $BROWSER); needs
 nothing beyond the standard library.
 
     python packaging/icons/render.py

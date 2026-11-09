@@ -5,11 +5,6 @@
 # Release packages (scripts/release-*)
 /dist/
 
-# Nix
-/result
-/result-*
-/.direnv/
-
 # Android / Gradle
 android/.gradle/
 android/build/
@@ -20,12 +15,10 @@ android/local.properties
 *.apk
 *.aab
 
-# Editors: keep shared VS Code config, ignore the rest
-.vscode/*
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
+# Editor and IDE settings stay local
+.vscode/
 .idea/
+.vs/
 *.swp
 
 # Local data and secrets

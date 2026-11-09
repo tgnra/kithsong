@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Command-line Android builds and emulator runs, for the VS Code tasks.
+# Command-line Android builds and emulator runs.
 #
 #   android.sh gradle <args...>            run the Gradle wrapper in android/
 #   android.sh emulator <avd>              boot <avd> (if it is not running) and wait for it

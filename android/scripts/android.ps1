@@ -1,4 +1,4 @@
-# Command-line Android builds and emulator runs on Windows, for the VS Code tasks.
+# Command-line Android builds and emulator runs on Windows.
 # Same interface as android.sh:
 #
 #   android.ps1 gradle <args...>            run the Gradle wrapper in android/

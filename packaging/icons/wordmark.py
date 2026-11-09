@@ -2,8 +2,8 @@
 generate.sh. Run it only to change the word's case or weight; it needs fontTools and
 uharfbuzz, and Merienda's variable font from github.com/google/fonts (ofl/merienda):
 
-    nix shell --impure --expr 'with import <nixpkgs> {}; python3.withPackages (p: [ p.fonttools p.uharfbuzz ])' \
-      -c python3 packaging/icons/wordmark.py 'Merienda[wght].ttf' packaging/icons/wordmark-paths.txt
+    python -m pip install fonttools uharfbuzz   # in a venv
+    python packaging/icons/wordmark.py 'Merienda[wght].ttf' packaging/icons/wordmark-paths.txt
 
 Writes three lines: "Kith"'s path, "song"'s path, and the word's "minx miny maxx maxy", in
 font units (1000 to the em) with y pointing down and the baseline at 0. generate.sh places
