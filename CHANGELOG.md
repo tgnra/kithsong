@@ -3,7 +3,12 @@
 What changed in each Kithsong release, newest first. Each release's full list of commits is on
 its GitHub release page.
 
-## Unreleased
+## 0.9.2 (2026-11-09)
+
+### Android
+
+- Google Cast plays on from one track to the next, where it paused at the start of the second
+  track.
 
 ### Windows and Linux
 
