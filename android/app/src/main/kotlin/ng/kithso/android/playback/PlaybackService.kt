@@ -22,6 +22,8 @@ import ng.kithso.android.AppSettings
 import ng.kithso.android.MainActivity
 import ng.kithso.android.KithsongApp
 import ng.kithso.android.R
+import ng.kithso.android.cast.CastController
+import ng.kithso.android.cast.CastPlays
 import ng.kithso.core.CorePlayer
 import ng.kithso.playback.CoreMediaPlayer
 import ng.kithso.playback.asRestored
@@ -62,11 +64,17 @@ import java.io.File
  * The app's UI is in this process, so it reaches up next through [KithsongApp.mediaPlayer] rather
  * than the session, which has no way to say what plays next or to edit it: controllers see up
  * next's tracks as the queue's last items, and can't change them.
+ *
+ * While casting, the session's player is the cast's ([ng.kithso.android.cast.CastPlayer], around
+ * the core's), which [CastController] swaps in and out. The cast counts plays itself
+ * ([CastPlays]), as the core hears none of them, and fills in the core's play log rows.
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     private val scope = MainScope()
     private var session: MediaLibrarySession? = null
+    private var follower: Follower? = null
+    private var cast: CastController? = null
     private lateinit var core: CoreMediaPlayer
     private lateinit var memory: QueueMemory
     private val saving = Dispatchers.IO.limitedParallelism(1)
@@ -78,13 +86,18 @@ class PlaybackService : MediaLibraryService() {
         val app = application as KithsongApp
         val settings = app.settings
         memory = QueueMemory(File(noBackupFilesDir, "queue"))
+        val played = { trackUid: String, startedMs: Long ->
+            app.library.recordPlay(trackUid)
+            app.scrobbling.scrobble(trackUid, startedMs)
+        }
+        val plays = CastPlays(nowPlaying = { trackUid -> app.scrobbling.nowPlaying(trackUid) }, played = played)
         val player = CoreMediaPlayer(
             this,
             settings.shuffle,
             settings.volume,
             onShuffleChanged = { settings.shuffle = it },
-            onNowPlaying = { trackUid -> app.scrobbling.nowPlaying(trackUid) },
-            onPlayEnded = { event -> app.library.logPlay(event) },
+            onNowPlaying = { trackUid -> if (!plays.casting) app.scrobbling.nowPlaying(trackUid) },
+            onPlayEnded = { event -> plays.patch(event)?.let { app.library.logPlay(it) } },
             libraryDir = app.libraryDir.path,
             addedItems = { uids, origin, done ->
                 scope.launch {
@@ -93,10 +106,12 @@ class PlaybackService : MediaLibraryService() {
                     done(withContext(Dispatchers.IO) { addedItems(this@PlaybackService, uids, tracks, origin) })
                 }
             },
-            onUpNextChanged = { (app.playback as? SessionPlayback)?.upNextChanged() },
+            onUpNextChanged = {
+                (app.playback as? SessionPlayback)?.upNextChanged()
+                cast?.upNextChanged()
+            },
         ) { trackUid, startedMs ->
-            app.library.recordPlay(trackUid)
-            app.scrobbling.scrobble(trackUid, startedMs)
+            if (!plays.casting) played(trackUid, startedMs)
         }
         core = player
         app.mediaPlayer = player
@@ -113,29 +128,10 @@ class PlaybackService : MediaLibraryService() {
             .setMediaButtonPreferences(shuffleButtons(settings.shuffle))
             .build()
         this.session = session
-        player.addListener(object : Player.Listener {
-            private var buttons: Boolean? = settings.shuffle
-            private var saver: Job? = null
-
-            // What the button says: on or off, or with null, no button as a station plays.
-            override fun onEvents(player: Player, events: Player.Events) {
-                if (events.containsAny(*QUEUE_EVENTS)) save(player)
-                if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
-                    saver?.cancel()
-                    saver = if (!player.isPlaying) null else scope.launch {
-                        while (true) {
-                            delay(SAVE_MS)
-                            save(player)
-                        }
-                    }
-                }
-                val station = player.currentMediaItem?.playOrigin?.context == CorePlayer.PlayContext.Radio
-                val wanted = player.shuffleModeEnabled.takeIf { !station }
-                if (wanted == buttons) return
-                buttons = wanted
-                session.setMediaButtonPreferences(wanted?.let { shuffleButtons(it) }.orEmpty())
-            }
-        })
+        follower = Follower(session, settings.shuffle).also(player::addListener)
+        // Casting takes over the session's player while it lasts.
+        cast = (app.playback as? SessionPlayback)?.castController
+        cast?.attach(player, plays, ::swapPlayer)
         scope.launch {
             val items = try {
                 savedItems()
@@ -160,7 +156,49 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session
 
+    // Follows the session's player, whichever it is, to save the queue and set the shuffle button.
+    private inner class Follower(private val session: MediaSession, private var buttons: Boolean?) : Player.Listener {
+        private var saver: Job? = null
+
+        // What the button says: on or off, or with null, no button as a station plays.
+        override fun onEvents(player: Player, events: Player.Events) {
+            if (events.containsAny(*QUEUE_EVENTS)) save(player)
+            if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) savePlaying(player)
+            val station = player.currentMediaItem?.playOrigin?.context == CorePlayer.PlayContext.Radio
+            val wanted = player.shuffleModeEnabled.takeIf { !station }
+            if (wanted == buttons) return
+            buttons = wanted
+            session.setMediaButtonPreferences(wanted?.let { shuffleButtons(it) }.orEmpty())
+        }
+
+        // Saves every so often while [player] plays, as the position moves on.
+        fun savePlaying(player: Player) {
+            saver?.cancel()
+            saver = if (!player.isPlaying) null else scope.launch {
+                while (true) {
+                    delay(SAVE_MS)
+                    save(player)
+                }
+            }
+        }
+    }
+
+    // Puts [player] in the session's hands, the core's or the cast's, and follows it instead.
+    private fun swapPlayer(player: Player) {
+        val session = session ?: return
+        val follower = follower ?: return
+        if (session.player === player) return
+        session.player.removeListener(follower)
+        session.player = player
+        player.addListener(follower)
+        follower.savePlaying(player)
+        save(player)
+    }
+
     override fun onDestroy() {
+        // A cast ends here, leaving the core where the device had got to, which is kept.
+        cast?.detach()
+        cast = null
         (application as KithsongApp).mediaPlayer = null
         session?.run {
             if (restored) memory.write(snapshot(player))

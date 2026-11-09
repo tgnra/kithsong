@@ -123,7 +123,8 @@ class MainActivity : ComponentActivity() {
     // another app (a share, say) the activity isn't its task's root, and goes back there.
     private fun leave() {
         val playback = (application as KithsongApp).playback
-        val playing = playback.isPlaying
+        // A paused cast is left to end itself after a while (the cast package's endAfterPaused).
+        val playing = playback.isPlaying || playback.cast.casting
         if (!playing) playback.stop()
         when {
             !isTaskRoot -> finish()

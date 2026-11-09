@@ -16,6 +16,7 @@ import androidx.media3.common.util.Util
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import ng.kithso.android.KithsongApp
+import ng.kithso.android.cast.CastController
 import ng.kithso.android.data.CoreLibrarySource
 import ng.kithso.android.data.Track
 import ng.kithso.core.CorePlayer
@@ -34,6 +35,7 @@ import java.util.concurrent.ExecutionException
 /**
  * [Playback] through the media session of [PlaybackService], with a MediaController. The
  * controller connects in the background; anything asked for before then is done once it has.
+ * Casting is [castController]'s, which PlaybackService plays through while a cast is on.
  * Use it on the main thread; [scope] must be on it too.
  */
 @OptIn(UnstableApi::class)
@@ -62,6 +64,14 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
     private val app = context.applicationContext as KithsongApp
     // In this process, as the service is; see PlaybackService.
     private val player get() = app.mediaPlayer
+
+    /** Google Cast, which starts in the background; PlaybackService hands playback to it while casting. */
+    val castController = CastController(context.applicationContext, scope)
+    override val cast: CastControl get() = castController
+
+    // Where next and previous go: the cast's player while casting, as it knows how far into the
+    // track the device is, else straight to the core's.
+    private val direct: Player? get() = castController.castPlayer ?: player
     private var controller: MediaController? = null
     private val pending = ArrayList<(MediaController) -> Unit>()
     private var ticker: Job? = null
@@ -132,11 +142,11 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
 
     // Straight to the player: a controller shows the timeline's neighbour at once, which with up
     // next about is the wrong track.
-    override fun next() = withController { (player ?: it).seekToNext() }
+    override fun next() = withController { (direct ?: it).seekToNext() }
 
-    override fun previous() = withController { (player ?: it).seekToPrevious() }
+    override fun previous() = withController { (direct ?: it).seekToPrevious() }
 
-    override fun skipToPrevious() = withController { (player ?: it).seekToPreviousMediaItem() }
+    override fun skipToPrevious() = withController { (direct ?: it).seekToPreviousMediaItem() }
 
     override fun setShuffle(on: Boolean) {
         shuffleOn = on
