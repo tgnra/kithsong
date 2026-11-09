@@ -2324,8 +2324,10 @@ void mc_player_remote_status(mc_player *p, unsigned id, mc_remote_state state, i
     mc_mutex_unlock(&p->lock);
     return;
   }
-  seg->start = now; /* heard up to now already, so this moves the position alone */
-  seg->offset = (uint64_t)(position_ms > 0 ? position_ms : 0);
+  if (position_ms >= 0) { /* heard up to now already, so this moves the position alone */
+    seg->start = now;
+    seg->offset = (uint64_t)position_ms;
+  }
   if (state == MC_REMOTE_PLAYING) {
     if (!p->r_running) {
       p->r_since = mc_mono_ms();

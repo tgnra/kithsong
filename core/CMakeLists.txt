@@ -117,6 +117,11 @@ add_library(kithcore STATIC
   src/plugin/source.c
   src/discovery/msock.c
   src/discovery/discovery.c
+  src/cast/cast.c
+  src/cast/cast_browse.c
+  src/cast/cast_http.c
+  src/cast/cast_tls.c
+  src/cast/castv2.c
   src/sync/sync.c
   src/sync/sync_db.c
   src/sync/frame.c
@@ -151,7 +156,7 @@ target_include_directories(kithcore
   PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(kithcore PRIVATE
   mc_sqlite3 mc_yyjson mc_cacert mc_miniaudio mc_dr_libs mc_stb mc_miniz mc_mdns mc_opusenc mc_opusfile tag
-  CURL::libcurl mbedcrypto)
+  CURL::libcurl mbedtls mbedx509 mbedcrypto)
 if(WIN32)
   target_compile_definitions(kithcore PRIVATE _WIN32_WINNT=0x0A00)
   # ws2_32 for sockets (sync and discovery), iphlpapi for discovery's interface list,

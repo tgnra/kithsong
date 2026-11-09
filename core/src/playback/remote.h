@@ -71,7 +71,8 @@ mc_status mc_player_remote_begin(mc_player *player, const mc_remote_ops *ops, vo
  * returns. */
 void mc_player_remote_end(mc_player *player);
 
-/* The remote is on item id, in state, position_ms into it. An id that is the queued item's
+/* The remote is on item id, in state, position_ms into it (-1 if it didn't say: the position
+ * goes on from where it was, or holds). An id that is the queued item's
  * means the remote has gone on to it by itself. Playing or paused, as the remote now says, is
  * taken as wanted, from whoever asked the remote for it. */
 void mc_player_remote_status(mc_player *player, unsigned id, mc_remote_state state, int64_t position_ms);

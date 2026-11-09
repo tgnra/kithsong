@@ -136,6 +136,13 @@ target_link_libraries(test_plugin_tethered PRIVATE mbedcrypto)  # hashes what it
 target_link_libraries(test_plugin_plays PRIVATE mbedcrypto)
 
 set_tests_properties(test_player test_play_log test_radio_player test_up_next PROPERTIES SKIP_RETURN_CODE 77)  # no audio device
+kithsong_test(test_cast)
+target_link_libraries(test_cast PRIVATE mc_yyjson)  # reads back the JSON built
+kithsong_test(test_cast_browse)
+target_link_libraries(test_cast_browse PRIVATE mc_mdns)  # sends packets as a fake device
+set_tests_properties(test_cast_browse PROPERTIES SKIP_RETURN_CODE 77)  # no multicast
+kithsong_test(test_cast_session)
+target_link_libraries(test_cast_session PRIVATE mc_yyjson mbedtls mbedx509 mbedcrypto)  # a fake device's TLS
 kithsong_test(test_discovery)
 target_link_libraries(test_discovery PRIVATE mc_mdns)  # sends packets as a fake peer
 set_tests_properties(test_discovery PROPERTIES SKIP_RETURN_CODE 77)  # no multicast
