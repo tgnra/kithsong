@@ -97,6 +97,57 @@ interface Playback {
     fun removeUpNext(id: Int) {}
     /** Empties up next; what's playing goes on. */
     fun clearUpNext() {}
+
+    /** Google Cast: devices to play on, and the one playing now. See ng.kithso.android.cast. */
+    val cast: CastControl get() = NoCast
+}
+
+/** A Cast device that can be picked: [id] is its MediaRouter route id. */
+data class CastDevice(val id: String, val name: String, val description: String?)
+
+/**
+ * Playing on a Google Cast device (the Default Media Receiver) instead of the phone. Snapshot
+ * state, like [Playback]. Without Google Play Services, [available] is false and the rest does
+ * nothing.
+ */
+@Stable
+interface CastControl {
+    /** Whether casting can be offered at all: Play Services is on the device and Cast started. */
+    val available: Boolean
+    /** Devices found on the network while discovery runs ([startDiscovery]). */
+    val devices: List<CastDevice>
+    /** Whether a cast session is connecting or connected. */
+    val connecting: Boolean
+    /** Whether a cast session is connected and playback goes to it. */
+    val casting: Boolean
+    /** The connected (or connecting) device's name, or null. */
+    val deviceName: String?
+    /** The Cast device's volume, 0 to 1. Only meaningful while [casting]. */
+    val volume: Float
+
+    /** Looks for devices, as a picker opens; [stopDiscovery] as it closes. */
+    fun startDiscovery()
+    fun stopDiscovery()
+    /** Starts a cast session on [device]; what's playing moves to it at the same place. */
+    fun connect(device: CastDevice)
+    /** Ends the cast session, stopping playback on the device. */
+    fun disconnect()
+    fun setVolume(volume: Float)
+}
+
+/** No Cast, as without Play Services, and in previews and tests. */
+object NoCast : CastControl {
+    override val available get() = false
+    override val devices get() = emptyList<CastDevice>()
+    override val connecting get() = false
+    override val casting get() = false
+    override val deviceName: String? get() = null
+    override val volume get() = 0f
+    override fun startDiscovery() {}
+    override fun stopDiscovery() {}
+    override fun connect(device: CastDevice) {}
+    override fun disconnect() {}
+    override fun setVolume(volume: Float) {}
 }
 
 /** What Play next and Play last add: track [uid] with no [kind], or else what [uid] is, called [name]. */
