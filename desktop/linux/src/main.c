@@ -1,7 +1,7 @@
 /* GTK4 + libadwaita frontend. Layout:
  *
  *   AdwToolbarView
- *   +- AdwHeaderBar: [logo][prev][play][next]  [art] now playing + seekbar [shuffle][queue]  [vol]
+ *   +- AdwHeaderBar: [logo][prev][play][next]  [art] now playing + seekbar [shuffle][cast][queue]  [vol]
  *   +- AdwOverlaySplitView (sidebar: Home / Search, Albums / Artists / Playlists / Album groups
  *      |                    / Recents / Devices, scrolling above Import / Library stats
  *      |                    / Analysing music, while it does / Settings / About)
@@ -30,7 +30,8 @@
  * the actions'. Shuffle, which the strip's toggle, the track list's Play and Shuffle and MPRIS
  * set, is kept in settings.json, as is the volume, which the volume control ([vol],
  * volume_button.c), the keyboard shortcuts (on_shortcut(), listed in README.md) and MPRIS
- * change.
+ * change; while casting, they change the Cast device's instead (the cast button, cast_button.c,
+ * and playback.h).
  */
 #include <adwaita.h>
 #include <locale.h>
@@ -89,6 +90,12 @@ static const char css[] =
   ".album-grid > child > .drop-after { box-shadow: 10px 0 0 -7px @accent_bg_color; }"
   ".now-playing scale { padding-top: 2px; padding-bottom: 2px; }"
   ".now-playing .shuffle:checked { color: @accent_color; }"
+  /* The cast button (cast_button.c): in the accent while casting, pulsing while connecting.
+   * Only its own button, not what's in its popover. */
+  ".now-playing menubutton.cast-active > button { color: @accent_color; }"
+  "@keyframes cast-connecting { from { opacity: 1; } to { opacity: 0.35; } }"
+  ".now-playing menubutton.cast-connecting > button image {"
+  "  animation: cast-connecting 700ms ease-in-out infinite alternate; }"
   /* The queue's popover (queue_button.c): its grip shows on the row in hand, and the row being
    * dragged stands back while the line shows where it would go. */
   ".queue-list > row { min-height: 48px; padding: 0 2px; }"
@@ -733,6 +740,16 @@ static void playback_radio_failed(void *user) {
   adw_toast_overlay_add_toast(a->toasts, toast);
 }
 
+/* A cast that couldn't connect, or lost its connection: "Couldn't connect to Living Room TV." */
+static void playback_cast_failed(void *user, const char *text) {
+  app *a = user;
+  AdwToast *toast = adw_toast_new("");
+  adw_toast_set_use_markup(toast, FALSE);
+  adw_toast_set_title(toast, text);
+  adw_toast_set_timeout(toast, 8); /* a sentence to read */
+  adw_toast_overlay_add_toast(a->toasts, toast);
+}
+
 static void on_previous(GSimpleAction *action, GVariant *param, gpointer user) {
   (void)action;
   (void)param;
@@ -795,7 +812,7 @@ static gboolean save_volume(gpointer user) {
   save_volume_source = 0;
   mc_settings *settings = NULL;
   if (mc_settings_load(a->settings_dir, &settings) != MC_OK) return G_SOURCE_REMOVE;
-  if (mc_settings_set_volume(settings, playback_volume()) == MC_OK) mc_settings_save(settings);
+  if (mc_settings_set_volume(settings, playback_own_volume()) == MC_OK) mc_settings_save(settings);
   mc_settings_free(settings);
   return G_SOURCE_REMOVE;
 }
@@ -812,10 +829,12 @@ static void flash_volume(void) {
   mc_free(text);
 }
 
-/* Volume 0 to 100, kept in settings.json for next time. Changing it unmutes. */
+/* Volume 0 to 100, kept in settings.json for next time. Changing it unmutes. While casting,
+ * it's the device's (playback.h), which isn't kept. */
 static void set_volume(app *a, int volume) {
   playback_set_muted(FALSE);
   playback_set_volume(volume);
+  if (playback_casting()) return;
   if (save_volume_source) g_source_remove(save_volume_source);
   save_volume_source = g_timeout_add(SAVE_VOLUME_MS, save_volume, a);
 }
@@ -1895,6 +1914,9 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   gtk_style_context_add_provider_for_display(gdk_display_get_default(), GTK_STYLE_PROVIDER(provider),
                                              GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
   g_object_unref(provider);
+  /* The icons built in (data/kithsong.gresource.xml), whatever the app id. */
+  gtk_icon_theme_add_resource_path(gtk_icon_theme_get_for_display(gdk_display_get_default()),
+                                   "/ng/kithso/Kithsong/icons");
 
   const GActionEntry actions[] = {
     {"previous", on_previous, NULL, NULL, NULL, {0}},
@@ -2020,6 +2042,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   playback_init(a->win, playback_changed, a);
   playback_on_recents_changed(playback_recents_changed);
   playback_on_radio_failed(playback_radio_failed);
+  playback_on_cast_failed(playback_cast_failed);
   playback_set_library(a->lib, a->settings_dir);
   delete_dialog_init(before_delete);
   remove_here_init(before_remove_here);

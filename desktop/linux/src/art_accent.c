@@ -51,7 +51,7 @@ static void restyle(accent *a) {
   g_string_append_printf(css,
                          ".%1$s button.suggested-action { background-color: %2$s; color: #FFFFFF; }\n"
                          ".%1$s scale > trough > highlight { background-color: %2$s; }\n"
-                         ".%1$s .accent, .%1$s .shuffle:checked { color: %3$s; }\n",
+                         ".%1$s .accent, .%1$s .shuffle:checked, .%1$s menubutton.cast-active > button { color: %3$s; }\n",
                          c, b, t);
   gtk_css_provider_load_from_string(a->provider, css->str);
   g_string_free(css, TRUE);

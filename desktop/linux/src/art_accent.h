@@ -2,7 +2,7 @@
  * it, gets the art's first colour that isn't grey (mc_art_accent(), artcolors.h) in place of
  * the desktop's accent, toned so white reads on it and it reads on the theme's background,
  * at 4.5:1 or more, in light and dark alike. The suggested button, the .accent labels, a
- * scale's fill and a checked .shuffle toggle take it; with libadwaita 1.6 and GTK 4.16 or
+ * scale's fill, a checked .shuffle toggle and the cast button while casting take it; with libadwaita 1.6 and GTK 4.16 or
  * later, so does anything else drawn in the accent (focus rings, drop indicators), through
  * its --accent-* variables. Without art, for art with no colour but grey, and in
  * high-contrast mode, the widget keeps the desktop's accent.

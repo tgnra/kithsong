@@ -97,11 +97,37 @@ void playback_seek_by(int64_t delta_ms);
 
 /* The volume, 0 to 100, and muted (see mc_player_set_volume()). 100 and not muted to begin
  * with; main.c keeps the volume in settings.json. They carry over to the player when it's
- * created, and the header bar's volume control (volume_button.c) and MPRIS show them. */
+ * created, and the header bar's volume control (volume_button.c), MPRIS and the cast button's
+ * slider show them.
+ *
+ * While casting, they're the Cast device's instead (mc_cast_set_volume()), as Android's volume
+ * keys set the device's: whatever sets the volume here (the header's control, the keyboard,
+ * the desktop's media controls) sets the device's, and shows it. The computer's own stays as
+ * it was, for when the cast ends, and is playback_own_volume(), which is what to save. */
 void playback_set_volume(int volume);
 int playback_volume(void);
+int playback_own_volume(void);
 void playback_set_muted(gboolean muted);
 gboolean playback_muted(void);
+
+/* Google Cast (kithcore/cast.h). One mc_cast for the app's life, made by playback_init() and
+ * freed by playback_free() before the player; it looks for devices all along, so the cast
+ * button (cast_button.h) can show only once there's one. Its callbacks are passed to the UI
+ * thread with g_idle_add(), and each calls cast_button_update(), and shows the volume again.
+ * While casting, everything here works as ever, and goes to the device (see cast.h). */
+mc_cast *playback_cast(void); /* NULL if Cast couldn't be set up; for reading devices and status */
+/* Whether playback goes to a device (MC_CAST_CASTING). */
+gboolean playback_casting(void);
+/* Casts to the device with device_id, called name ("" for none), with the player, made now if
+ * there isn't one yet. */
+void playback_cast_connect(const char *device_id, const char *name);
+/* Stops casting; playback comes back here, paused. */
+void playback_cast_disconnect(void);
+/* Sets the device's volume (and unmutes it), only while casting. */
+void playback_cast_set_volume(int volume);
+/* failed is called, with playback_init()'s user, when a cast couldn't connect or lost its
+ * connection, with a sentence saying so: "Couldn't connect to Living Room TV." */
+void playback_on_cast_failed(void (*failed)(void *user, const char *text));
 
 /* Adds it to the front of the queue (Play next) or the end (Play last), and the now-playing strip
  * says so, or that it has nothing with a file on this device. Nothing starts playing. Anything but

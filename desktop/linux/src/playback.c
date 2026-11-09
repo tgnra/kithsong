@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "artist_view.h"
+#include "cast_button.h"
 #include "kithcore/radio.h"
 #include "mpris.h"
 #include "now_playing.h"
@@ -10,7 +11,10 @@
 #include "track_list.h"
 #include "volume_button.h"
 
-enum { TICK_MS = 250 }; /* moves the seekbar on while playing */
+enum {
+  TICK_MS = 250,       /* moves the seekbar on while playing */
+  CAST_HOLD_MS = 1000, /* a volume set for a Cast device shows this long, for the device to catch up */
+};
 
 typedef struct item {
   char uid[MC_UID_STRLEN];
@@ -47,6 +51,23 @@ static struct {
   gboolean has_next;
   unsigned up_next_changes; /* as the player had them last */
 } s;
+
+/* Google Cast: one handle for the app's life, freed before the player. */
+static struct {
+  mc_cast *cast;
+  guint pending;    /* MC_CAST_EVENT_* bits waiting for the UI thread; set on the cast's threads */
+  gboolean session; /* a cast was asked for, and hasn't been seen to end */
+  char name[MC_CAST_NAME_LEN]; /* its device's, to say so if it fails ("" for unnamed) */
+  /* The volume just set, shown in place of the device's word for CAST_HOLD_MS, so a slider
+   * being dragged doesn't jump back to what the device said about an earlier step. */
+  int held_volume;
+  gint64 held_until; /* monotonic, or 0 */
+  guint settle;      /* the timeout that shows the device's word again */
+  void (*failed)(void *user, const char *text);
+} c;
+
+static void cast_init(void);
+static void cast_free(void);
 
 static void free_items(void) {
   for (int i = 0; i < s.count; i++) {
@@ -281,6 +302,7 @@ void playback_init(GtkWindow *win, void (*changed)(void *user), void *user) {
   s.user = user;
   s.index = s.announced = -1;
   s.volume = 100;
+  cast_init();
 }
 
 void playback_on_recents_changed(void (*changed)(void *user)) {
@@ -292,6 +314,7 @@ void playback_on_radio_failed(void (*failed)(void *user)) {
 }
 
 void playback_free(void) {
+  cast_free(); /* first: a cast hands the player back as it ends */
   playback_set_library(NULL, NULL);
   mc_player_free(s.player); /* first, so nothing more is posted */
   s.player = NULL;
@@ -497,29 +520,183 @@ void playback_seek_by(int64_t delta_ms) {
   playback_seek(to);
 }
 
+/* --- The volume, this computer's or, while casting, the device's --- */
+
+static gboolean volume_held(void) {
+  return c.held_until && g_get_monotonic_time() < c.held_until;
+}
+
+/* Shows the volume and muting wherever they show: the header's control, MPRIS and the cast
+ * button's slider. */
+static void volume_changed(void) {
+  mpris_volume_changed();
+  volume_button_update();
+  cast_button_update(FALSE);
+}
+
+static gboolean on_volume_settled(gpointer data) {
+  (void)data;
+  c.settle = 0;
+  c.held_until = 0;
+  volume_changed(); /* the device's word, which may differ */
+  return G_SOURCE_REMOVE;
+}
+
+static void release_volume(void) {
+  c.held_until = 0;
+  if (c.settle) g_clear_handle_id(&c.settle, g_source_remove);
+}
+
+gboolean playback_casting(void) {
+  return c.cast && mc_cast_is_casting(c.cast);
+}
+
+void playback_cast_set_volume(int volume) {
+  if (!playback_casting()) return;
+  volume = CLAMP(volume, 0, 100);
+  mc_cast_set_volume(c.cast, volume); /* and unmutes */
+  c.held_volume = volume;
+  c.held_until = g_get_monotonic_time() + CAST_HOLD_MS * G_TIME_SPAN_MILLISECOND;
+  if (c.settle) g_source_remove(c.settle);
+  c.settle = g_timeout_add(CAST_HOLD_MS, on_volume_settled, NULL);
+  volume_changed();
+}
+
 void playback_set_volume(int volume) {
+  if (playback_casting()) {
+    playback_cast_set_volume(volume);
+    return;
+  }
   volume = CLAMP(volume, 0, 100);
   if (volume == s.volume) return;
   s.volume = volume;
   if (s.player) mc_player_set_volume(s.player, s.volume);
-  mpris_volume_changed();
-  volume_button_update();
+  volume_changed();
 }
 
 int playback_volume(void) {
+  if (!playback_casting()) return s.volume;
+  if (volume_held()) return c.held_volume;
+  mc_cast_status st;
+  mc_cast_status_get(c.cast, &st);
+  return st.volume;
+}
+
+int playback_own_volume(void) {
   return s.volume;
 }
 
 void playback_set_muted(gboolean muted) {
+  if (playback_casting()) {
+    if (!muted == !playback_muted()) return;
+    release_volume();
+    mc_cast_set_muted(c.cast, muted);
+    volume_changed();
+    return;
+  }
   if (!muted == !s.muted) return;
   s.muted = muted;
   if (s.player) mc_player_set_muted(s.player, muted);
-  mpris_volume_changed();
-  volume_button_update();
+  volume_changed();
 }
 
 gboolean playback_muted(void) {
-  return s.muted;
+  if (!playback_casting()) return s.muted;
+  if (volume_held()) return FALSE; /* setting the volume unmuted it */
+  mc_cast_status st;
+  mc_cast_status_get(c.cast, &st);
+  return st.muted != 0;
+}
+
+/* --- Google Cast --- */
+
+#define EV(event) (1u << (event)) /* an mc_cast_event as a bit of c.pending */
+
+/* Says the cast couldn't start, or was lost: why is MC_STR_CAST_FAILED or MC_STR_CAST_LOST. */
+static void cast_failed(enum mc_str_id why) {
+  if (!c.failed) return;
+  char *text = mc_format_alloc(mc_str(why), MC_S(c.name[0] ? c.name : mc_str(MC_STR_CAST_DEVICE_UNNAMED)));
+  c.failed(s.user, text);
+  mc_free(text);
+}
+
+/* On the UI thread, with the events that came since last time. */
+static void cast_changed(guint events) {
+  mc_cast_status st;
+  mc_cast_status_get(c.cast, &st);
+  if (st.state != MC_CAST_IDLE) {
+    c.session = TRUE;
+    if (st.device_name[0]) g_strlcpy(c.name, st.device_name, sizeof c.name);
+  } else if (c.session) { /* it ended; the player has playback back, paused */
+    c.session = FALSE;
+    release_volume();
+    if (st.ended == MC_CAST_END_FAILED) cast_failed(MC_STR_CAST_FAILED);
+    else if (st.ended == MC_CAST_END_LOST) cast_failed(MC_STR_CAST_LOST);
+  }
+  if ((events & (EV(MC_CAST_EVENT_STATE) | EV(MC_CAST_EVENT_VOLUME))) && !volume_held()) {
+    mpris_volume_changed();
+    volume_button_update();
+  }
+  if (events & EV(MC_CAST_EVENT_STATE)) refresh();
+  cast_button_update((events & EV(MC_CAST_EVENT_DEVICES)) != 0);
+}
+
+static gboolean on_cast_idle(gpointer data) {
+  (void)data;
+  guint events = (guint)g_atomic_int_and(&c.pending, 0u);
+  if (c.cast) cast_changed(events);
+  return G_SOURCE_REMOVE;
+}
+
+/* On one of the cast's threads: never calls it, only asks the UI thread to look. Events that
+ * come together share one look. */
+static void on_cast(void *user, mc_cast_event event) {
+  (void)user;
+  if (!g_atomic_int_or(&c.pending, EV(event))) g_idle_add(on_cast_idle, &c);
+}
+
+/* Looks for devices from the start and for as long as the app runs, so the cast button can
+ * show once there's one. */
+static void cast_init(void) {
+  memset(&c, 0, sizeof c);
+  if (mc_cast_new(on_cast, NULL, &c.cast) != MC_OK) {
+    c.cast = NULL;
+    return;
+  }
+  mc_cast_start_discovery(c.cast);
+}
+
+static void cast_free(void) {
+  mc_cast_free(c.cast); /* ends any cast, handing the player back; nothing is posted after */
+  c.cast = NULL;
+  release_volume();
+  g_idle_remove_by_data(&c);
+  memset(&c, 0, sizeof c);
+}
+
+void playback_on_cast_failed(void (*failed)(void *user, const char *text)) {
+  c.failed = failed;
+}
+
+mc_cast *playback_cast(void) {
+  return c.cast;
+}
+
+void playback_cast_connect(const char *device_id, const char *name) {
+  if (!c.cast || !device_id || !ensure_player()) return;
+  g_strlcpy(c.name, name ? name : "", sizeof c.name);
+  mc_status st = mc_cast_connect(c.cast, device_id, s.player);
+  if (st == MC_OK) {
+    c.session = TRUE; /* so its ending is seen, however soon */
+  } else {
+    c.session = FALSE; /* the device has gone from the list, or there was no starting it */
+    cast_failed(MC_STR_CAST_FAILED);
+  }
+  cast_changed(EV(MC_CAST_EVENT_STATE)); /* connecting, which the cast doesn't call back for */
+}
+
+void playback_cast_disconnect(void) {
+  if (c.cast) mc_cast_disconnect(c.cast);
 }
 
 gboolean playback_is_playing(void) {

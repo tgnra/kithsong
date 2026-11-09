@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Built into the app (desktop/linux/CMakeLists.txt). The icons are found by name through the
+     icon theme, which main.c points at /ng/kithso/Kithsong/icons, so symbolic ones take the
+     text's colour as the theme's own do. -->
+<gresources>
+  <gresource prefix="/ng/kithso/Kithsong/icons/scalable/actions">
+    <file alias="kithsong-cast-symbolic.svg">icons/kithsong-cast-symbolic.svg</file>
+    <file alias="kithsong-cast-connected-symbolic.svg">icons/kithsong-cast-connected-symbolic.svg</file>
+  </gresource>
+</gresources>

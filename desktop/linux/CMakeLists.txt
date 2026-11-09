@@ -10,6 +10,7 @@ add_executable(kithsong
   src/cover.c
   src/mpris.c
   src/now_playing.c
+  src/cast_button.c
   src/playback.c
   src/queue_button.c
   src/track_list.c
@@ -58,6 +59,23 @@ add_custom_command(
   DEPENDS "${_logo_png}" "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
   COMMENT "Embedding the logo")
 target_sources(kithsong PRIVATE "${_logo_c}")
+
+# Icons the icon theme doesn't have (the cast button's), built in as a GResource, which
+# registers itself as the app starts.
+find_program(GLIB_COMPILE_RESOURCES glib-compile-resources REQUIRED)
+set(_gresource_xml "${CMAKE_CURRENT_SOURCE_DIR}/data/kithsong.gresource.xml")
+set(_gresource_c "${CMAKE_CURRENT_BINARY_DIR}/generated/kithsong_gresource.c")
+set(_gresource_files
+  "${CMAKE_CURRENT_SOURCE_DIR}/data/icons/kithsong-cast-symbolic.svg"
+  "${CMAKE_CURRENT_SOURCE_DIR}/data/icons/kithsong-cast-connected-symbolic.svg")
+add_custom_command(
+  OUTPUT "${_gresource_c}"
+  COMMAND "${GLIB_COMPILE_RESOURCES}" --generate-source --target=${_gresource_c}
+    --sourcedir=${CMAKE_CURRENT_SOURCE_DIR}/data ${_gresource_xml}
+  DEPENDS "${_gresource_xml}" ${_gresource_files}
+  COMMENT "Building in the icons")
+target_sources(kithsong PRIVATE "${_gresource_c}")
+set_source_files_properties("${_gresource_c}" PROPERTIES COMPILE_OPTIONS "-w") # generated
 kithsong_warnings(kithsong)
 # GLib's headers trip -Wconversion / -Wpedantic; keep warnings strict for our code only.
 target_compile_options(kithsong PRIVATE -Wno-pedantic)

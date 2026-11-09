@@ -4,6 +4,7 @@
 
 #include "app.h"
 #include "art_accent.h"
+#include "cast_button.h"
 #include "cover.h"
 #include "kithcore/kithcore.h"
 #include "playback.h"
@@ -324,6 +325,7 @@ GtkWidget *now_playing_new(void (*seek)(void *user, int ms), void (*shuffle)(voi
                                  mc_str(MC_STR_SHUFFLE), -1);
   g_signal_connect(s.shuffle_button, "toggled", G_CALLBACK(on_shuffle_toggled), NULL);
   gtk_box_append(GTK_BOX(box), s.shuffle_button);
+  gtk_box_append(GTK_BOX(box), cast_button_new());
   gtk_box_append(GTK_BOX(box), queue_button_new());
 
   now_playing_show(NULL, NULL, 0, NULL);
