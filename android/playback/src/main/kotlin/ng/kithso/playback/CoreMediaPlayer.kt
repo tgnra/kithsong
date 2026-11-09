@@ -177,6 +177,28 @@ class CoreMediaPlayer(
         invalidateState()
     }
 
+    /**
+     * Next by the core's order. Media3's seekToNext goes by the timeline, which doesn't always
+     * have what the core plays next: unshuffled, up next's last-added track is the timeline's last
+     * item, with nothing after it, and a station's next may not be looked up yet. Where the
+     * timeline has a next item, it's the same as seekToNextMediaItem; nothing happens if there's
+     * no next at all.
+     */
+    fun skipToNext() {
+        if (!isCommandAvailable(COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)) return
+        if (hasNextMediaItem() || !(started || core.status.upNext > 0)) {
+            seekToNextMediaItem()
+            return
+        }
+        // As handleSeek does for the core's order.
+        val paused = core.status.state != CorePlayer.State.Playing
+        started = true
+        core.next()
+        if (paused) core.pause()
+        growQueue()
+        invalidateState()
+    }
+
     /** Ends the play under way there and then, as stopped, and passes it on to [onPlayEnded]. */
     fun endPlay() {
         core.endPlay()

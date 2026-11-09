@@ -30,6 +30,7 @@ import kotlinx.coroutines.withContext
 import ng.kithso.android.playback.CastControl
 import ng.kithso.android.playback.CastDevice
 import ng.kithso.playback.CoreMediaPlayer
+import java.util.concurrent.atomic.AtomicReference
 
 /** How long a cast may stay paused before it ends: three minutes. */
 const val CAST_PAUSED_MS = 3 * 60 * 1000L
@@ -234,7 +235,14 @@ class CastController(private val context: Context, private val scope: CoroutineS
     fun attach(core: CoreMediaPlayer, plays: CastPlays, swapTo: (Player) -> Unit) {
         this.core = core
         this.swapTo = swapTo
-        player = CastPlayer(context, core, plays, scope) { endCast(stop = true) }
+        player = CastPlayer(
+            context, core, plays, scope,
+            onStop = { endCast(stop = true) },
+            onDisplaced = {
+                Log.i(TAG, "Another app cast to the device, so this cast ends")
+                endCast(stop = false)
+            },
+        )
         handOver()
     }
 
@@ -280,20 +288,27 @@ class CastController(private val context: Context, private val scope: CoroutineS
         starting?.cancel()
         starting = scope.launch {
             val address = session.castDevice?.inetAddress
-            val server = withContext(Dispatchers.IO) { CastServer.start(context, address) }
-            if (this@CastController.session !== session) {
-                server?.close()
-                return@launch
+            // Kept outside the IO block, so a server started as this is cancelled still closes:
+            // the block runs to the end however it's cancelled, and withContext only throws after.
+            val made = AtomicReference<CastServer?>()
+            var kept = false
+            try {
+                withContext(Dispatchers.IO) { made.set(CastServer.start(context, address)) }
+                val server = made.get()
+                if (this@CastController.session !== session) return@launch
+                if (server == null) {
+                    Log.w(TAG, "No address to serve the music from, so the cast ends")
+                    castContext?.sessionManager?.endCurrentSession(true)
+                    return@launch
+                }
+                kept = true
+                this@CastController.server = server
+                // [connecting] stays true while connected, as CastControl has it.
+                casting = true
+                handOver()
+            } finally {
+                if (!kept) made.get()?.close()
             }
-            if (server == null) {
-                Log.w(TAG, "No address to serve the music from, so the cast ends")
-                castContext?.sessionManager?.endCurrentSession(true)
-                return@launch
-            }
-            this@CastController.server = server
-            // [connecting] stays true while connected, as CastControl has it.
-            casting = true
-            handOver()
         }
     }
 
@@ -326,9 +341,11 @@ class CastController(private val context: Context, private val scope: CoroutineS
     // Ends the cast from here: playback comes back to the phone first, where the device had got
     // to, and with [stop], stops there too; then the session ends, stopping the device.
     private fun endCast(stop: Boolean) {
+        // The receiver only stops if it's still ours: another app may have cast over it.
+        val stopDevice = player?.let { !it.casting || it.ownsDevice } ?: true
         handBack()
         if (stop) core?.stop()
-        castContext?.sessionManager?.endCurrentSession(true)
+        castContext?.sessionManager?.endCurrentSession(stopDevice)
         ended()
     }
 

@@ -69,8 +69,8 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
     val castController = CastController(context.applicationContext, scope)
     override val cast: CastControl get() = castController
 
-    // Where next and previous go: the cast's player while casting, as it knows how far into the
-    // track the device is, else straight to the core's.
+    // Where previous goes: the cast's player while casting, as it knows how far into the track
+    // the device is, else straight to the core's.
     private val direct: Player? get() = castController.castPlayer ?: player
     private var controller: MediaController? = null
     private val pending = ArrayList<(MediaController) -> Unit>()
@@ -142,7 +142,9 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
 
     // Straight to the player: a controller shows the timeline's neighbour at once, which with up
     // next about is the wrong track.
-    override fun next() = withController { (direct ?: it).seekToNext() }
+    // By the core's order, which Media3's timeline doesn't always know (up next's last track, a
+    // station's next not yet looked up); casting, the cast's player follows the core.
+    override fun next() = withController { controller -> player?.skipToNext() ?: controller.seekToNext() }
 
     override fun previous() = withController { (direct ?: it).seekToPrevious() }
 

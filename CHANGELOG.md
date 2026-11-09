@@ -3,6 +3,17 @@
 What changed in each Kithsong release, newest first. Each release's full list of commits is on
 its GitHub release page.
 
+## Unreleased
+
+### Android
+
+- Google Cast: play to a Chromecast or Cast speaker from the full player's cast button, on
+  phones with Google Play Services. The queue, shuffle, stations and up next carry on as on
+  the phone, and plays still count and scrobble. While casting, the full player has a volume
+  slider for the Cast device, and the volume keys set it too. A cast left paused for three
+  minutes ends, and playback stops.
+- Next goes on from the last track added to up next, where it used to do nothing.
+
 ## 0.9.0 (2026-11-08)
 
 ### All platforms

@@ -69,6 +69,8 @@ class CastPlayer(
     private val scope: CoroutineScope,
     /** Stop was asked for while casting, which ends the cast; see CastController. */
     private val onStop: () -> Unit,
+    /** Another app cast to the device over this one, which ends the cast here; see CastController. */
+    private val onDisplaced: () -> Unit,
 ) : ForwardingSimpleBasePlayer(core) {
     /** A queue item of the core's as put on the device: [serial] tells them apart in its URL. */
     private class Entry(val serial: Int, val index: Int, val item: MediaItem, val file: File)
@@ -97,6 +99,8 @@ class CastPlayer(
     private var positionAt = 0L
     private var positionPlaying = false
     private var discontinuityMs: Long? = null
+    // Another app's media has replaced this one's on the device.
+    private var displaced = false
     // While this moves the core itself, so its events aren't taken for someone skipping.
     private var moving = false
     private var ticker: Job? = null
@@ -129,6 +133,12 @@ class CastPlayer(
     val casting: Boolean get() = session != null
 
     /**
+     * Whether the device still has this cast's media, or nothing else: if another app has cast
+     * over it, ending the cast mustn't stop the receiver under them.
+     */
+    val ownsDevice: Boolean get() = casting && !displaced
+
+    /**
      * Starts casting to [session], whose media client is [client], with the tracks served by
      * [server]: what the core has playing moves to the device, at the same place, playing or
      * paused as it was. Nothing in the queue, nothing's loaded.
@@ -137,6 +147,7 @@ class CastPlayer(
         this.session = session
         this.client = client
         this.server = server
+        displaced = false
         val playing = core.playWhenReady && core.playbackState != Player.STATE_IDLE
         moving = true
         try {
@@ -280,7 +291,7 @@ class CastPlayer(
         // Skips go to the core, whose order says where they go, and whatever it's on then
         // is loaded (onCoreChanged). Seeks in the track go to the device as well.
         when (seekCommand) {
-            Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> core.seekToNextMediaItem()
+            Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> core.skipToNext()
             Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> core.seekToPreviousMediaItem()
             // Already decided by the device's position: back to the start, or the item before.
             Player.COMMAND_SEEK_TO_PREVIOUS ->
@@ -479,8 +490,13 @@ class CastPlayer(
             }
             // Its queue played out, which leaves no media.
             on == null && status.mediaInfo == null && status.playerState == MediaStatus.PLAYER_STATE_IDLE -> idle(status, hasNext = false)
-            // Something else is on the device: another app cast to it.
-            on == null && status.mediaInfo != null -> dropped()
+            // Something else is on the device: another app cast to it. Paused here, and the cast
+            // ends, leaving the device to them; after the device's callback, as that swaps players.
+            on == null && status.mediaInfo != null -> {
+                displaced = true
+                dropped()
+                scope.launch { if (casting) onDisplaced() }
+            }
         }
         val now = this.current
         if (now != null && entryOf(client.mediaStatus?.mediaInfo) === now) {
@@ -596,7 +612,8 @@ class CastPlayer(
     private fun moveCoreOn() {
         moving = true
         try {
-            core.seekToNextMediaItem()
+            // By the core's order: Media3's timeline may have no next where the core does.
+            core.skipToNext()
         } finally {
             moving = false
         }
