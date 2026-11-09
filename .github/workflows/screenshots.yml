@@ -68,8 +68,10 @@ jobs:
           if ($LASTEXITCODE) { throw 'configure failed' }
           cmake --build --preset windows-x64-release --target kithsong
           if ($LASTEXITCODE) { throw 'build failed' }
+      # Windows PowerShell, as the script is run and tested locally: PowerShell 7 has no
+      # System.Drawing.Bitmap for its Add-Type.
       - name: Shoot
-        shell: pwsh
+        shell: powershell
         run: scripts/store-screenshots/windows.ps1 -Out out/windows
       - uses: actions/upload-artifact@v7
         with:
