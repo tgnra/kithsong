@@ -3,6 +3,19 @@
 What changed in each Kithsong release, newest first. Each release's full list of commits is on
 its GitHub release page.
 
+## Unreleased
+
+### Windows and Linux
+
+- Google Cast: play to a Chromecast, a TV with Cast built in, or a Cast speaker. A cast button
+  shows beside shuffle once there's a Cast device on the network, and lists the devices to pick
+  from. The queue, shuffle, stations and up next carry on as they do on the computer, and plays
+  still count and scrobble. While casting, the button's list has a volume slider for the device,
+  and the app's own volume control and keys set the device's volume too. Stopping the cast brings
+  playback back to the computer, paused where it was. A cast left paused for
+  three minutes ends, and playback stops. If a device can't be reached, or the connection to it
+  is lost, the app says so.
+
 ## 0.9.1 (2026-11-09)
 
 ### Linux

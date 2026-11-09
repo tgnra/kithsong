@@ -55,7 +55,12 @@ See "Merging libraries" in docs/sync-protocol.md.
 ## Google Cast
 
 See docs/cast.md.
-- Windows and Linux - no cast button, picker or volume slider yet: the core's sender (kithcore/cast.h) is ready for them
+- Windows - no cast button, picker or volume slider yet: the core's sender (kithcore/cast.h) is ready for them
+- Linux - the cast button and picker have only been run headless, with devices put in the list by hand: the list, Connecting to (a device that never answers), Couldn't connect to, and the light and dark styles look right. Never against a real device: the button showing as one is found on the network, casting itself, the volume slider and the app's volume (control, keys, MPRIS) moving the device's, the device's own volume buttons moving them back, Lost the connection to, stopping from the TV or Google Home, and a speaker group. Screen readers (Orca) are untested
+- Linux - discovery runs for as long as the app does, so the button knows when to show: its cost on a laptop's battery, and on a network with many Cast devices, is unmeasured. It also starts the moment the app does, whether or not anyone casts
+- Linux - picking another device while casting freezes the window until the first cast has ended (mc_cast_connect() waits for it): moments on a good network, longer for a device that has stopped answering
+- Linux - Settings' Move Library (and anything else that calls playback_clear()) frees the player, which ends a cast without a word (MC_CAST_END_PLAYER), as it stops and empties the queue here
+- Linux - the Flatpak's --share=network should cover mDNS and the music server the device fetches from: untested in the Flatpak
 - Core - the sender is tested against a fake receiver only (test_cast_session), never a real Chromecast, Cast TV, speaker or Google Home speaker group. Unchecked there: QUEUE_LOAD's start time and autoplay off, QUEUE_INSERT/QUEUE_REMOVE and the item ids statuses give, the receiver going on to the queued item gaplessly, getting a dropped connection back, and another sender or Google Home stopping or taking over the cast
 - Core - not built for Windows yet: msock.c moved discovery's Winsock code unchanged, and cast_http.c uses _fseeki64
 - Core - a host firewall that blocks incoming connections (Windows asks on first use; firewalld on Fedora) stops the device fetching from the music server, whose port is random; nothing says so but the device failing every track

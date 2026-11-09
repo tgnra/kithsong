@@ -1,8 +1,8 @@
 # Google Cast
 
 > Status: Android casts through Google's Cast SDK (`android/.../cast/`). On Windows and Linux
-> the core is the sender (`core/include/kithcore/cast.h`, `core/src/cast/`); the frontends'
-> cast button and picker are still to come. Change this document first, then the code.
+> the core is the sender (`core/include/kithcore/cast.h`, `core/src/cast/`), and Linux has
+> the cast button and picker (Frontends, below). Change this document first, then the code.
 
 ## Goals
 
@@ -113,13 +113,21 @@ in the order: the cast's player lock (`use`), the player's, then the handle's.
 
 ## Frontends
 
-On the desktops, one `mc_cast` for the app's life, freed before the player:
+On the desktops, one `mc_cast` for the app's life, freed before the player, running discovery
+all along (it slows to a query every 20 s), so the cast button can wait for a device:
 
-- A cast button, shown always (there's no telling ahead whether devices exist), named
-  `MC_STR_CAST` while idle, `MC_STR_CAST_CONNECTING_TO` while connecting, and
-  `MC_STR_CAST_CASTING_TO` while casting, with the device's name or `MC_STR_CAST_DEVICE_UNNAMED`.
-- It opens a picker headed `MC_STR_CAST_TO`, running discovery while open, with
-  `MC_STR_CAST_LOOKING` and `MC_STR_CAST_LOOKING_TEXT` until a device shows up. While
-  connected, the picker has the device's volume and `MC_STR_CAST_STOP` instead.
+- A cast button beside shuffle, shown while a device is listed, while connecting or casting,
+  and while its picker is open; with no Cast device on the network there's nothing to see. It's
+  named `MC_STR_CAST` while idle, `MC_STR_CAST_CONNECTING_TO` while connecting, and
+  `MC_STR_CAST_CASTING_TO` while casting, with the device's name or
+  `MC_STR_CAST_DEVICE_UNNAMED`, and is in the accent colour while casting.
+- It opens a picker headed `MC_STR_CAST_TO`, listing the devices (name, then model), with
+  `MC_STR_CAST_LOOKING` and `MC_STR_CAST_LOOKING_TEXT` if the last one goes while it's open.
+  While connecting or connected, the picker has `MC_STR_CAST_STOP` instead, and once
+  connected the device's volume.
+- While casting, the app's own volume (its control, keys and the desktop's media controls)
+  is the device's, as Android's volume keys are; the computer's is kept for afterwards.
 - After a cast ends with `MC_CAST_END_FAILED` or `MC_CAST_END_LOST`, say so:
   `MC_STR_CAST_FAILED`, `MC_STR_CAST_LOST`.
+
+Linux: `desktop/linux/src/cast_button.c`, with the handle and the volume in `playback.c`.
