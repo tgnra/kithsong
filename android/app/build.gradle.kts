@@ -84,6 +84,10 @@ dependencies {
     // Google Play services on the phone, which is checked at run time: without it, casting
     // isn't offered. Only the phone has it; :playback stays free of it for the watch.
     implementation("com.google.android.gms:play-services-cast-framework:23.0.0")
+    // The Cast framework asks for Fragment 1.1.0, which Gradle already resolves to 1.5.4. Lint
+    // (InvalidFragmentVersionForActivityResult) goes by the 1.1.0 and fails the release
+    // build over MainActivity's registerForActivityResult, so the version is stated here.
+    implementation("androidx.fragment:fragment:1.5.4")
     // Colour schemes from album art. 5.x is built with Kotlin 2.4, so it needs the project on
     // 2.4 too (the Compose compiler plugin's version in the root build.gradle.kts).
     implementation("com.materialkolor:material-kolor:5.0.1")
