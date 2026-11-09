@@ -13,7 +13,8 @@
 # Nothing here takes the foreground or sends input. The app runs on a desktop of its own
 # (CreateDesktop), where it can't come in front of anything, and PrintWindow with
 # PW_RENDERFULLCONTENT draws it there; -Visible runs it on the normal desktop instead, behind
-# the other windows, if that ever draws nothing. The capture is of the frame DWM draws, so the
+# the other windows, which the script falls back to by itself if a shot comes out blank (a
+# runner without an interactive session might). The capture is of the frame DWM draws, so the
 # invisible resize borders are cut off, and it's flat: no Mica, square corners.
 param(
   [string] $Exe,
@@ -187,48 +188,62 @@ try {
   foreach ($theme in 'light', 'dark') {
     foreach ($shot in $Shots) {
       if (-not $pages.ContainsKey($shot)) { throw "Unknown shot $shot; one of $($pages.Keys -join ', ')." }
-      $local = Join-Path $scratch "$shot-$theme"
-      $config = Join-Path $local 'kithsong'
-      New-Item -ItemType Directory -Force $config | Out-Null
-      # No BOM, which WriteAllText leaves out. No library_dir: --demo-library sets it.
-      $settings = @{ device_name = $DeviceName; firewall_dont_ask = $true } | ConvertTo-Json
-      [IO.File]::WriteAllText((Join-Path $config 'settings.json'), $settings)
-      $env:LOCALAPPDATA = $local
-      $env:KITHSONG_THEME = $theme
-      $procId = [Shot]::Start($app, "--demo-library --window-size ${Width}x$Height --page `"$($pages[$shot])`"", [bool]$Visible)
-      try {
-        $wnd = [IntPtr]::Zero
-        for ($i = 0; $i -lt 300 -and $wnd -eq [IntPtr]::Zero; $i++) {
-          Start-Sleep -Milliseconds 100
-          if (-not (Get-Process -Id $procId -ErrorAction SilentlyContinue)) { throw "Kithsong exited before its window showed ($shot, $theme)." }
-          $wnd = [Shot]::Find($procId, [bool]$Visible)
+      # A desktop of its own can draw nothing where there's no interactive session (a CI
+      # runner may be one): then the shot is taken again, and the rest too, on the normal one.
+      for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        $local = Join-Path $scratch "$shot-$theme-$attempt"
+        $config = Join-Path $local 'kithsong'
+        New-Item -ItemType Directory -Force $config | Out-Null
+        # No BOM, which WriteAllText leaves out. No library_dir: --demo-library sets it.
+        $settings = @{ device_name = $DeviceName; firewall_dont_ask = $true } | ConvertTo-Json
+        [IO.File]::WriteAllText((Join-Path $config 'settings.json'), $settings)
+        $env:LOCALAPPDATA = $local
+        $env:KITHSONG_THEME = $theme
+        $procId = [Shot]::Start($app, "--demo-library --window-size ${Width}x$Height --page `"$($pages[$shot])`"", [bool]$Visible)
+        $blank = $true
+        try {
+          $wnd = [IntPtr]::Zero
+          for ($i = 0; $i -lt 300 -and $wnd -eq [IntPtr]::Zero; $i++) {
+            Start-Sleep -Milliseconds 100
+            if (-not (Get-Process -Id $procId -ErrorAction SilentlyContinue)) { throw "Kithsong exited before its window showed ($shot, $theme)." }
+            $wnd = [Shot]::Find($procId, [bool]$Visible)
+          }
+          if ($wnd -eq [IntPtr]::Zero) {
+            if ($Visible) { throw "No window after 30 s ($shot, $theme)." }
+          } else {
+            if ($Visible) { [Shot]::SendToBack($wnd) }
+            # Settled once two captures a second apart are the same: covers load, the page opens.
+            Start-Sleep -Seconds 2
+            $last = $null
+            $bmp = $null
+            for ($i = 0; $i -lt 15; $i++) {
+              if ($bmp) { $bmp.Dispose() }
+              $bmp = [Shot]::Capture($wnd)
+              $hash = [Shot]::Hash($bmp)
+              if ($hash -eq $last -and -not [Shot]::Blank($bmp)) { break }
+              $last = $hash
+              Start-Sleep -Seconds 1
+            }
+            $blank = [Shot]::Blank($bmp)
+            if (-not $blank) {
+              $file = Join-Path $Out "windows-$shot-$theme.png"
+              $bmp.Save($file, [Drawing.Imaging.ImageFormat]::Png)
+              Write-Host "$file ($($bmp.Width)x$($bmp.Height))"
+            }
+            $bmp.Dispose()
+            [Shot]::Close($wnd)
+            for ($i = 0; $i -lt 100 -and (Get-Process -Id $procId -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 100 }
+          }
+        } finally {
+          Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
         }
-        if ($wnd -eq [IntPtr]::Zero) { throw "No window after 30 s ($shot, $theme)." }
-        if ($Visible) { [Shot]::SendToBack($wnd) }
-        # Settled once two captures a second apart are the same: covers load, the page opens.
-        Start-Sleep -Seconds 2
-        $last = $null
-        $bmp = $null
-        for ($i = 0; $i -lt 15; $i++) {
-          if ($bmp) { $bmp.Dispose() }
-          $bmp = [Shot]::Capture($wnd)
-          $hash = [Shot]::Hash($bmp)
-          if ($hash -eq $last -and -not [Shot]::Blank($bmp)) { break }
-          $last = $hash
-          Start-Sleep -Seconds 1
+        if (-not $blank) { break }
+        if ($Visible) {
+          $failed += "$shot-$theme"
+          break
         }
-        if ([Shot]::Blank($bmp)) {
-          $failed += "$shot-$theme (blank)"
-        } else {
-          $file = Join-Path $Out "windows-$shot-$theme.png"
-          $bmp.Save($file, [Drawing.Imaging.ImageFormat]::Png)
-          Write-Host "$file ($($bmp.Width)x$($bmp.Height))"
-        }
-        $bmp.Dispose()
-        [Shot]::Close($wnd)
-        for ($i = 0; $i -lt 100 -and (Get-Process -Id $procId -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 100 }
-      } finally {
-        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+        Write-Warning "Nothing drawn on a desktop of its own ($shot, $theme): going on with -Visible."
+        $Visible = [switch]$true
       }
     }
   }
@@ -241,4 +256,4 @@ try {
     try { Remove-Item -Recurse -Force $scratch -ErrorAction Stop } catch { Start-Sleep -Milliseconds 500 }
   }
 }
-if ($failed) { throw "Blank captures: $($failed -join ', '). Try -Visible." }
+if ($failed) { throw "Blank captures: $($failed -join ', ')." }

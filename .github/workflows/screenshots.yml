@@ -1,0 +1,93 @@
+# Store screenshots, by hand only (Actions > Store screenshots > Run workflow). Never on a tag
+# or from the release: a v* tag publishes at once, and nothing here may hold that up. Each job
+# uploads its PNGs as an artifact; nothing is committed.
+#
+# Every job shows the same six fictional albums, made by the core (kithcore/demo.h): the
+# desktops start with --demo-library in a fresh settings folder, Android with the debug
+# build's store_demo extra.
+#
+# Jobs:
+#   windows  The release preset's build, PrintWindow of each page (scripts/store-screenshots/windows.ps1).
+#   linux    The tarball's build in headless sway, grim (scripts/store-screenshots/linux.sh).
+name: Store screenshots
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Which: all, or a comma list of windows,linux'
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    if: inputs.platforms == 'all' || contains(inputs.platforms, 'windows')
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      # As release.yml's windows job, x64 only.
+      - name: Install llvm-mingw and Ninja
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = "$env:RUNNER_TEMP\tools"
+          $llvmMingw = scripts/install-llvm-mingw.ps1 -Dir $tools
+          Invoke-WebRequest https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip -OutFile "$env:RUNNER_TEMP\ninja.zip"
+          if ((Get-FileHash "$env:RUNNER_TEMP\ninja.zip" -Algorithm SHA256).Hash -ne '07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65') { throw 'Checksum mismatch: Ninja' }
+          Expand-Archive "$env:RUNNER_TEMP\ninja.zip" "$tools\ninja"
+          "LLVM_MINGW=$llvmMingw" >> $env:GITHUB_ENV
+          "$tools\ninja" >> $env:GITHUB_PATH
+      # The same key as release.yml's, so either can start from the other's.
+      - name: Cache fetched dependencies
+        uses: actions/cache@v6
+        with:
+          path: build/windows-x64-release/_deps
+          key: deps-windows-x64-${{ github.repository }}-${{ hashFiles('third_party/CMakeLists.txt', 'cmake/llvm-mingw.pin') }}
+      # The app alone: the release job runs the tests.
+      - name: Build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --preset windows-x64-release -DKITHSONG_BUILD_TESTS=OFF
+          if ($LASTEXITCODE) { throw 'configure failed' }
+          cmake --build --preset windows-x64-release --target kithsong
+          if ($LASTEXITCODE) { throw 'build failed' }
+      - name: Shoot
+        shell: pwsh
+        run: scripts/store-screenshots/windows.ps1 -Out out/windows
+      - uses: actions/upload-artifact@v7
+        with:
+          name: screenshots-windows
+          path: out/windows/*.png
+          if-no-files-found: error
+
+  linux:
+    if: inputs.platforms == 'all' || contains(inputs.platforms, 'linux')
+    # As release.yml's linux-tarball job: the GTK and libadwaita the tarball is built against.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      # The tarball's build dependencies, then what the shots need: a headless compositor and
+      # screenshot tool, and GNOME's font and icons, as the app has on GNOME.
+      - name: Install the dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libadwaita-1-dev libgtk-4-dev ninja-build \
+            sway grim fonts-cantarell adwaita-icon-theme dbus-bin
+      - name: Build
+        run: bash scripts/release-linux-tarball.sh
+      - name: Shoot
+        run: bash scripts/store-screenshots/linux.sh out/linux
+      - uses: actions/upload-artifact@v7
+        with:
+          name: screenshots-linux
+          path: out/linux/*.png
+          if-no-files-found: error
