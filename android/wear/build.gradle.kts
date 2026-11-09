@@ -56,6 +56,27 @@ android {
     buildFeatures {
         compose = true
     }
+    // The store screenshot tests, only with -PkithsongScreenshots, as on the phone (see
+    // app/build.gradle.kts). The PNGs land in build/outputs/store-screenshots.
+    val storeScreenshots = providers.gradleProperty("kithsongScreenshots").isPresent
+    testOptions {
+        unitTests.isIncludeAndroidResources = storeScreenshots
+        unitTests.all {
+            if (storeScreenshots) {
+                it.filter.includeTestsMatching("*.screenshots.*")
+                it.systemProperty("roborazzi.test.record", "true")
+                it.systemProperty("kithsong.screenshots.out", layout.buildDirectory.dir("outputs/store-screenshots").get().asFile.path)
+                // Robolectric reaches into java.base on newer JDKs.
+                it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED", "--enable-native-access=ALL-UNNAMED")
+                it.maxHeapSize = "2g"
+                it.outputs.upToDateWhen { false }
+            } else {
+                it.exclude("**/screenshots/**")
+                // They're the watch's only tests so far, so a plain run finds none, which is fine.
+                it.failOnNoDiscoveredTests.set(false)
+            }
+        }
+    }
 }
 
 // R.string/R.plurals from strings/en.json (see GenerateStrings in the root build.gradle.kts):
@@ -83,4 +104,12 @@ dependencies {
     // The hourly background sync on the charger (SyncWorker).
     implementation("androidx.work:work-runtime-ktx:2.11.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    // Store screenshots on the JVM: Robolectric's native graphics and Roborazzi.
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.78.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.78.0")
 }
