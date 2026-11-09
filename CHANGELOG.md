@@ -15,6 +15,9 @@ its GitHub release page.
   playback back to the computer, paused where it was. A cast left paused for three minutes
   ends, and playback stops. If a device can't be reached, or the connection to it is lost, the
   app says so.
+- Tethered devices: plays whose times can't be right, from a device whose clock had gone
+  wrong (a flat battery sets an iPod back to 2000), are placed just after the previous sync
+  instead, where they were logged as years old and never scrobbled.
 
 ### Linux
 

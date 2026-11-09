@@ -6,6 +6,8 @@
  *     and 30 seconds apart before its last; counted; the count written back to the device's
  *     copy (never to the foreign track); unknown tracks counted as unmatched; and, with no
  *     scrobbler, nothing counted as unscrobbled. plays.tsv is cleared.
+ *   - A play whose time can't be true (20 days before the last sync, by a device clock
+ *     gone wrong) is placed just after that sync instead; one far in the future, at now.
  *   - The same plays again (the same token) are never taken in twice.
  *   - On-The-Go playlists become the library's, named "On-The-Go N", with the device's
  *     name when the plain name is taken; only once.
@@ -74,25 +76,34 @@ int main(int argc, char **argv) {
   CHECK(key_one[0] && key_two[0]);
 
   /* Plays. */
+  int64_t prev = 0;
+  mc_tethered_device_list *devs = NULL;
+  CHECK(mc_tethered_list(x.t, &devs) == MC_OK && devs);
+  for (int i = 0; devs && i < devs->count; i++)
+    if (!strcmp(devs->items[i].uid, uid)) prev = devs->items[i].last_sync_ms;
+  mc_tethered_device_list_free(devs);
+  CHECK(prev > 0);
   int64_t now = (int64_t)mc_wall_ms();
   int64_t last_one = now - 3600 * 1000, last_far = now - (int64_t)20 * 24 * 3600 * 1000;
   buf[0] = '\0';
   play_line(buf, sizeof buf, key_one, 3, last_one);
   play_line(buf, sizeof buf, "F0001", 1, last_far);
   play_line(buf, sizeof buf, "F0002", 2, now);
+  play_line(buf, sizeof buf, key_two, 1, now + (int64_t)30 * 24 * 3600 * 1000);
   char plays_path[2048];
   fx_dev_path(&x, "plays.tsv", plays_path, sizeof plays_path);
   CHECK(fx_write_text(plays_path, buf));
   CHECK(fx_sync(&x, uid, &r));
   fx_print("plays", &r);
-  CHECK(r.status == MC_OK && r.plays_imported == 4 && r.plays_unmatched == 2);
+  int64_t after = (int64_t)mc_wall_ms();
+  CHECK(r.status == MC_OK && r.plays_imported == 5 && r.plays_unmatched == 2);
   CHECK(r.plays_not_scrobbled == 0); /* no scrobbler: nothing was to be scrobbled */
-  CHECK(r.updated == 1 && r.written == 0);
+  CHECK(r.updated == 2 && r.written == 0);
   CHECK(!mc_file_exists(plays_path));
   mc_play_log *log = NULL;
   CHECK(mc_library_list_play_events(x.lib, 0, INT64_MAX, &log) == MC_OK && log);
   if (log) {
-    CHECK(log->count == 4);
+    CHECK(log->count == 5);
     int ones = 0;
     for (int i = 0; i < log->count; i++) {
       const mc_play_event *ev = &log->items[i].event;
@@ -103,8 +114,11 @@ int main(int argc, char **argv) {
         CHECK(ev->started_ms == last_one - (int64_t)(2 - ones) * (TRACK_MS + 30000));
         CHECK(ev->listened_ms == TRACK_MS);
         ones++;
+      } else if (!strcmp(ev->track_uid, two)) {
+        CHECK(ev->started_ms >= prev && ev->started_ms <= after); /* from the future */
       } else {
-        CHECK(!strcmp(ev->track_uid, far) && ev->started_ms == last_far);
+        /* Placed after the last sync, which was a moment ago, so no later than now. */
+        CHECK(!strcmp(ev->track_uid, far) && ev->started_ms > prev && ev->started_ms <= after);
       }
     }
     CHECK(ones == 3);
@@ -120,7 +134,7 @@ int main(int argc, char **argv) {
   e = fx_find(m, n, one);
   CHECK(e && e->play_count == 3 && e->last_played_ms == last_one); /* written back */
   e = fx_find(m, n, two);
-  CHECK(e && e->play_count == 0);
+  CHECK(e && e->play_count == 1 && e->last_played_ms <= after);
   CHECK(n >= 1 && !strcmp(m[0].key, "F0001") && m[0].play_count == 1); /* foreign: untouched */
 
   /* The same plays again: an unplug before the device cleared them, say. */
@@ -129,7 +143,7 @@ int main(int argc, char **argv) {
   fx_print("again", &r);
   CHECK(r.status == MC_OK && r.plays_imported == 0 && r.plays_unmatched == 0 && r.updated == 0);
   CHECK(!mc_file_exists(plays_path));
-  CHECK(fx_int(&x, "SELECT count(*) FROM play_events") == 4);
+  CHECK(fx_int(&x, "SELECT count(*) FROM play_events") == 5);
   snprintf(sql, sizeof sql, "SELECT sum(play_count) FROM track_plays WHERE track_uid = '%s'", one);
   CHECK(fx_int(&x, sql) == 3);
 

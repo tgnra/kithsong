@@ -35,6 +35,8 @@
 #define AHEAD 4                         /* encodes queued ahead of the track being written */
 #define SCROBBLE_MAX_AGE_MS ((int64_t)14 * 24 * 60 * 60 * 1000) /* Last.fm's limit */
 #define PLAY_GAP_MS 30000               /* between plays placed before a device's last */
+#define CLOCK_SLACK_MS ((int64_t)24 * 60 * 60 * 1000) /* a device's time zone mistaken, at most */
+#define PLACED_PLAY_MS ((int64_t)4 * 60 * 1000)       /* a play placed by placed_plays() */
 #define MAX_FORMATS 16
 
 /* A device plugged in. */
@@ -920,6 +922,52 @@ static int on_play(void *ctx, const kith_device_play *p) {
   return 0;
 }
 
+/* When this device was last synced, ms; 0 if never. */
+static int64_t last_sync(job *j) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(j->sdb), "SELECT last_sync_ms FROM tethered_devices WHERE uid = ?1", -1,
+                         &stmt, NULL) != SQLITE_OK)
+    return 0;
+  bind_text(stmt, 1, j->uid);
+  int64_t ms = sqlite3_step(stmt) == SQLITE_ROW ? sqlite3_column_int64(stmt, 0) : 0;
+  sqlite3_finalize(stmt);
+  return ms > 0 ? ms : 0;
+}
+
+static int by_last(const void *a, const void *b) {
+  const play_in *x = *(play_in *const *)a, *y = *(play_in *const *)b;
+  return x->last_ms < y->last_ms ? -1 : x->last_ms > y->last_ms;
+}
+
+/* Plays whose time can't be true, by a device clock the plugin couldn't put right (a flat
+ * battery sets an iPod back to 2000): before the last sync, as a device's plays are cleared
+ * by it, or in the future, each by more than a time zone could make it. They're placed in
+ * their order just after the last sync, ahead of any play with a believable time, as they
+ * came before the clock was set right; with no sync before, or for ones in the future, they
+ * end at now. Each takes PLACED_PLAY_MS; import_plays() places a track's earlier plays
+ * before its last as ever. */
+static void placed_plays(play_in *items, int count, int64_t prev, int64_t now) {
+  play_in **wrong = malloc((size_t)(count ? count : 1) * sizeof *wrong);
+  if (!wrong) return;
+  int n = 0;
+  int64_t span = 0;
+  for (int i = 0; i < count; i++) {
+    int64_t t = items[i].last_ms;
+    if (t <= 0) continue;
+    if ((prev > 0 && t < prev - CLOCK_SLACK_MS) || t > now + CLOCK_SLACK_MS) {
+      wrong[n++] = &items[i];
+      span += (int64_t)items[i].count * PLACED_PLAY_MS;
+    }
+  }
+  qsort(wrong, (size_t)n, sizeof *wrong, by_last);
+  int64_t t = prev > 0 ? prev : now - span;
+  for (int i = 0; i < n; i++) {
+    t += (int64_t)wrong[i]->count * PLACED_PLAY_MS;
+    wrong[i]->last_ms = t < now ? t : now;
+  }
+  free(wrong);
+}
+
 /* The plays made on the device: logged, counted and scrobbled, once. */
 static mc_status import_plays(job *j) {
   if (!j->dt->plays_read) return MC_OK;
@@ -935,6 +983,7 @@ static mc_status import_plays(job *j) {
     rc = j->dt->plays_read(j->dev, token, on_play, &ps);
     mc_status st = ps.oom ? MC_ERR_NOMEM : from_kith(rc);
     int64_t now = (int64_t)mc_wall_ms();
+    if (st == MC_OK) placed_plays(ps.items, ps.count, last_sync(j), now);
     for (int i = 0; st == MC_OK && i < ps.count; i++) {
       char uid[MC_UID_STRLEN];
       int length = 0;

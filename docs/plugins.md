@@ -173,6 +173,11 @@ writes the library's counts back:
    length. The device records only the last play's time, so with several plays the last one
    gets that time and each earlier one is placed one track length (plus 30 seconds) before
    the one after it. That's a guess, but it keeps the times in order and believable.
+   A last-play time that can't be true, by a device clock gone wrong (a flat battery sets an
+   iPod back to 2000), is put right first: a plugin should do what it can (the iPod plugin
+   measures how far off the clock is), and core places any time still more than a day before
+   the previous sync, or more than a day ahead, just after that sync, in order, ahead of the
+   believable ones; with no sync before, or for a time ahead, it ends at the sync.
 3. Each play is also scrobbled (`mc_scrobbler_scrobble()`) if a scrobbling account is signed
    in on this computer: the frontend, which owns the scrobbler, hands it over with
    `mc_tethered_set_scrobbler()` while scrobbling is on. Last.fm drops scrobbles older than
