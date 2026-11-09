@@ -42,7 +42,8 @@
   <!-- The inbound rule sync needs (see desktop/windows/src/firewall.h), added by Windows when
        the package installs and removed when it uninstalls, so the packaged app needs no UAC
        prompt for it: TCP on any port (the listener falls back to an ephemeral port when
-       47823 is taken) and mDNS, on the Private and Domain profiles like the app's own rule. -->
+       47823 is taken, and Google Cast's music server is on a random port) and mDNS, on the
+       Private and Domain profiles like the app's own rule. -->
   <Extensions>
     <desktop2:Extension Category="windows.firewallRules">
       <desktop2:FirewallRules Executable="kithsong.exe">

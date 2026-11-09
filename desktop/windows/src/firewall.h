@@ -7,7 +7,9 @@
  *
  * The rule allows this exe, any protocol and port, inbound on the Private and Domain
  * profiles: scoping it by program covers the listener's fallback port and mDNS alike, and
- * follows the exe rather than opening ports to every program. The prompt leaves public
+ * follows the exe rather than opening ports to every program. It covers Google Cast too: the
+ * device fetches the music from a server the core runs on a random port while casting
+ * (docs/cast.md), and finds nothing to fetch without the rule. The prompt leaves public
  * networks alone; on one, its rule only starts to help once the network is set to private.
  *
  * While a device's page shows, the same reading of the firewall feeds the banner at the top

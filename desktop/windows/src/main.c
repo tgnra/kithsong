@@ -46,10 +46,13 @@
  * title, the playing track. Its Add to Playlist submenu is add_to_playlist.c, and the New,
  * Rename and Delete Playlist dialogs playlist_dialogs.c; the track list asks for playlist
  * changes (a smart playlist's too: its rule's editor is smart_editor.c) and they're made
- * here. The toolbar buttons, the shuffle toggle after the seekbar ([S]), the queue button
- * beside it, whose drop-down is queue_popup.c, and the speaker
- * next to it ([V]) are owner-drawn here; shuffle is kept in the settings, as is the volume,
- * which the speaker's drop-down (volume_popup.c) and the keyboard change.
+ * here. The toolbar buttons, the shuffle toggle after the seekbar ([S]), the cast button
+ * beside it while there's a Google Cast device to cast to (or a cast under way), whose
+ * drop-down is cast_popup.c, the queue button after that, whose drop-down is queue_popup.c,
+ * and the speaker next to it ([V]) are owner-drawn here; shuffle is kept in the settings, as
+ * is the volume, which the speaker's drop-down (volume_popup.c) and the keyboard change.
+ * While casting, the speaker and the volume keys are the device's volume (playback.h), and
+ * the computer's own is left as it was.
  *
  * Sync (sync_bridge.c) runs while a library is open, and stops before it closes, so switching
  * library restarts it. Its events arrive as WM_APP_SYNC. While tracks wait for a device this PC
@@ -94,6 +97,7 @@
 #include "artist_view.h"
 #include "build_info.h"
 #include "canvas.h"
+#include "cast_popup.h"
 #include "delete_dialog.h"
 #include "prompt_dialog.h"
 #include "remove_here.h"
@@ -142,7 +146,8 @@ enum {
   ID_SEARCH,
   ID_ARTISTS,
   ID_SHUFFLE, /* after the seekbar */
-  ID_QUEUE,   /* after shuffle: opens queue_popup.c */
+  ID_CAST,    /* after shuffle, while shown: opens cast_popup.c */
+  ID_QUEUE,   /* after shuffle and cast: opens queue_popup.c */
   ID_VOLUME,  /* after the queue: opens volume_popup.c */
   ID_WAITING, /* the waiting banner, above the album grid */
   ID_HOME,
@@ -161,7 +166,8 @@ enum {
   ICON_GAP = 2,         /* between neighbouring icon buttons */
   NOW_PLAYING_GAP = 16, /* between the playback buttons and the seekbar strip */
   SHUFFLE_GAP = 6,      /* between the seekbar strip and the shuffle button */
-  NOW_PLAYING_MAX = 640 + 2 * (ICON_GAP + ICON_BTN), /* the strip, shuffle, the queue and the speaker */
+  NOW_PLAYING_MAX = 640 + 2 * (ICON_GAP + ICON_BTN), /* the strip, shuffle, the queue and the speaker; the cast
+                                                       * button, when it shows, takes from the strip */
 };
 
 /* The main window's timers. */
@@ -173,12 +179,14 @@ enum {
   TIMER_SAVE_VOLUME,              /* one-shot: the volume changed, so a held key saves once */
   TIMER_DEBUG_PAIR,               /* debug builds: KITHSONG_DEBUG_PAIR, below */
   TIMER_ANALYSIS,                 /* repeating: what the audio analysis is up to */
+  TIMER_CAST_PULSE,               /* repeating, while connecting: the cast button pulses */
   REFRESH_DEVICES_MS = 200,
   SAVE_VOLUME_MS = 1000,
   VOLUME_STEP = 5, /* per press of a volume shortcut */
   SEEK_STEP_MS = 5000,
   REFRESH_LIBRARY_MS = 500,
   POLL_DEVICES_MS = 10000,
+  CAST_PULSE_MS = 500,
   MAX_SYNCING = 16, /* devices marked as syncing in the sidebar at once */
   MAX_ADDRESSES = 8,
   MAX_RECENTS = 3, /* in the sidebar */
@@ -188,6 +196,7 @@ typedef struct app {
   HWND wnd;
   HWND buttons[NUM_BUTTONS];
   HWND shuffle; /* a toggle, drawn like the playback buttons */
+  HWND cast;    /* opens the Cast drop-down, drawn like them too; shown while cast_shown */
   HWND queue;   /* opens the play queue, drawn like them too */
   HWND volume;  /* the speaker, drawn like them too */
   HWND tooltip;
@@ -215,6 +224,8 @@ typedef struct app {
   BOOL refresh_pending;    /* TIMER_REFRESH_DEVICES is set */
   BOOL library_pending;    /* TIMER_REFRESH_LIBRARY is set */
   BOOL volume_pending;     /* TIMER_SAVE_VOLUME is set */
+  BOOL cast_shown;         /* the cast button: there are devices, a cast, or its drop-down is open */
+  BOOL cast_pulse;         /* the connecting cast button's dim half of the pulse */
   BOOL locked;             /* an import session has the other pages greyed out */
   char syncing[MAX_SYNCING][MC_UID_STRLEN]; /* devices with a session in progress */
 } app;
@@ -290,8 +301,10 @@ static void update_font(void) {
   InvalidateRect(g_app.shuffle, NULL, FALSE);
   InvalidateRect(g_app.volume, NULL, FALSE);
   InvalidateRect(g_app.queue, NULL, FALSE);
+  InvalidateRect(g_app.cast, NULL, FALSE);
   volume_popup_close(); /* it opens again at the new size */
   queue_popup_close();
+  cast_popup_close();
 
   if (g_app.font) DeleteObject(g_app.font);
   g_app.font = font;
@@ -370,13 +383,13 @@ static void layout(void) {
   int tracks_w = g_app.show_tracks ? g_app.tracks_w : 0;
   int grid_w = w - side_w - (tracks_w ? tracks_w + scale(1) : 0);
 
-  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 8);
+  HDWP dwp = BeginDeferWindowPos(NUM_BUTTONS + 13);
   int x = logo_rect().right + pad;
   for (int i = 0; i < NUM_BUTTONS; i++, x += icon + scale(ICON_GAP))
     dwp = DeferWindowPos(dwp, g_app.buttons[i], NULL, x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
-  /* The seekbar, with the shuffle, queue and speaker buttons after it, takes the space between the
-   * playback buttons and the caption buttons, up to a point, centred in the window where
-   * that leaves it clear of both. */
+  /* The seekbar, with the shuffle, cast (while shown), queue and speaker buttons after it, takes
+   * the space between the playback buttons and the caption buttons, up to a point, centred in
+   * the window where that leaves it clear of both. The cast button's room comes from the strip. */
   int min_left = x - scale(ICON_GAP) + scale(NOW_PLAYING_GAP);
   int max_right = w - caption_buttons_width() - pad;
   int np_w = max_right - min_left;
@@ -384,14 +397,18 @@ static void layout(void) {
   int np_left = (w - np_w) / 2;
   if (np_left + np_w > max_right) np_left = max_right - np_w;
   if (np_left < min_left) np_left = min_left;
-  int strip_w = max(0, np_w - 3 * icon - scale(SHUFFLE_GAP) - 2 * scale(ICON_GAP));
-  int shuffle_x = np_left + strip_w + scale(SHUFFLE_GAP);
+  int after = g_app.cast_shown ? 4 : 3; /* buttons after the strip */
+  int strip_w = max(0, np_w - after * icon - scale(SHUFFLE_GAP) - (after - 1) * scale(ICON_GAP));
+  int button_x = np_left + strip_w + scale(SHUFFLE_GAP), button_y = (bar - icon) / 2;
   dwp = DeferWindowPos(dwp, g_app.now_playing, NULL, np_left, 0, strip_w, bar, SWP_NOZORDER);
-  dwp = DeferWindowPos(dwp, g_app.shuffle, NULL, shuffle_x, (bar - icon) / 2, icon, icon, SWP_NOZORDER);
-  dwp = DeferWindowPos(dwp, g_app.queue, NULL, shuffle_x + icon + scale(ICON_GAP), (bar - icon) / 2, icon, icon,
-                       SWP_NOZORDER);
-  dwp = DeferWindowPos(dwp, g_app.volume, NULL, shuffle_x + 2 * (icon + scale(ICON_GAP)), (bar - icon) / 2, icon, icon,
-                       SWP_NOZORDER);
+  dwp = DeferWindowPos(dwp, g_app.shuffle, NULL, button_x, button_y, icon, icon, SWP_NOZORDER);
+  button_x += icon + scale(ICON_GAP);
+  dwp = DeferWindowPos(dwp, g_app.cast, NULL, button_x, button_y, icon, icon,
+                       SWP_NOZORDER | (g_app.cast_shown ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  if (g_app.cast_shown) button_x += icon + scale(ICON_GAP);
+  dwp = DeferWindowPos(dwp, g_app.queue, NULL, button_x, button_y, icon, icon, SWP_NOZORDER);
+  button_x += icon + scale(ICON_GAP);
+  dwp = DeferWindowPos(dwp, g_app.volume, NULL, button_x, button_y, icon, icon, SWP_NOZORDER);
   dwp = DeferWindowPos(dwp, g_app.sidebar, NULL, 0, bar + side_top, side_w, h - bar - side_top, SWP_NOZORDER);
   UINT library = library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW;
   /* Tracks waiting for a device: a strip over the grid, beside the track list. */
@@ -734,8 +751,10 @@ static LRESULT CALLBACK button_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UI
 
 /* The playback buttons, and the shuffle and speaker buttons, are bare icons with a fill on
  * hover. Drawn with alpha, as they sit over Mica. Shuffle, while on, is in the accent colour
- * with a dot under it, as Windows' Media Player shows its toggles. The speaker shows the
- * volume (volume_popup_glyph()), with the selected fill while its drop-down is open. */
+ * with a dot under it, as Windows' Media Player shows its toggles, and so is the cast button
+ * while casting; while connecting, it pulses between the accent colour and dim. The speaker
+ * shows the volume (volume_popup_glyph()); it, the queue and cast have the selected fill
+ * while their drop-downs are open. */
 static void draw_button(const DRAWITEMSTRUCT *dis) {
   static const wchar_t glyphs[NUM_BUTTONS] = {0xE892, 0xE768, 0xE893}; /* Previous, Play, Next */
   RECT rc = {0, 0, dis->rcItem.right - dis->rcItem.left, dis->rcItem.bottom - dis->rcItem.top};
@@ -743,26 +762,31 @@ static void draw_button(const DRAWITEMSTRUCT *dis) {
   if (!canvas_reserve(c, rc.right, rc.bottom)) return;
   canvas_clear(c, &rc, theme.frame, theme.mica ? 0 : 255);
 
-  BOOL shuffle = dis->CtlID == ID_SHUFFLE, on = shuffle && playback_shuffle();
+  BOOL shuffle = dis->CtlID == ID_SHUFFLE, cast = dis->CtlID == ID_CAST;
+  BOOL connecting = cast && playback_cast_status()->state == MC_CAST_CONNECTING;
+  BOOL on = (shuffle && playback_shuffle()) || (cast && playback_casting()) || (connecting && !g_app.cast_pulse);
   BOOL volume = dis->CtlID == ID_VOLUME, queue = dis->CtlID == ID_QUEUE;
   BOOL pressed = (dis->itemState & ODS_SELECTED) != 0, disabled = (dis->itemState & ODS_DISABLED) != 0;
+  BOOL open = (volume && volume_popup_is_open()) || (queue && queue_popup_is_open()) || (cast && cast_popup_is_open());
   control_state state = disabled ? STATE_NORMAL
                         : pressed ? STATE_PRESSED
-                        : (volume && volume_popup_is_open()) || (queue && queue_popup_is_open()) ? STATE_SELECTED
+                        : open ? STATE_SELECTED
                         : dis->hwndItem == g_app.hot_button ? STATE_HOT
                                                             : STATE_NORMAL;
   int radius = scale(6);
   COLORREF color = theme_draw_state(c, &rc, radius, state);
   if (disabled) color = theme.text3;
   else if (on && state != STATE_PRESSED) color = theme.accent;
+  else if (connecting && state == STATE_NORMAL) color = theme.text3; /* the pulse's dim half */
   wchar_t glyph = shuffle ? 0xE8B1                                         /* Shuffle */
+                  : cast ? 0xEC15 /* MiracastLogoSmall: a screen with waves, for Cast */
                   : queue ? 0xE8FD /* BulletedList */
                   : volume ? volume_popup_glyph()
                   : dis->CtlID == ID_PLAY && playback_is_playing() ? 0xE769 /* Pause */
                                                                    : glyphs[dis->CtlID - ID_PREV];
   canvas_text(c, &glyph, 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX, g_app.icon_font,
               color);
-  if (on) {
+  if (on && !connecting) {
     int dot = scale(4);
     RECT r = {(rc.right - dot) / 2, rc.bottom - scale(6) - dot / 2, (rc.right - dot) / 2 + dot, 0};
     r.bottom = r.top + dot;
@@ -789,6 +813,7 @@ static void apply_theme(void) {
   device_view_theme_changed();
   volume_popup_close(); /* it opens again in the new colours */
   queue_popup_close();
+  cast_popup_close();
   layout();
   RedrawWindow(g_app.wnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
@@ -832,6 +857,14 @@ static void create_controls(void) {
   set_button_label(g_app.buttons[ID_NEXT - ID_PREV], MC_STR_NEXT_TRACK, MC_STR_WINDOWS_SHORTCUT_NEXT);
   set_button_label(g_app.buttons[ID_PLAY - ID_PREV], MC_STR_PLAY, MC_STR_WINDOWS_SHORTCUT_PLAY_PAUSE);
   set_button_label(g_app.shuffle, MC_STR_SHUFFLE_OFF, MC_STR_WINDOWS_SHORTCUT_SHUFFLE);
+  /* Hidden until there's a device (layout()). Its name and tooltip say whether it's casting,
+   * and to what (update_cast_button()). */
+  g_app.cast = child(WC_BUTTONW, mc_wstr(MC_STR_CAST), BS_OWNERDRAW, ID_CAST);
+  ShowWindow(g_app.cast, SW_HIDE);
+  SetWindowSubclass(g_app.cast, button_proc, 0, 0);
+  ti.uId = (UINT_PTR)g_app.cast;
+  ti.lpszText = (wchar_t *)mc_wstr(MC_STR_CAST);
+  SendMessageW(g_app.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
   g_app.queue = child(WC_BUTTONW, mc_wstr(MC_STR_QUEUE), BS_OWNERDRAW, ID_QUEUE);
   SetWindowSubclass(g_app.queue, button_proc, 0, 0);
   ti.uId = (UINT_PTR)g_app.queue;
@@ -956,11 +989,13 @@ static void volume_changed(void) {
   volume_popup_update();
 }
 
-/* Volume 0 to 100, kept in the settings for next time. Changing it unmutes. */
+/* Volume 0 to 100, kept in the settings for next time. Changing it unmutes. While casting it's
+ * the device's (playback.h), which isn't kept: the computer's own stays as it was. */
 static void change_volume(int volume) {
   playback_set_muted(FALSE);
   playback_set_volume(volume);
   volume_changed();
+  if (playback_casting()) return;
   mc_settings_set_volume(g_app.settings, playback_volume());
   g_app.volume_pending = TRUE;
   SetTimer(g_app.wnd, TIMER_SAVE_VOLUME, SAVE_VOLUME_MS, NULL);
@@ -982,6 +1017,71 @@ static void set_muted(BOOL muted) {
 }
 
 static const volume_popup_host volume_host = {change_volume, set_muted};
+
+/* --- Google Cast --- */
+
+static void cast_popup_closed(void);
+static const cast_popup_host cast_host = {change_volume, cast_popup_closed};
+
+/* The cast button shows while there's a device to cast to, a cast under way, or its drop-down
+ * open (which may be saying it's still looking); the strip makes room for it, and takes the
+ * room back. Its name and tooltip say what it's doing: "Cast", "Connecting to Living Room TV…",
+ * "Casting to Living Room TV". */
+static void update_cast_button(void) {
+  const mc_cast_status *st = playback_cast_status();
+  mc_cast_device_list *list = playback_cast_devices();
+  BOOL show = (list && list->count > 0) || st->state != MC_CAST_IDLE || cast_popup_is_open();
+  mc_cast_device_list_free(list);
+
+  wchar_t label[256];
+  if (st->state == MC_CAST_IDLE) {
+    lstrcpynW(label, mc_wstr(MC_STR_CAST), 256);
+  } else {
+    const char *name = st->device_name[0] ? st->device_name : mc_str(MC_STR_CAST_DEVICE_UNNAMED);
+    mc_wformat(label, 256, mc_str(st->state == MC_CAST_CASTING ? MC_STR_CAST_CASTING_TO : MC_STR_CAST_CONNECTING_TO),
+               MC_S(name));
+  }
+  SetWindowTextW(g_app.cast, label);
+  TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = g_app.wnd, .uId = (UINT_PTR)g_app.cast, .lpszText = label};
+  SendMessageW(g_app.tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+
+  if (st->state == MC_CAST_CONNECTING) {
+    SetTimer(g_app.wnd, TIMER_CAST_PULSE, CAST_PULSE_MS, NULL); /* restarts it, which is fine */
+  } else {
+    KillTimer(g_app.wnd, TIMER_CAST_PULSE);
+    g_app.cast_pulse = FALSE;
+  }
+  if (show != g_app.cast_shown) {
+    if (!show && GetFocus() == g_app.cast) SetFocus(g_app.queue); /* the next button along */
+    g_app.cast_shown = show;
+    layout();
+  }
+  InvalidateRect(g_app.cast, NULL, FALSE);
+}
+
+/* A cast ended that the user should hear of: "Couldn't connect to Living Room TV." in the
+ * now-playing strip, as other passing troubles are. */
+static void say_cast_ended(mc_cast_end ended, const char *name) {
+  wchar_t text[256];
+  mc_wformat(text, 256, mc_str(ended == MC_CAST_END_LOST ? MC_STR_CAST_LOST : MC_STR_CAST_FAILED),
+             MC_S(name[0] ? name : mc_str(MC_STR_CAST_DEVICE_UNNAMED)));
+  now_playing_notice(text);
+}
+
+/* WM_APP_CAST: the devices, the cast's state or the device's volume changed. Read here, on the
+ * UI thread, as the cast's callback mustn't call it back. */
+static void on_cast_event(void) {
+  mc_cast_end ended = MC_CAST_END_NONE;
+  char name[MC_CAST_NAME_LEN];
+  if (playback_cast_update(&ended, name)) say_cast_ended(ended, name);
+  update_cast_button();
+  volume_changed(); /* the device's volume while casting, else the computer's again */
+  cast_popup_update();
+}
+
+static void cast_popup_closed(void) {
+  update_cast_button(); /* it may go, with nothing to cast to */
+}
 
 static void save_volume(void) {
   KillTimer(g_app.wnd, TIMER_SAVE_VOLUME);
@@ -1982,6 +2082,9 @@ static void on_command(int id, int code) {
     case ID_SHUFFLE:
       set_shuffle(!playback_shuffle());
       break;
+    case ID_CAST:
+      cast_popup_toggle(g_app.cast, g_app.dpi, &cast_host);
+      break;
     case ID_QUEUE:
       queue_popup_toggle(g_app.queue, g_app.dpi);
       break;
@@ -2130,7 +2233,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DRAWITEM: {
       const DRAWITEMSTRUCT *dis = (const DRAWITEMSTRUCT *)lp;
       if ((dis->CtlID >= ID_PREV && dis->CtlID < ID_PREV + NUM_BUTTONS) || dis->CtlID == ID_SHUFFLE ||
-          dis->CtlID == ID_QUEUE || dis->CtlID == ID_VOLUME)
+          dis->CtlID == ID_CAST || dis->CtlID == ID_QUEUE || dis->CtlID == ID_VOLUME)
         draw_button(dis);
       else device_view_draw_item(dis);
       return TRUE;
@@ -2167,6 +2270,15 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         on_command(ID_TRACKS, TLN_CLOSE);
         return TRUE;
       }
+      /* While casting, the keyboard's volume keys are the device's, as on Android, while the
+       * window has the focus; otherwise they're Windows' own. */
+      if (playback_casting()) {
+        switch (GET_APPCOMMAND_LPARAM(lp)) {
+          case APPCOMMAND_VOLUME_UP: set_volume(playback_volume() + VOLUME_STEP); return TRUE;
+          case APPCOMMAND_VOLUME_DOWN: set_volume(playback_volume() - VOLUME_STEP); return TRUE;
+          case APPCOMMAND_VOLUME_MUTE: toggle_muted(); return TRUE;
+        }
+      }
       break;
     case WM_NOTIFY:
       if (device_view_on_notify((const NMHDR *)lp, &result)) return result;
@@ -2196,6 +2308,11 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         save_volume();
         return 0;
       }
+      if (wp == TIMER_CAST_PULSE) {
+        g_app.cast_pulse = !g_app.cast_pulse;
+        InvalidateRect(g_app.cast, NULL, FALSE);
+        return 0;
+      }
 #ifndef NDEBUG
       if (wp == TIMER_DEBUG_PAIR) {
         KillTimer(wnd, TIMER_DEBUG_PAIR);
@@ -2212,6 +2329,9 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       return TRUE;
     case WM_APP_SYNC:
       on_sync_event(wp, lp);
+      return 0;
+    case WM_APP_CAST: /* wParam: the mc_cast_event, which doesn't matter: everything is read again */
+      on_cast_event();
       return 0;
     case WM_COPYDATA: {
       /* Another launch's paths. Imported once its SendMessage has returned, as the import
@@ -2284,6 +2404,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       KillTimer(wnd, TIMER_REFRESH_DEVICES);
       KillTimer(wnd, TIMER_POLL_DEVICES);
       KillTimer(wnd, TIMER_REFRESH_LIBRARY);
+      KillTimer(wnd, TIMER_CAST_PULSE);
       save_volume();
       stop_sync(); /* before the library closes, after the loop */
       playback_free();

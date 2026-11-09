@@ -17,6 +17,7 @@ add_executable(kithsong WIN32
   src/album_grid.c
   src/artist_view.c
   src/canvas.c
+  src/cast_popup.c
   src/cover.c
   src/delete_dialog.c
   src/device_view.c
