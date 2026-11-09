@@ -3,7 +3,12 @@
 What changed in each Kithsong release, newest first. Each release's full list of commits is on
 its GitHub release page.
 
-## Unreleased
+## 0.9.1 (2026-11-09)
+
+### Linux
+
+- A device's sync list keeps its place as it refreshes, where scrolling it used to keep
+  jumping back to the top.
 
 ### Android
 
