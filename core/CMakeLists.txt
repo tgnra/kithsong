@@ -75,6 +75,7 @@ add_library(kithcore STATIC
   src/library/home_picks.c
   src/library/stats.c
   src/library/stress.c
+  src/library/demo.c
   "${_schema_c}"
   src/playlist/playlist.c
   src/playlist/playlist_art.c

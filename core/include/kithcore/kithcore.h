@@ -82,6 +82,7 @@ mc_status mc_uid_new(char out[MC_UID_STRLEN]);
 #include "kithcore/artcolors.h"
 #include "kithcore/perf.h"
 #include "kithcore/stress.h"
+#include "kithcore/demo.h"
 
 #include "kithcore/i18n.h"
 

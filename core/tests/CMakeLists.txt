@@ -110,6 +110,7 @@ kithsong_test(test_up_next_add)
 kithsong_test(test_radio_player)
 kithsong_test(test_shuffle)
 kithsong_test(test_stress)
+kithsong_test(test_demo)
 kithsong_test(test_art_colors)
 
 # Plugins: plugin_folder.c built as real plugins (a folder target and a WAV encoder; one that
@@ -151,6 +152,8 @@ set_tests_properties(test_discovery PROPERTIES SKIP_RETURN_CODE 77)  # no multic
 add_executable(manual_stress manual_stress.c)
 target_link_libraries(manual_stress PRIVATE kithcore)
 target_include_directories(manual_stress PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
+add_executable(manual_demo manual_demo.c)
+target_link_libraries(manual_demo PRIVATE kithcore)
 
 add_executable(manual_mb_ping manual_mb_ping.c)
 target_link_libraries(manual_mb_ping PRIVATE kithcore)
