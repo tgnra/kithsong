@@ -81,22 +81,19 @@ jobs:
 
   linux:
     if: github.event_name == 'push' || inputs.platforms == 'all' || contains(inputs.platforms, 'linux')
-    # Not ubuntu-24.04, where the tarball is built: its Adwaita icon theme lacks icons the app
-    # names, which show as broken images. Debian trixie has a current GNOME look.
-    runs-on: ubuntu-latest
-    container: debian:trixie
+    # As release.yml's linux-tarball job: the GTK and libadwaita the tarball is built against.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
+      - uses: actions/checkout@v7
       # The tarball's build dependencies, then what the shots need: a headless compositor and
-      # screenshot tool, and GNOME's font and icons, as the app has on GNOME. Before checkout,
-      # so it has git.
+      # screenshot tool, GNOME's font and icons, as the app has on GNOME, and the SVG loader
+      # (--no-install-recommends leaves it out), without which the app's own icons are broken.
       - name: Install the dependencies
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends build-essential cmake ninja-build pkg-config \
-            binutils git ca-certificates libadwaita-1-dev libgtk-4-dev \
-            sway grim fonts-cantarell adwaita-icon-theme dbus dbus-bin
-      - uses: actions/checkout@v7
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libadwaita-1-dev libgtk-4-dev ninja-build \
+            sway grim fonts-cantarell adwaita-icon-theme dbus-bin librsvg2-common
       - name: Build
         run: bash scripts/release-linux-tarball.sh
       - name: Shoot
