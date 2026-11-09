@@ -214,6 +214,9 @@ static void test_create(const char *base) {
     CHECK_STR(recents->items[2].name, "Nightjar Season");
   }
   mc_recent_list_free(recents);
+  mc_library_stats stats;
+  CHECK(mc_library_read_stats(lib, &stats) == MC_OK);
+  CHECK(stats.plays > stats.tracks_played && stats.tracks_played > 3 && stats.tracks_played < MC_DEMO_TRACKS);
   mc_library_close(lib);
 
   /* One cut off is made again; a folder with anything else in it is left alone. */

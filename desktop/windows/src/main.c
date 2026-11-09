@@ -67,9 +67,15 @@
  * and comes back with the library open in its new folder (or its old one, if the move
  * failed).
  *
- * Command line: kithsong.exe [--config-dir <dir> | --config-dir=<dir>] [--] [paths...]
+ * Command line: kithsong.exe [--config-dir <dir> | --config-dir=<dir>] [--demo-library]
+ * [--window-size WxH] [--page <page>] [--] [paths...]
  * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\kithsong,
- * so two instances can sync on one PC; the paths are imported. Run from a checkout, the app
+ * so two instances can sync on one PC; the paths are imported. --demo-library opens the demo
+ * library (kithcore/demo.h) in <config dir>\demo-library, making it first, and refuses a
+ * config folder whose settings name another library. --window-size sets the window's size as
+ * it shows (the frame DWM draws, so a capture of it is that size), --page what it opens on:
+ * home, albums, artists, album:<title>, artist:<name> or search:<text>. These three are for
+ * screenshots (scripts/store-screenshots). Run from a checkout, the app
  * has folders of its own (kithcore/source_run.h). Launching it again with the
  * same config folder brings the open window forward and hands it the paths instead, as
  * GApplication does on Linux (claim_instance). --add-firewall-rule or
@@ -180,7 +186,10 @@ enum {
   TIMER_DEBUG_PAIR,               /* debug builds: KITHSONG_DEBUG_PAIR, below */
   TIMER_ANALYSIS,                 /* repeating: what the audio analysis is up to */
   TIMER_CAST_PULSE,               /* repeating, while connecting: the cast button pulses */
+  TIMER_START_PAGE,               /* repeating until it's open: --page's page */
   REFRESH_DEVICES_MS = 200,
+  START_PAGE_MS = 250,
+  START_PAGE_TRIES = 40, /* ten seconds for the grid to have the album */
   SAVE_VOLUME_MS = 1000,
   VOLUME_STEP = 5, /* per press of a volume shortcut */
   SEEK_STEP_MS = 5000,
@@ -239,6 +248,13 @@ static void plugins_changed(void);
 static void update_tethered_scrobbler(void);
 static void rename_self(const char *name);
 static void import_forwarded(wchar_t *list);
+static BOOL open_start_page(const char *page);
+
+/* --window-size, or 0: the frame as it shows, in pixels. */
+static int g_window_w, g_window_h;
+/* --page's page, kept for TIMER_START_PAGE: UTF-8, or NULL. */
+static char *g_start_page;
+static int g_start_page_tries;
 
 /* The window property holding its config folder's instance key (see claim_instance). */
 #define INSTANCE_PROP L"Kithsong.Instance"
@@ -2210,6 +2226,12 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       MINMAXINFO *mmi = (MINMAXINFO *)lp;
       mmi->ptMinTrackSize.x = scale(1152);
       mmi->ptMinTrackSize.y = scale(864);
+      if (g_window_w) { /* --window-size: as asked, whatever the screen (a CI runner's is small) */
+        if (g_window_w < mmi->ptMinTrackSize.x) mmi->ptMinTrackSize.x = g_window_w;
+        if (g_window_h < mmi->ptMinTrackSize.y) mmi->ptMinTrackSize.y = g_window_h;
+        if (mmi->ptMaxTrackSize.x < g_window_w + 64) mmi->ptMaxTrackSize.x = g_window_w + 64;
+        if (mmi->ptMaxTrackSize.y < g_window_h + 64) mmi->ptMaxTrackSize.y = g_window_h + 64;
+      }
       return 0;
     }
     case WM_ERASEBKGND: { /* also how themed child controls draw their parent's background */
@@ -2302,6 +2324,14 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (wp == TIMER_PERF_RUN) {
         KillTimer(wnd, TIMER_PERF_RUN);
         scroll_test_start();
+        return 0;
+      }
+      if (wp == TIMER_START_PAGE) {
+        if (!g_start_page || open_start_page(g_start_page) || ++g_start_page_tries >= START_PAGE_TRIES) {
+          KillTimer(wnd, TIMER_START_PAGE);
+          free(g_start_page);
+          g_start_page = NULL;
+        }
         return 0;
       }
       if (wp == TIMER_SAVE_VOLUME) {
@@ -2428,6 +2458,9 @@ typedef struct app_args {
   const wchar_t *config_dir;   /* --config-dir, or NULL */
   const wchar_t **paths;       /* to import */
   int npaths;
+  BOOL demo_library;           /* --demo-library */
+  int window_w, window_h;      /* --window-size, or 0 */
+  const wchar_t *page;         /* --page, or NULL */
 } app_args;
 
 /* Fills args from the command line. Returns -1 to carry on, or the exit code (after showing
@@ -2458,6 +2491,29 @@ static int parse_args(app_args *args) {
         args->config_dir = a + 13;
         continue;
       }
+      if (!wcscmp(a, L"--demo-library")) {
+        args->demo_library = TRUE;
+        continue;
+      }
+      const wchar_t *size = !wcscmp(a, L"--window-size") && i + 1 < argc ? args->argv[++i]
+                            : !wcsncmp(a, L"--window-size=", 14)        ? a + 14
+                                                                         : NULL;
+      if (size) {
+        int w = 0, h = 0;
+        wchar_t end = 0;
+        if (swscanf(size, L"%dx%d%lc", &w, &h, &end) == 2 && w >= 320 && h >= 240 && w <= 16384 && h <= 16384) {
+          args->window_w = w;
+          args->window_h = h;
+          continue;
+        }
+      }
+      const wchar_t *page = !wcscmp(a, L"--page") && i + 1 < argc ? args->argv[++i]
+                            : !wcsncmp(a, L"--page=", 7)         ? a + 7
+                                                                 : NULL;
+      if (page && *page) {
+        args->page = page;
+        continue;
+      }
       /* unknown, or no folder */
       MessageBoxW(NULL, mc_wstr(MC_STR_WINDOWS_USAGE), mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONWARNING);
       return 2;
@@ -2475,6 +2531,87 @@ static void free_args(app_args *args) {
   free(args->paths);
   if (args->argv) LocalFree(args->argv);
   memset(args, 0, sizeof *args);
+}
+
+/* --page's page, once the library's open: home, albums, artists, album:<title>,
+ * artist:<name> or search:<text>. FALSE to try again shortly, as the album grid may not have
+ * the album yet; TRUE once it's open, or can't be (an unknown page, a title not there). */
+static BOOL open_start_page(const char *page) {
+  if (!g_app.lib) return TRUE;
+  if (!strcmp(page, "home")) show_page(PAGE_HOME);
+  else if (!strcmp(page, "albums")) show_page(PAGE_ALBUMS);
+  else if (!strcmp(page, "artists")) show_page(PAGE_ARTISTS);
+  else if (!strncmp(page, "search:", 7)) {
+    show_page(PAGE_SEARCH);
+    wchar_t *text = wstr_dup_from_utf8(page + 7);
+    if (text) search_view_set_text(text);
+    free(text);
+  } else if (!strncmp(page, "album:", 6)) {
+    char uid[MC_UID_STRLEN] = "";
+    mc_album_list *list = NULL;
+    if (mc_library_list_albums(g_app.lib, &list) == MC_OK)
+      for (int i = 0; i < list->count && !uid[0]; i++)
+        if (list->items[i].title && !strcmp(list->items[i].title, page + 6)) snprintf(uid, sizeof uid, "%s", list->items[i].uid);
+    mc_album_list_free(list);
+    if (!uid[0]) return TRUE;
+    show_page(PAGE_ALBUMS);
+    if (!album_grid_select(uid)) return FALSE;
+    show_album(); /* as open_album() does */
+    album_grid_select(uid);
+  } else if (!strncmp(page, "artist:", 7)) {
+    char uid[MC_UID_STRLEN] = "";
+    mc_artist_list *list = NULL;
+    if (mc_library_list_artists(g_app.lib, &list) == MC_OK)
+      for (int i = 0; i < list->count && !uid[0]; i++)
+        if (list->items[i].name && !strcmp(list->items[i].name, page + 7)) snprintf(uid, sizeof uid, "%s", list->items[i].uid);
+    mc_artist_list_free(list);
+    if (!uid[0]) return TRUE;
+    show_page(PAGE_ARTISTS);
+    if (!artist_view_open(uid)) return FALSE;
+    artist_opened();
+  }
+  return TRUE;
+}
+
+/* --demo-library: the demo library in <config dir>\demo-library, made if it isn't there, as
+ * the settings' library. FALSE (having said why) if they name another library already, so a
+ * real config folder never loses its library to it, or if it can't be made. */
+static BOOL use_demo_library(void) {
+  size_t n = strlen(g_app.config_dir) + sizeof "\\" MC_DEMO_DIR_NAME;
+  char *dir = malloc(n);
+  if (!dir) return FALSE;
+  snprintf(dir, n, "%s\\%s", g_app.config_dir, MC_DEMO_DIR_NAME);
+  const char *current = mc_settings_library_dir(g_app.settings);
+  wchar_t text[2 * MAX_PATH + 256];
+  BOOL ok = FALSE;
+  if (current && _stricmp(current, dir)) {
+    mc_wformat(text, 2 * MAX_PATH + 256, mc_str(MC_STR_DEMO_LIBRARY_OTHER), MC_S(current));
+    message_dialog(NULL, mc_wstr(MC_STR_APP_NAME), text, MB_ICONERROR);
+  } else {
+    mc_status st = mc_demo_is_complete(dir) ? MC_OK : mc_demo_create(dir, NULL);
+    if (st != MC_OK) {
+      mc_wformat(text, 2 * MAX_PATH + 256, mc_str(MC_STR_DEMO_LIBRARY_FAILED), MC_S(dir), MC_S(mc_status_str(st)));
+      message_dialog(NULL, mc_wstr(MC_STR_APP_NAME), text, MB_ICONERROR);
+    } else {
+      ok = TRUE;
+      if (!current && mc_settings_set_library_dir(g_app.settings, dir) == MC_OK) mc_settings_save(g_app.settings);
+    }
+  }
+  free(dir);
+  return ok;
+}
+
+/* --window-size: the window resized so the frame DWM draws, without the invisible resize
+ * borders around it, is w x h. After it's shown, when DWM knows those borders. */
+static void set_window_size(HWND wnd, int w, int h) {
+  RECT outer, frame;
+  int dx = 0, dy = 0;
+  GetWindowRect(wnd, &outer);
+  if (SUCCEEDED(DwmGetWindowAttribute(wnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof frame))) {
+    dx = (outer.right - outer.left) - (frame.right - frame.left);
+    dy = (outer.bottom - outer.top) - (frame.bottom - frame.top);
+  }
+  SetWindowPos(wnd, NULL, 0, 0, w + dx, h + dy, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 /* Where settings.json and sync.db live: --config-dir made absolute, or
@@ -3063,6 +3200,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     free_args(&args);
     return exit_code;
   }
+  g_window_w = args.window_w;
+  g_window_h = args.window_h;
 
   CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE); /* folder picker */
 
@@ -3107,7 +3246,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   mc_plugins_load(g_app.settings, NULL, 0);
   /* From a checkout there's no asking: a library in the temp folder, unless a test wants the
    * first run itself. If that fails, the first run asks, with no Music folder to offer. */
-  if (g_app.from_source && !first_run_test_music()) mc_source_library_prepare(g_app.config_dir, g_app.settings);
+  if (args.demo_library && !use_demo_library()) {
+    mc_plugins_unload();
+    mc_settings_free(g_app.settings);
+    free(g_app.config_dir);
+    free_args(&args);
+    return 2;
+  }
+  if (g_app.from_source && !args.demo_library && !first_run_test_music())
+    mc_source_library_prepare(g_app.config_dir, g_app.settings);
   BOOL first_run = !mc_settings_library_dir(g_app.settings);
   if (!first_run) g_app.lib = open_library(mc_settings_library_dir(g_app.settings)); /* on failure the window says so */
   mc_perf_mark("library_opened");
@@ -3149,6 +3296,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     ReleaseDC(wnd, screen);
   }
   ShowWindow(wnd, show);
+  if (args.window_w) set_window_size(wnd, args.window_w, args.window_h);
   mc_perf_mark("window_shown");
   if (first_run && !open_first_library()) {
     DestroyWindow(wnd); /* the first run was closed: quit */
@@ -3164,6 +3312,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     mc_perf_mark("sync_started");
     const wchar_t *perf_run = _wgetenv(L"KITHSONG_PERF_RUN");
     if (perf_run && *perf_run) SetTimer(wnd, TIMER_PERF_RUN, 2000, NULL); /* once it has settled */
+    if (args.page && (g_start_page = utf8_from_wide(args.page))) SetTimer(wnd, TIMER_START_PAGE, START_PAGE_MS, NULL);
   }
   free_args(&args);
 

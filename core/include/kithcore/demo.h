@@ -10,8 +10,8 @@
  * mc_demo_create() puts it in a library through the importer, with tagging skipped: the rows
  * are what an import of tagged files leaves, with no MusicBrainz lookup and no network. The
  * library's uids and times are an import's, so those differ between runs; names, numbers,
- * order, covers and audio don't. A few albums are opened afterwards, newest last, so the
- * recents and Home have something in them.
+ * order, covers and audio don't. A few albums are opened afterwards, newest last, and a few
+ * tracks played a few times, so the recents, Home and Most Played have something in them.
  *
  * It's an ordinary library otherwise: nothing stops it syncing, so frontends open it only in
  * a config folder of its own (desktop --demo-library, Android's debug store_demo extra). */

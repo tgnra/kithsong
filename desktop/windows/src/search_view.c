@@ -1249,6 +1249,10 @@ void search_view_focus(void) {
   SendMessageW(v.edit, EM_SETSEL, 0, -1);
 }
 
+void search_view_set_text(const wchar_t *text) {
+  if (v.edit) SetWindowTextW(v.edit, text); /* EN_CHANGE searches */
+}
+
 const search_view_hit *search_view_opened(void) {
   return &v.opened;
 }

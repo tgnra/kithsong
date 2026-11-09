@@ -514,9 +514,24 @@ static mc_status import_all(mc_library *lib, const char *src) {
   return st;
 }
 
+/* Plays of track t of album a: a few tracks played a few times, for Most Played. */
+static int track_plays(int a, int t) {
+  int n = (a * 5 + t * 3) % 7;
+  return n > 3 ? n - 3 : 0;
+}
+
 static mc_status open_some(mc_library *lib) {
   mc_album_list *list = NULL;
   mc_status st = mc_library_list_albums(lib, &list);
+  for (int i = 0; st == MC_OK && i < list->count; i++) {
+    int a = 0;
+    while (a < MC_DEMO_ALBUMS && strcmp(k_albums[a].title, list->items[i].title ? list->items[i].title : "")) a++;
+    mc_track_list *tracks = NULL;
+    if (a == MC_DEMO_ALBUMS || mc_library_list_album_tracks(lib, list->items[i].uid, &tracks) != MC_OK) continue;
+    for (int t = 0; t < tracks->count && st == MC_OK; t++)
+      for (int p = track_plays(a, t); p > 0 && st == MC_OK; p--) st = mc_library_record_play(lib, tracks->items[t].uid);
+    mc_track_list_free(tracks);
+  }
   for (size_t k = 0; k < sizeof k_opened / sizeof *k_opened && st == MC_OK; k++) {
     const demo_album *al = &k_albums[k_opened[k]];
     st = MC_ERR_NOT_FOUND;

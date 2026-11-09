@@ -61,6 +61,9 @@ void search_view_set_library(mc_library *lib);
 /* Puts the focus in the search box. */
 void search_view_focus(void);
 
+/* Searches for text, as if it had been typed into the box (--page search:<text>). */
+void search_view_set_text(const wchar_t *text);
+
 /* The result of the last SVN_OPEN. */
 const search_view_hit *search_view_opened(void);
 
