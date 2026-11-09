@@ -20,6 +20,11 @@ val abiOverride = (findProperty("kithsongAbis") as String?)?.split(",")?.map(Str
 if (abiOverride != null && releaseRun) {
     throw GradleException("-PkithsongAbis is for development: a release has to carry every ABI")
 }
+// A run of nothing but JVM unit tests: they can't load the native core, so it isn't built for them. The
+// store screenshot tests merge the apps' assets, which would otherwise build it for the licences.
+val unitTestsOnly = requestedTasks.isNotEmpty() && requestedTasks.all {
+    it.substringAfterLast(":").let { name -> name.endsWith("UnitTest") || name == "test" }
+}
 val phoneOnly = requestedTasks.isNotEmpty() && requestedTasks.all { it.removePrefix(":").startsWith("app:") }
 val nativeAbis = abiOverride ?: listOf("arm64-v8a", "x86_64") + if (phoneOnly) emptyList() else listOf("armeabi-v7a")
 
@@ -102,10 +107,15 @@ abstract class NativeLicenseAssets : DefaultTask() {
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
+    /** Whether no texts is fine: a unit-test run builds no native code, so CMake never wrote them. */
+    @get:Input
+    abstract val allowMissing: Property<Boolean>
+
     @TaskAction
     fun copy() {
         val out = outputDir.get().asFile.resolve("licenses/native")
         out.deleteRecursively()
+        if (allowMissing.get() && !licenses.get().asFile.isDirectory) return
         val abi = licenses.get().asFile.listFiles { f -> f.resolve("index.tsv").isFile }?.minOrNull()
             ?: throw GradleException("No native license texts in ${licenses.get()}; did CMake run?")
         abi.copyRecursively(out)
@@ -116,8 +126,9 @@ androidComponents.onVariants { variant ->
     val name = variant.name.replaceFirstChar(Char::uppercase)
     val task = tasks.register<NativeLicenseAssets>("generate${name}NativeLicenseAssets") {
         licenses.set(licensesDir)
+        allowMissing.set(unitTestsOnly)
         // CMake writes them when it configures, which the native build does first.
-        dependsOn(tasks.matching { it.name == "externalNativeBuild$name" })
+        if (!unitTestsOnly) dependsOn(tasks.matching { it.name == "externalNativeBuild$name" })
     }
     variant.sources.assets?.addGeneratedSourceDirectory(task, NativeLicenseAssets::outputDir)
 }

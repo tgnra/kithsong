@@ -55,14 +55,26 @@ android {
     buildFeatures {
         compose = true
     }
-    // Screenshot tests (src/test/.../screenshots): Robolectric draws the Compose UI on the JVM
-    // and Roborazzi saves it, so they need the app's resources.
+    // The store screenshot tests (src/test/.../screenshots) run only when asked for, with
+    // -PkithsongScreenshots: Robolectric draws the Compose UI on the JVM, Roborazzi saves it, and
+    // the PNGs land in build/outputs/store-screenshots. Without the property they're left out,
+    // and so are the merged resources they need, so a plain testDebugUnitTest is as before.
+    val storeScreenshots = providers.gradleProperty("kithsongScreenshots").isPresent
     testOptions {
-        unitTests.isIncludeAndroidResources = true
+        unitTests.isIncludeAndroidResources = storeScreenshots
         unitTests.all {
-            it.systemProperty("roborazzi.test.record", "true")
-            // Robolectric reaches into java.base on newer JDKs.
-            it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED", "--enable-native-access=ALL-UNNAMED")
+            if (storeScreenshots) {
+                it.filter.includeTestsMatching("*.screenshots.*")
+                it.systemProperty("roborazzi.test.record", "true")
+                it.systemProperty("kithsong.screenshots.out", layout.buildDirectory.dir("outputs/store-screenshots").get().asFile.path)
+                // Robolectric reaches into java.base on newer JDKs.
+                it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED", "--enable-native-access=ALL-UNNAMED")
+                it.maxHeapSize = "2g"
+                // Always drawn again: what they show changes without the tests changing.
+                it.outputs.upToDateWhen { false }
+            } else {
+                it.exclude("**/screenshots/**")
+            }
         }
     }
 }

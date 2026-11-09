@@ -56,14 +56,25 @@ android {
     buildFeatures {
         compose = true
     }
-    // Screenshot tests (src/test/.../screenshots): Robolectric draws the Compose UI on the JVM
-    // and Roborazzi saves it, so they need the app's resources.
+    // The store screenshot tests, only with -PkithsongScreenshots, as on the phone (see
+    // app/build.gradle.kts). The PNGs land in build/outputs/store-screenshots.
+    val storeScreenshots = providers.gradleProperty("kithsongScreenshots").isPresent
     testOptions {
-        unitTests.isIncludeAndroidResources = true
+        unitTests.isIncludeAndroidResources = storeScreenshots
         unitTests.all {
-            it.systemProperty("roborazzi.test.record", "true")
-            // Robolectric reaches into java.base on newer JDKs.
-            it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED", "--enable-native-access=ALL-UNNAMED")
+            if (storeScreenshots) {
+                it.filter.includeTestsMatching("*.screenshots.*")
+                it.systemProperty("roborazzi.test.record", "true")
+                it.systemProperty("kithsong.screenshots.out", layout.buildDirectory.dir("outputs/store-screenshots").get().asFile.path)
+                // Robolectric reaches into java.base on newer JDKs.
+                it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED", "--enable-native-access=ALL-UNNAMED")
+                it.maxHeapSize = "2g"
+                it.outputs.upToDateWhen { false }
+            } else {
+                it.exclude("**/screenshots/**")
+                // They're the watch's only tests so far, so a plain run finds none, which is fine.
+                it.failOnNoDiscoveredTests.set(false)
+            }
         }
     }
 }
