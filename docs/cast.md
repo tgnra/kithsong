@@ -1,8 +1,9 @@
 # Google Cast
 
 > Status: Android casts through Google's Cast SDK (`android/.../cast/`). On Windows and Linux
-> the core is the sender (`core/include/kithcore/cast.h`, `core/src/cast/`), and Linux has
-> the cast button and picker (Frontends, below). Change this document first, then the code.
+> the core is the sender (`core/include/kithcore/cast.h`, `core/src/cast/`), and both have
+> the cast button and picker (Frontends, below); Windows' is not yet compiled or tried on a
+> device. Change this document first, then the code.
 
 ## Goals
 
@@ -131,3 +132,9 @@ all along (it slows to a query every 20 s), so the cast button can wait for a de
   `MC_STR_CAST_FAILED`, `MC_STR_CAST_LOST`.
 
 Linux: `desktop/linux/src/cast_button.c`, with the handle and the volume in `playback.c`.
+
+Windows: `desktop/windows/src/cast_popup.c` and the button in `main.c`, with the handle and the
+volume in `playback.c`. The failed and lost messages show in the now-playing strip, as other
+passing troubles do. The keyboard's volume keys reach the device only while the window has the
+focus. The firewall rule that sync asks for (`firewall.c`, and the MSIX manifest) covers this
+exe on any port, so it covers the music server too.
