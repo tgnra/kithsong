@@ -17,6 +17,7 @@
 #include "mdns.h"
 #include "test.h"
 #include "discovery/discovery_test.h"
+#include "fake_mdns.h"
 #include "util/platform.h"
 
 #define SKIP 77
@@ -246,15 +247,9 @@ int main(void) {
   WSADATA wsa;
   WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif
-  /* Sent on the default interface and on loopback, which discovery also listens on, in
-   * case a firewall drops the first. */
-  struct sockaddr_in loopback;
-  memset(&loopback, 0, sizeof loopback);
-  loopback.sin_family = AF_INET;
-  loopback.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  int socks[2] = {mdns_socket_open_ipv4(NULL), mdns_socket_open_ipv4(&loopback)}, sent = 0;
-  for (int i = 0; i < 2; i++) {
-    if (socks[i] < 0) continue;
+  /* Sent on each interface discovery listens on (fake_mdns.h says why not the default). */
+  int socks[MC_MSOCKS_MAX], nsocks = fake_mdns_open(socks, MC_MSOCKS_MAX), sent = 0;
+  for (int i = 0; i < nsocks; i++) {
     if (fake_announce(socks[i], FAKE_OLD_INSTANCE, FAKE_OLD_DEV, "2") == 0 &&
         fake_announce(socks[i], FAKE_INSTANCE, FAKE_DEV, "1") == 0)
       sent = 1;

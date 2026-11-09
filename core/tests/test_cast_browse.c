@@ -18,6 +18,7 @@
 #endif
 
 #include "kithcore/kithcore.h"
+#include "fake_mdns.h"
 #include "mdns.h"
 #include "test.h"
 #include "util/platform.h"
@@ -53,8 +54,8 @@ static mdns_record_t txt(const char *key, const char *value) {
   return r;
 }
 
-/* Announces the fake device as a Chromecast does (or says goodbye), on the default interface
- * and on loopback. 1 if it went out on either. */
+/* Announces the fake device as a Chromecast does (or says goodbye), on each interface the
+ * browser listens on (fake_mdns.h). 1 if it went out on any. */
 static int announce(const char *name, int goodbye) {
   mdns_record_t ptr, extra[5];
   memset(&ptr, 0, sizeof ptr);
@@ -73,14 +74,9 @@ static int announce(const char *name, int goodbye) {
   extra[2] = txt("id", "0123abcdef");
   extra[3] = txt("fn", name);
   extra[4] = txt("md", "Chromecast");
-  struct sockaddr_in loopback;
-  memset(&loopback, 0, sizeof loopback);
-  loopback.sin_family = AF_INET;
-  loopback.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  int socks[2] = {mdns_socket_open_ipv4(NULL), mdns_socket_open_ipv4(&loopback)}, sent = 0;
+  int socks[MC_MSOCKS_MAX], nsocks = fake_mdns_open(socks, MC_MSOCKS_MAX), sent = 0;
   uint32_t buf[512];
-  for (int i = 0; i < 2; i++) {
-    if (socks[i] < 0) continue;
+  for (int i = 0; i < nsocks; i++) {
     int r = goodbye ? mdns_goodbye_multicast(socks[i], buf, sizeof buf, ptr, NULL, 0, extra, 5)
                     : mdns_announce_multicast(socks[i], buf, sizeof buf, ptr, NULL, 0, extra, 5);
     if (r == 0) sent = 1;
@@ -89,15 +85,19 @@ static int announce(const char *name, int goodbye) {
   return sent;
 }
 
-/* Waits up to ms for the list to have count devices, the first named name (if not NULL);
- * copies it to *out. */
+/* Waits up to ms for the list to have the fake device count times (0 or 1), named name (if
+ * not NULL); copies it to *out. */
 static int wait_devices(mc_cast *cast, int count, const char *name, unsigned ms, mc_cast_device *out) {
   uint64_t end = mc_mono_ms() + ms;
   do {
     mc_cast_device_list *list = NULL;
     if (mc_cast_devices(cast, &list) == MC_OK) {
-      int ok = list->count == count && (!name || !strcmp(list->items[0].name, name));
-      if (ok && count && out) *out = list->items[0];
+      /* Only the fake device counts: a real one may be on the network too. */
+      int n = 0, at = -1;
+      for (int i = 0; i < list->count; i++)
+        if (!strcmp(list->items[i].id, "0123abcdef")) n++, at = i;
+      int ok = n == count && (!name || !strcmp(list->items[at].name, name));
+      if (ok && count && out) *out = list->items[at];
       mc_cast_device_list_free(list);
       if (ok) return 1;
     }
