@@ -302,6 +302,7 @@ void playback_init(GtkWindow *win, void (*changed)(void *user), void *user) {
   s.user = user;
   s.index = s.announced = -1;
   s.volume = 100;
+  volume_button_update(); /* made before, when the volume read 0; settings at 100 don't change it */
   cast_init();
 }
 
