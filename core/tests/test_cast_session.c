@@ -98,7 +98,10 @@ static void receiver_status(fake *f, long request) {
   fake_send(f, "receiver-0", CAST_NS_RECEIVER, json);
 }
 
-static void media_status(fake *f, long request, int with_items, const char *foreign) {
+/* A MEDIA_STATUS: with the queue's item ids if with_items, someone else's media if foreign,
+ * and without the current item's media if bare, as receivers leave it out once they've
+ * said it. */
+static void media_status_as(fake *f, long request, int with_items, const char *foreign, int bare) {
   char json[4096], items[2048] = "";
   mc_mutex_lock(&f->lock);
   if (!f->nitems && !foreign) {
@@ -113,11 +116,15 @@ static void media_status(fake *f, long request, int with_items, const char *fore
   const char *url = foreign ? foreign : f->urls[f->current];
   snprintf(json, sizeof json,
            "{\"type\":\"MEDIA_STATUS\",\"requestId\":%ld,\"status\":[{\"mediaSessionId\":1,\"playerState\":\"%s\","
-           "\"currentTime\":0.5,\"currentItemId\":%d,\"media\":{\"contentId\":\"%s\"}%s%s%s}]}",
-           request, f->state, foreign ? 99 : f->items[f->current], url, with_items ? ",\"items\":[" : "", items,
-           with_items ? "]" : "");
+           "\"currentTime\":0.5,\"currentItemId\":%d%s%s%s%s%s%s}]}",
+           request, f->state, foreign ? 99 : f->items[f->current], bare ? "" : ",\"media\":{\"contentId\":\"",
+           bare ? "" : url, bare ? "" : "\"}", with_items ? ",\"items\":[" : "", items, with_items ? "]" : "");
   mc_mutex_unlock(&f->lock);
   fake_send(f, "web-1", CAST_NS_MEDIA, json);
+}
+
+static void media_status(fake *f, long request, int with_items, const char *foreign) {
+  media_status_as(f, request, with_items, foreign, 0);
 }
 
 static void note(fake *f, const char *ns, const char *type) {
@@ -210,7 +217,8 @@ static void serve(fake *f) {
     if (push == 2 && f->current + 1 < f->nitems) f->current++;
     mc_mutex_unlock(&f->lock);
     if (quit || push == 4) break; /* 4: drop the connection */
-    if (push == 1 || push == 2) media_status(f, 0, 0, NULL);
+    if (push == 1) media_status(f, 0, 0, NULL);
+    if (push == 2) media_status_as(f, 0, 0, NULL, 1); /* the item id alone says it moved on */
     if (push == 3) media_status(f, 0, 0, "http://elsewhere/video.mp4");
     int n = mbedtls_ssl_read(&f->ssl, f->buf + f->len, sizeof f->buf - f->len);
     if (n == MBEDTLS_ERR_SSL_TIMEOUT || n == MBEDTLS_ERR_SSL_WANT_READ) continue;

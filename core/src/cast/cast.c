@@ -123,6 +123,7 @@ struct session {
   int items_known, nitems;
   int items[CAST_MAX_ITEMS];
   int loaded_n;                /* items in the last QUEUE_LOAD, to tell them apart by order */
+  int inserted;                /* the queued item was added at the end since the queue was last listed */
   struct { unsigned id; int item; } map[MAX_MAP];
   int nmap;
   int pending_next;            /* a change of the queued item waits: */
@@ -615,12 +616,16 @@ static void learn_items(session *s, const cast_media_status *m) {
       named = 1;
     }
   }
-  /* Without media in the list, a queue as loaded is in the order it was loaded. */
+  /* Without media in the list, a queue as loaded is in the order it was loaded, and an item
+   * inserted is at the end. */
   if (!named && s->loaded_n && m->nitems == s->loaded_n) {
     map_set(s, s->dev_current, m->items[0].item_id);
     if (s->loaded_n > 1) map_set(s, s->dev_queued, m->items[1].item_id);
   }
+  if (s->inserted && s->dev_queued && m->nitems && !id_of_item(s, m->items[m->nitems - 1].item_id))
+    map_set(s, s->dev_queued, m->items[m->nitems - 1].item_id);
   s->loaded_n = 0;
+  s->inserted = 0;
 }
 
 static int has_item_after(const session *s, int item) {
@@ -650,6 +655,10 @@ static void media_status(session *s, const cast_media_status *m) {
     return;
   }
   if (!on && m->current_item_id) on = id_of_item(s, m->current_item_id);
+  /* An item it's on that we can't name, with the current one known: the device has only ever
+   * the current item and the queued one (and those played, which are named), so it's that. */
+  if (!on && m->current_item_id && s->current_item && m->current_item_id != s->current_item && s->dev_queued)
+    on = s->dev_queued;
   if (on && m->current_item_id) map_set(s, on, m->current_item_id);
   if (on && on == s->dev_queued && on != s->dev_current) {
     /* It went on to the queued item by itself. */
@@ -748,6 +757,7 @@ static void do_load(session *s, const op *load, const op *queue) {
   s->items_known = 0;
   s->nmap = 0;
   s->loaded_n = n;
+  s->inserted = 0;
   s->pending_next = 0;
   free(s->next_path);
   s->next_path = NULL;
@@ -791,6 +801,7 @@ static void apply_next(session *s) {
     added = send_media(s, request, cast_json_queue_insert(request, s->msid, &info.item, 1, PRELOAD_S)) == MC_OK;
     item_free(&info);
   }
+  s->inserted = added;
   if (!added) s->dev_queued = 0;
   if (n || added) s->items_known = 0; /* the next status lists them */
   s->pending_next = 0;
@@ -955,6 +966,7 @@ static int cast_loop(session *s) {
     if (r < 0 || now - s->last_rx > SILENT_MS) {
       if (stopping(s)) return 1;
       if (!reconnect(s)) {
+        if (stopping(s)) return 1; /* asked to end meanwhile */
         report(s, REPORT_DROPPED, 0);
         end_session(s, MC_CAST_END_LOST, 0);
         return 1;
