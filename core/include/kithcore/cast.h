@@ -3,8 +3,9 @@
  * sender: it finds devices on the network (mDNS, "_googlecast._tcp"), talks the Cast
  * protocol to them, and serves them the music. See docs/cast.md.
  *
- * Using it. One handle for the app's life, from mc_cast_new(). While a device picker is open,
- * mc_cast_start_discovery(), and mc_cast_devices() on each MC_CAST_EVENT_DEVICES; a pick is
+ * Using it. One handle for the app's life, from mc_cast_new(). mc_cast_start_discovery() while
+ * devices are wanted (the desktops run it all along, so the cast button can show only when
+ * there's a device), and mc_cast_devices() on each MC_CAST_EVENT_DEVICES; a pick is
  * mc_cast_connect() with the player; "Stop casting" is mc_cast_disconnect(). The rest of the
  * UI reads mc_cast_status_get() on MC_CAST_EVENT_STATE and MC_CAST_EVENT_VOLUME: whether it's
  * connecting or casting, the device's name, and its volume, which mc_cast_set_volume() sets.
