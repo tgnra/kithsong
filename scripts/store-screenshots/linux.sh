@@ -16,6 +16,13 @@
 # separated list of home albums album artist search) can be set.
 set -euo pipefail
 
+# Under a session bus of its own where there's dbus-run-session, so the app can't reach the
+# desktop's (a CI runner has none). The whole script, not each run: killing a wrapper would
+# leave the app running.
+if [[ -z "${KITHSONG_SHOTS_BUS:-}" ]] && command -v dbus-run-session >/dev/null; then
+    KITHSONG_SHOTS_BUS=1 exec dbus-run-session -- bash "${BASH_SOURCE[0]}" "$@"
+fi
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 out="${1:-out/linux}"
 width="${WIDTH:-1600}"
@@ -100,20 +107,18 @@ has_window() {
     [[ "$tree" == *'"app_id": "ng.kithso.Kithsong"'* ]]
 }
 
-# The app under a session bus of its own where there's dbus-run-session, so it can't reach the
-# desktop's (a CI runner has none).
-run_bus=()
-command -v dbus-run-session >/dev/null && run_bus=(dbus-run-session --)
-
 for theme in light dark; do
     for shot in "${shots[@]}"; do
         page="$(page_of "$shot")"
         home="$scratch/$shot-$theme"
         mkdir -p "$home/config/kithsong" "$home/data" "$home/cache"
         printf '{"device_name": "%s", "firewall_dont_ask": true}\n' "$device_name" >"$home/config/kithsong/settings.json"
+        # GNOME's font: with no desktop settings to read, GTK would take fontconfig's Sans.
+        mkdir -p "$home/config/gtk-4.0"
+        printf '[Settings]\ngtk-font-name=Cantarell 11\n' >"$home/config/gtk-4.0/settings.ini"
         XDG_CONFIG_HOME="$home/config" XDG_DATA_HOME="$home/data" XDG_CACHE_HOME="$home/cache" \
             KITHSONG_THEME="$theme" GDK_BACKEND=wayland GSETTINGS_BACKEND=memory NO_AT_BRIDGE=1 \
-            "${run_bus[@]}" "$scratch/app/bin/kithsong" --demo-library --window-size "${width}x${height}" \
+            "$scratch/app/bin/kithsong" --demo-library --window-size "${width}x${height}" \
             --page "$page" >"$home/app.log" 2>&1 &
         app_pid=$!
         shown=""
@@ -146,13 +151,23 @@ for theme in light dark; do
             sleep 1
         done
         echo "$file"
+        # Gone before the next starts: else its window shares the output, and the next one
+        # finds it on the network as another device.
         kill "$app_pid" 2>/dev/null || true
+        for _ in $(seq 50); do
+            kill -0 "$app_pid" 2>/dev/null || break
+            sleep 0.1
+        done
+        kill -9 "$app_pid" 2>/dev/null || true
         wait "$app_pid" 2>/dev/null || true
         app_pid=""
-        # The next window mustn't be taken for this one.
         for _ in $(seq 50); do
             has_window || break
             sleep 0.1
         done
+        if has_window; then
+            echo "The window is still there after the app was stopped ($shot, $theme)." >&2
+            exit 1
+        fi
     done
 done
