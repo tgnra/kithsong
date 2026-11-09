@@ -37,6 +37,15 @@
  * up next cuts them from the buffer first (up_settle()). Starting something new clears up next,
  * so what it replaces goes with the old list; a list only brought back keeps it (up_rehome()).
  *
+ * Remote mode (playback/remote.h) plays the queue on another device, for Google Cast. The
+ * queue, the order, up next and stations work as ever; what changes is the end of the chain.
+ * There's no source and no buffer: a command loads its item on the remote instead of opening
+ * it here, and the item after it is queued there instead of decoded after it. Frames become
+ * milliseconds (rate is 1000), and played is a clock that runs while the remote says it's
+ * playing, so segments, counting plays and the play log all work as they do here. The
+ * remote's reports move the clock, the position in the item, and the player on to the queued
+ * item when the remote gets there.
+ *
  * The callback copies out of the ring buffer, applies the volume and counts. A flush (seek,
  * skip, stop) resets the buffer from the player thread, so the two share a spinlock that the
  * callback holds just for the copy (and the volume). Everything else is under the mutex; the thread drops it while
@@ -52,6 +61,7 @@
 #include "library/library_internal.h"
 #include "miniaudio.h"
 #include "playback/decoder.h"
+#include "playback/remote.h"
 #include "playback/shuffle.h"
 #include "util/platform.h"
 
@@ -70,9 +80,15 @@ enum {
   FADE_MS = 10, /* a volume change goes all the way from silence to full in this long */
   RADIO_AHEAD = 5, /* tracks a station keeps queued after the current one: skips use them up */
   RADIO_MAX_FAILS = 8, /* items in a row that won't open before a station gives up */
+  REMOTE_RATE = 1000,      /* remote mode's frames: milliseconds */
+  REMOTE_WAKE_MS = 250,    /* how often the thread counts what a remote has played */
+  REMOTE_OPEN_RATE = 48000, /* items are opened at this rate while remote, just to check them */
+  REMOTE_MAX_FAILS = 3,    /* items in a row a remote can't play before the player stops */
 };
 
 #define NO_CUT UINT64_MAX
+/* The start of a segment queued on a remote that hasn't got to it yet. */
+#define NOT_YET UINT64_MAX
 
 /* --- Sources --- */
 
@@ -167,6 +183,7 @@ typedef struct segment {
   mc_play_event event; /* that row as it starts: which track, and from what */
   uint32_t entry;      /* the up next entry it's from, or 0 */
   int waiting;         /* ...and it's still there, till it's heard */
+  unsigned rid;        /* remote mode: the id it has on the remote, or 0 if it hasn't one */
 } segment;
 
 typedef struct counted_play {
@@ -236,6 +253,7 @@ struct mc_player {
   int64_t cmd_ms;
   mc_player_state cmd_state;
   int cmd_seek;  /* the CMD_START is a seek */
+  int cmd_quiet; /* ...and opens no play log row until the item is heard: a handover */
   mc_play_end cmd_end; /* what the command makes of the play it ends */
   unsigned gen;  /* bumped by every command, so the thread can tell its work went stale */
   int current;   /* the current item while there are no segments; -1 with an empty queue */
@@ -285,6 +303,21 @@ struct mc_player {
   float *cut_frames; /* a buffer's worth, for cut_buffer() */
 
   int volume, muted; /* under lock, as set */
+
+  /* Remote mode, under lock. */
+  const mc_remote_ops *remote; /* NULL while playing here */
+  void *remote_user;
+  ma_uint32 local_rate; /* rate, while remote has it at REMOTE_RATE */
+  uint64_t r_base;      /* played, as of r_since */
+  uint64_t r_since;     /* when the remote was last heard starting to play (mono ms), while r_running */
+  int r_running;        /* the clock runs: the remote said it's playing */
+  unsigned r_ids;       /* ids given out */
+  unsigned r_loaded;    /* what the remote has loaded, or 0 for nothing */
+  unsigned r_queued;    /* what's queued after it there, or 0 for nothing */
+  int r_queued_index;   /* ...and its item, or -1 */
+  int r_playing;        /* what the remote was last told, or said: playing, or paused */
+  int r_reload;         /* load again even if paused: the remote lost what it had */
+  int r_failures;       /* items in a row the remote couldn't play */
 
   /* Shared with the callback, under spin. */
   ma_spinlock spin;
@@ -366,7 +399,13 @@ static void on_audio(ma_device *device, void *output, const void *input, ma_uint
   ma_spinlock_unlock(&p->spin);
 }
 
+/* Remote mode's clock. Under lock. */
+static uint64_t remote_played(const mc_player *p) {
+  return p->r_base + (p->r_running ? mc_mono_ms() - p->r_since : 0);
+}
+
 static uint64_t played_frames(mc_player *p) {
+  if (p->remote) return remote_played(p);
   ma_spinlock_lock(&p->spin);
   uint64_t played = p->played;
   ma_spinlock_unlock(&p->spin);
@@ -388,6 +427,13 @@ static void flush(mc_player *p) {
  * (cut_buffer()). Until then the callback stops at the cut, so none of it is heard, not even
  * if the audible item runs out first. */
 static void cut_after_audible(mc_player *p) {
+  if (p->remote) { /* nothing is buffered: what's queued on the remote is replaced instead */
+    uint64_t played = remote_played(p);
+    int keep = 1;
+    while (keep < p->nsegs && played >= p->segs[keep].start) keep++;
+    p->nsegs = keep;
+    return;
+  }
   ma_spinlock_lock(&p->spin);
   int keep = 1;
   while (keep < p->nsegs && p->played >= p->segs[keep].start) keep++;
@@ -747,7 +793,7 @@ static source *open_from(mc_player *p, int *pos, int *index, uint32_t *entry, in
                          unsigned *events) {
   for (int tries = 0; *index >= 0 && tries < p->count; tries++) {
     char *path = mc_strdup(p->queue[*index]);
-    ma_uint32 rate = p->rate;
+    ma_uint32 rate = p->remote ? REMOTE_OPEN_RATE : p->rate;
     mc_mutex_unlock(&p->lock);
     mc_status err = MC_ERR_NOMEM;
     source *src = path ? source_open(path, rate, &err) : NULL;
@@ -879,11 +925,14 @@ static unsigned do_command(mc_player *p) {
   p->decoding = p->current = index;
   p->decoding_pos = p->current_pos = pos;
   p->segs[0] = (segment){index, pos, p->written, (uint64_t)ms * p->rate / 1000, source_duration_ms(src),
-                         !seek || moved, 1, log_item(p, index), entry, moved && entry};
+                         !seek || moved, 1, log_item(p, index), entry, moved && entry, 0};
   p->nsegs = 1;
   /* Logged now, so an item skipped or paused before a frame of it is heard still has its row.
-   * A seek carries on the row that's open; after a stop there's none, and it starts one. */
-  if (!seek || moved || !p->log_open) {
+   * A seek carries on the row that's open; after a stop there's none, and it starts one. A
+   * handover from a remote waits until it's heard. */
+  if (p->cmd_quiet) {
+    p->segs[0].logged = 0;
+  } else if (!seek || moved || !p->log_open) {
     events |= log_end(p, p->cmd_end);
     log_begin(p, &p->segs[0]);
   }
@@ -951,7 +1000,7 @@ static unsigned fill(mc_player *p) {
     p->decoding = index;
     p->decoding_pos = pos;
     p->segs[p->nsegs++] =
-      (segment){index, pos, p->written, 0, source_duration_ms(next), 1, 0, log_item(p, index), entry, entry != 0};
+      (segment){index, pos, p->written, 0, source_duration_ms(next), 1, 0, log_item(p, index), entry, entry != 0, 0};
   }
   return events;
 }
@@ -972,12 +1021,199 @@ static unsigned advance(mc_player *p) {
     mc_cond_broadcast(&p->feed_wake);
   }
   /* A station that hasn't caught up leaves a silence, which beats going back to its first track. */
-  if (p->drained && !p->src && played >= p->written && p->state != MC_PLAYER_STOPPED && !p->feeding) {
+  if (!p->remote && p->drained && !p->src && played >= p->written && p->state != MC_PLAYER_STOPPED && !p->feeding) {
     events |= log_end(p, MC_PLAY_END_FINISHED);
     stop_at_start(p);
     events |= EV(MC_PLAYER_EVENT_STATE) | EV(MC_PLAYER_EVENT_TRACK);
   }
   return events;
+}
+
+/* --- Remote mode: the player thread's side --- */
+
+/* Stops remote mode's clock: nothing is heard until the remote says it's playing. Under lock. */
+static void remote_hold(mc_player *p) {
+  p->r_base = remote_played(p);
+  p->r_running = 0;
+}
+
+/* The next id to give the remote: never 0, which means none. Under lock. */
+static unsigned remote_id(mc_player *p) {
+  if (!++p->r_ids) ++p->r_ids;
+  return p->r_ids;
+}
+
+/* What the remote's told of seg. Under lock. */
+static mc_remote_track remote_track(const mc_player *p, const segment *seg) {
+  mc_remote_track t;
+  t.index = seg->index;
+  t.path = seg->index >= 0 && seg->index < p->count ? p->queue[seg->index] : "";
+  t.duration_ms = seg->duration_ms;
+  return t;
+}
+
+/* How far into the current item: as snapshot() has it. Under lock, with segments. */
+static int64_t remote_position(mc_player *p) {
+  const segment *seg = &p->segs[0];
+  return (int64_t)(remote_played(p) - seg->start + seg->offset);
+}
+
+/* The remote stops and has nothing: the player stopped, or ran out. Under lock. */
+static void remote_unload(mc_player *p) {
+  if (p->r_loaded) p->remote->stop(p->remote_user);
+  p->r_loaded = p->r_queued = 0;
+  p->r_queued_index = -1;
+  p->r_playing = p->r_reload = 0;
+  remote_hold(p);
+}
+
+/* Loads the current item (segs[0]) on the remote at ms, playing or paused, under a new id.
+ * What was queued there goes with what it had. Under lock. */
+static void remote_load(mc_player *p, int64_t ms, int play) {
+  segment *seg = &p->segs[0];
+  remote_hold(p);
+  seg->rid = remote_id(p);
+  seg->start = remote_played(p);
+  seg->offset = (uint64_t)(ms > 0 ? ms : 0);
+  p->nsegs = 1; /* the item after it is queued afresh (remote_fill()) */
+  p->drained = 0;
+  p->decoding_pos = seg->pos;
+  mc_remote_track t = remote_track(p, seg);
+  p->remote->load(p->remote_user, seg->rid, &t, (int64_t)seg->offset, play);
+  p->r_loaded = seg->rid;
+  p->r_queued = 0;
+  p->r_queued_index = -1;
+  p->r_playing = play;
+  p->r_reload = 0;
+}
+
+/* do_command() for remote mode: the same, but the item is loaded on the remote, which is
+ * all a seek in what it has needs. Items are still opened here first, to skip those that
+ * won't open as playing here would, and for their length. */
+static unsigned remote_command(mc_player *p) {
+  int pos = p->cmd_pos, asked = p->cmd_index, index = asked;
+  uint32_t entry = p->cmd_entry;
+  int64_t ms = p->cmd_ms;
+  int seek = p->cmd_seek, quiet = p->cmd_quiet;
+  unsigned gen = p->gen, events = EV(MC_PLAYER_EVENT_STATE);
+  unsigned kept = count_heard(p, played_frames(p));
+  if (!seek) kept |= log_end(p, p->cmd_end);
+  events |= kept;
+  close_source(p); /* left from playing here, before the handover */
+  remote_hold(p);
+
+  if (p->cmd == CMD_STOP) {
+    p->cmd = CMD_NONE;
+    p->nsegs = 0;
+    p->state = MC_PLAYER_STOPPED;
+    remote_unload(p);
+    return events;
+  }
+  segment *seg = &p->segs[0];
+  if (seek && !quiet && p->r_loaded && p->nsegs && seg->index == index && seg->rid == p->r_loaded) {
+    p->cmd = CMD_NONE;
+    seg->start = played_frames(p);
+    seg->offset = (uint64_t)ms;
+    p->nsegs = 1; /* the command took up next's mark off what's queued: remote_fill() puts it back */
+    p->drained = 0;
+    if (!p->log_open) log_begin(p, seg);
+    p->remote->seek(p->remote_user, ms);
+    p->state = p->cmd_state;
+    return events | EV(MC_PLAYER_EVENT_TRACK);
+  }
+  source *src = open_from(p, &pos, &index, &entry, 0, gen, &events);
+  int64_t duration_ms = src ? source_duration_ms(src) : 0;
+  int opened = src != NULL;
+  source_close(src); /* the lock is held again: closing is quick */
+  if (gen != p->gen) return kept | (events & (EV(MC_PLAYER_EVENT_ERROR) | EV(MC_PLAYER_EVENT_ENDED)));
+  int moved = index != asked;
+  p->cmd = CMD_NONE;
+  events |= EV(MC_PLAYER_EVENT_TRACK);
+  if (!opened) {
+    events |= log_end(p, p->cmd_end);
+    remote_unload(p);
+    stop_at_start(p);
+    return events;
+  }
+  if (moved) ms = 0;
+  p->current = index;
+  p->current_pos = pos;
+  p->segs[0] = (segment){index, pos, 0, 0, duration_ms, !seek || moved, 1, log_item(p, index), entry, moved && entry, 0};
+  p->nsegs = 1;
+  if (quiet) {
+    p->segs[0].logged = 0;
+  } else if (!seek || moved || !p->log_open) {
+    events |= log_end(p, p->cmd_end);
+    log_begin(p, &p->segs[0]);
+  }
+  p->state = p->cmd_state;
+  remote_load(p, ms, p->state == MC_PLAYER_PLAYING);
+  return events;
+}
+
+/* fill() for remote mode: works out the item after the current one, as fill() would on
+ * reaching the end of it, and has the remote queue it, or queue another in its place when
+ * that has changed. Under lock. */
+static unsigned remote_fill(mc_player *p) {
+  unsigned events = 0;
+  if (!p->nsegs || !p->r_loaded) return 0; /* queued only behind something loaded */
+  if (p->nsegs == 1 && !p->drained) {
+    int pos = p->segs[0].pos;
+    uint32_t entry;
+    int index = next_item(p, &pos, &entry);
+    unsigned gen = p->gen;
+    source *next = open_from(p, &pos, &index, &entry, 0, gen, &events);
+    int64_t duration_ms = next ? source_duration_ms(next) : 0;
+    int opened = next != NULL;
+    source_close(next);
+    if (gen != p->gen || !p->nsegs || !p->r_loaded) return events; /* changed meanwhile: go again */
+    if (!opened) {
+      if (p->radio) { /* what the feed adds carries on past the failures */
+        p->decoding_pos = pos - 1;
+        mc_cond_broadcast(&p->feed_wake);
+      }
+      p->drained = 1;
+    } else {
+      p->segs[1] = (segment){index, pos, NOT_YET, 0, duration_ms, 1, 0, log_item(p, index), entry, entry != 0, 0};
+      p->nsegs = 2;
+      p->decoding_pos = pos;
+    }
+  }
+  int want = p->nsegs > 1 ? p->segs[1].index : -1;
+  if (want == p->r_queued_index) {
+    if (want >= 0) p->segs[1].rid = p->r_queued; /* the same item: it stays */
+  } else if (want >= 0) {
+    p->segs[1].rid = p->r_queued = remote_id(p);
+    p->r_queued_index = want;
+    mc_remote_track t = remote_track(p, &p->segs[1]);
+    p->remote->queue_next(p->remote_user, p->r_queued, &t);
+  } else {
+    p->r_queued = 0;
+    p->r_queued_index = -1;
+    p->remote->queue_next(p->remote_user, 0, NULL);
+  }
+  return events;
+}
+
+/* sync_device() for remote mode: has the remote play or pause as the state says, loading the
+ * current item first if it has nothing. And lets the audio device here go. Under lock. */
+static void remote_sync(mc_player *p) {
+  if (p->device_running) {
+    mc_mutex_unlock(&p->lock);
+    ma_device_stop(&p->device);
+    mc_mutex_lock(&p->lock);
+    p->device_running = 0;
+    if (!p->remote || p->cmd != CMD_NONE) return;
+  }
+  if (!p->nsegs) return;
+  int want = p->state == MC_PLAYER_PLAYING;
+  if (!p->r_loaded) {
+    if (want || p->r_reload) remote_load(p, remote_position(p), want);
+  } else if (want != p->r_playing) {
+    p->r_playing = want;
+    if (want) p->remote->play(p->remote_user);
+    else p->remote->pause(p->remote_user);
+  }
 }
 
 static void run(void *arg) {
@@ -986,8 +1222,12 @@ static void run(void *arg) {
   while (!p->quit) {
     unsigned events = p->pending_events;
     p->pending_events = 0;
-    if (p->cmd != CMD_NONE) events |= do_command(p);
-    if (p->cmd == CMD_NONE) {
+    if (p->cmd != CMD_NONE) events |= p->remote ? remote_command(p) : do_command(p);
+    if (p->cmd == CMD_NONE && p->remote) {
+      events |= remote_fill(p);
+      events |= advance(p);
+      remote_sync(p);
+    } else if (p->cmd == CMD_NONE) {
       if (p->state != MC_PLAYER_STOPPED) events |= fill(p); /* paused too, so resuming is instant */
       events |= advance(p);
       events |= sync_device(p);
@@ -1001,7 +1241,7 @@ static void run(void *arg) {
     if (p->quit || p->cmd != CMD_NONE) continue;
     /* While playing, wake to top up the buffer and to see the next track start. Otherwise
      * there's nothing to do until a call. */
-    if (p->state == MC_PLAYER_PLAYING) mc_cond_wait_ms(&p->wake, &p->lock, WAKE_MS);
+    if (p->state == MC_PLAYER_PLAYING) mc_cond_wait_ms(&p->wake, &p->lock, p->remote ? REMOTE_WAKE_MS : WAKE_MS);
     else if (!events && !p->pending_events) mc_cond_wait(&p->wake, &p->lock);
   }
   mc_mutex_unlock(&p->lock);
@@ -1059,6 +1299,12 @@ static void up_clear(mc_player *p) {
 void mc_player_free(mc_player *p) {
   if (!p) return;
   mc_mutex_lock(&p->lock);
+  const mc_remote_ops *remote = p->remote;
+  void *remote_user = p->remote_user;
+  mc_mutex_unlock(&p->lock);
+  if (remote && remote->detached) remote->detached(remote_user); /* may end remote mode */
+  mc_mutex_lock(&p->lock);
+  p->remote = NULL;
   p->quit = 1;
   mc_cond_broadcast(&p->wake);
   mc_cond_broadcast(&p->feed_wake);
@@ -1091,6 +1337,7 @@ static void post(mc_player *p, command cmd, int pos, int index, int64_t ms, mc_p
   p->cmd_state = state;
   p->cmd_entry = 0;
   p->cmd_seek = 0;
+  p->cmd_quiet = 0;
   p->cmd_end = MC_PLAY_END_SKIPPED; /* most commands; the others say so after */
   p->gen++;
   p->radio_skip = 0;
@@ -1471,10 +1718,16 @@ mc_status mc_player_skip_to(mc_player *p, int index) {
   return st;
 }
 
-mc_status mc_player_next(mc_player *p) {
-  if (!p) return MC_ERR_INVALID_ARG;
-  mc_mutex_lock(&p->lock);
-  up_heard(p);
+/* Stopped at the start, as when the queue plays out. Under lock. */
+static void post_played_out(mc_player *p) {
+  p->current_pos = 0;
+  p->current = item_at(p, 0);
+  post(p, CMD_STOP, 0, p->current, 0, MC_PLAYER_STOPPED);
+  p->played_out = 1;
+}
+
+/* mc_player_next(), ending the play under way as end. Under lock, after up_heard(). */
+static void go_next(mc_player *p, mc_play_end end) {
   int pos = current_pos(p) + 1, index = item_at(p, pos);
   if (p->nup) {
     play_up_next(p, resume_pos(p));
@@ -1483,12 +1736,20 @@ mc_status mc_player_next(mc_player *p) {
   } else if (p->feeding) { /* more is on its way, and at the start of a station it's all there is */
     p->radio_skip = 1;
     mc_cond_broadcast(&p->feed_wake);
-  } else if (p->list_count) { /* past the end: stopped at the start, as when the queue plays out */
-    p->current_pos = 0;
-    p->current = item_at(p, 0);
-    post(p, CMD_STOP, 0, p->current, 0, MC_PLAYER_STOPPED);
-    p->played_out = 1;
+    return;
+  } else if (p->list_count) { /* past the end */
+    post_played_out(p);
+  } else {
+    return;
   }
+  p->cmd_end = end;
+}
+
+mc_status mc_player_next(mc_player *p) {
+  if (!p) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&p->lock);
+  up_heard(p);
+  go_next(p, MC_PLAY_END_SKIPPED);
   mc_mutex_unlock(&p->lock);
   return MC_OK;
 }
@@ -1955,5 +2216,227 @@ void mc_player_status_get(mc_player *p, mc_player_status *out) {
   }
   mc_mutex_lock(&p->lock);
   snapshot(p, out);
+  mc_mutex_unlock(&p->lock);
+}
+
+/* --- Remote mode: the API --- */
+
+mc_status mc_player_remote_begin(mc_player *p, const mc_remote_ops *ops, void *user) {
+  if (!p || !ops || !ops->load || !ops->queue_next || !ops->play || !ops->pause || !ops->seek || !ops->stop)
+    return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&p->lock);
+  if (p->remote) {
+    mc_mutex_unlock(&p->lock);
+    return MC_ERR_IN_USE;
+  }
+  up_heard(p);
+  mc_player_status st;
+  snapshot(p, &st);
+  int pos = current_pos(p);
+  uint32_t entry = current_entry(p);
+  /* The play here ends with what was heard of it; one that hadn't counted yet counts on. */
+  p->pending_events |= count_heard(p, played_frames(p)) | log_end(p, MC_PLAY_END_STOPPED);
+  uint64_t play_ms = p->rate ? p->play_frames * 1000 / p->rate : 0;
+  p->remote = ops;
+  p->remote_user = user;
+  p->local_rate = p->rate;
+  p->rate = REMOTE_RATE;
+  p->r_base = p->heard = 0;
+  p->r_running = 0;
+  p->play_frames = play_ms;
+  p->r_loaded = p->r_queued = 0;
+  p->r_queued_index = -1;
+  p->r_playing = p->r_reload = p->r_failures = 0;
+  p->nsegs = 0; /* in the audio device's frames; what's buffered goes with the next command */
+  if (st.index >= 0 && st.index < p->count && st.state != MC_PLAYER_STOPPED) {
+    post(p, CMD_START, pos, st.index, st.position_ms, st.state);
+    p->cmd_entry = entry;
+    p->cmd_seek = 1;
+    p->cmd_quiet = 1;
+  }
+  mc_cond_broadcast(&p->wake);
+  mc_mutex_unlock(&p->lock);
+  return MC_OK;
+}
+
+void mc_player_remote_end(mc_player *p) {
+  if (!p) return;
+  mc_mutex_lock(&p->lock);
+  if (!p->remote) {
+    mc_mutex_unlock(&p->lock);
+    return;
+  }
+  up_heard(p);
+  mc_player_status st;
+  snapshot(p, &st);
+  int pos = current_pos(p);
+  uint32_t entry = current_entry(p);
+  p->pending_events |= count_heard(p, played_frames(p)) | log_end(p, MC_PLAY_END_STOPPED);
+  uint64_t play_ms = p->play_frames;
+  p->remote = NULL;
+  p->remote_user = NULL;
+  p->rate = p->local_rate;
+  ma_spinlock_lock(&p->spin);
+  p->heard = p->played;
+  ma_spinlock_unlock(&p->spin);
+  p->play_frames = play_ms * p->rate / 1000;
+  if (!p->rate) p->play_index = -1; /* no device opened yet: it counts afresh */
+  p->nsegs = 0;
+  p->drained = 0;
+  p->r_running = 0;
+  p->r_loaded = p->r_queued = 0;
+  p->r_queued_index = -1;
+  if (st.index >= 0 && st.index < p->count && st.state != MC_PLAYER_STOPPED) {
+    post(p, CMD_START, pos, st.index, st.position_ms, MC_PLAYER_PAUSED);
+    p->cmd_entry = entry;
+    p->cmd_seek = 1;
+    p->cmd_quiet = 1;
+  }
+  mc_cond_broadcast(&p->wake);
+  mc_mutex_unlock(&p->lock);
+}
+
+/* The segment the remote knows as id, as long as it's what the remote has loaded and no
+ * command is on its way to replace it; or NULL. Under lock. */
+static segment *remote_seg(mc_player *p, unsigned id) {
+  if (!p->remote || !id || p->cmd != CMD_NONE || id != p->r_loaded) return NULL;
+  for (int i = 0; i < p->nsegs; i++)
+    if (p->segs[i].rid == id) return &p->segs[i];
+  return NULL;
+}
+
+void mc_player_remote_status(mc_player *p, unsigned id, mc_remote_state state, int64_t position_ms) {
+  if (!p) return;
+  mc_mutex_lock(&p->lock);
+  uint64_t now = p->remote ? remote_played(p) : 0;
+  /* Counted up to now, so the segments can be moved without losing any of it. */
+  if (p->remote) p->pending_events |= count_heard(p, now);
+  if (p->remote && p->cmd == CMD_NONE && p->nsegs > 1 && id && id == p->segs[1].rid && id == p->r_queued) {
+    /* The remote went on to the queued item by itself: it's heard from now on. */
+    p->segs[1].start = now;
+    p->r_loaded = id;
+    p->r_queued = 0;
+    p->r_queued_index = -1;
+    p->pending_events |= advance(p); /* now, so remote_fill() doesn't take it for what's queued */
+  }
+  segment *seg = remote_seg(p, id);
+  if (!seg) {
+    mc_mutex_unlock(&p->lock);
+    return;
+  }
+  seg->start = now; /* heard up to now already, so this moves the position alone */
+  seg->offset = (uint64_t)(position_ms > 0 ? position_ms : 0);
+  if (state == MC_REMOTE_PLAYING) {
+    if (!p->r_running) {
+      p->r_since = mc_mono_ms();
+      p->r_running = 1;
+    }
+    p->r_failures = 0;
+  } else {
+    remote_hold(p);
+  }
+  /* Playing or paused from the remote's own controls, or another sender's. */
+  if (state != MC_REMOTE_LOADING && p->state != MC_PLAYER_STOPPED) {
+    mc_player_state now_state = state == MC_REMOTE_PLAYING ? MC_PLAYER_PLAYING : MC_PLAYER_PAUSED;
+    if (now_state != p->state) p->pending_events |= EV(MC_PLAYER_EVENT_STATE);
+    p->state = now_state;
+    p->r_playing = state == MC_REMOTE_PLAYING;
+  }
+  mc_cond_broadcast(&p->wake);
+  mc_mutex_unlock(&p->lock);
+}
+
+/* After go_next() from what the remote finished with: if it had nowhere to go yet (a station
+ * that hasn't caught up), the player waits on nothing, so that nothing is loaded again. Under
+ * lock. */
+static void remote_wait(mc_player *p) {
+  if (p->cmd != CMD_NONE || !p->nsegs) return;
+  p->current = p->segs[0].index;
+  p->current_pos = p->segs[0].pos;
+  p->nsegs = 0;
+}
+
+void mc_player_remote_finished(mc_player *p, unsigned id) {
+  if (!p) return;
+  mc_mutex_lock(&p->lock);
+  if (remote_seg(p, id) == &p->segs[0]) {
+    p->pending_events |= count_heard(p, remote_played(p));
+    remote_hold(p);
+    p->r_loaded = p->r_queued = 0; /* it has nothing more to play */
+    p->r_queued_index = -1;
+    p->r_failures = 0;
+    up_heard(p);
+    go_next(p, MC_PLAY_END_FINISHED);
+    remote_wait(p);
+    mc_cond_broadcast(&p->wake);
+  }
+  mc_mutex_unlock(&p->lock);
+}
+
+void mc_player_remote_failed(mc_player *p, unsigned id) {
+  if (!p) return;
+  mc_mutex_lock(&p->lock);
+  if (remote_seg(p, id) == &p->segs[0]) {
+    segment *seg = &p->segs[0];
+    unsigned events = count_heard(p, remote_played(p)) | EV(MC_PLAYER_EVENT_ERROR);
+    if (seg->logged) events |= log_end(p, MC_PLAY_END_FAILED);
+    else events |= log_failed(p, seg->index);
+    if (seg->entry) up_drop(p, seg->entry, seg->index);
+    p->pending_events |= events;
+    remote_hold(p);
+    p->r_loaded = p->r_queued = 0;
+    p->r_queued_index = -1;
+    up_heard(p);
+    if (++p->r_failures > REMOTE_MAX_FAILS || !p->list_count) { /* it can't play any of them */
+      p->r_failures = 0;
+      if (p->list_count) post_played_out(p);
+    } else {
+      go_next(p, MC_PLAY_END_FAILED);
+      remote_wait(p);
+    }
+    mc_cond_broadcast(&p->wake);
+  }
+  mc_mutex_unlock(&p->lock);
+}
+
+void mc_player_remote_dropped(mc_player *p) {
+  if (!p) return;
+  mc_mutex_lock(&p->lock);
+  if (p->remote && p->cmd == CMD_NONE && p->nsegs && p->r_loaded) {
+    int64_t position = remote_position(p);
+    p->pending_events |= count_heard(p, remote_played(p)) | log_end(p, MC_PLAY_END_STOPPED);
+    remote_hold(p);
+    segment *seg = &p->segs[0];
+    seg->logged = 0; /* played again, it's a row of its own, once heard */
+    seg->start = remote_played(p);
+    seg->offset = (uint64_t)(position > 0 ? position : 0);
+    p->nsegs = 1;
+    p->r_loaded = p->r_queued = 0;
+    p->r_queued_index = -1;
+    p->r_playing = 0;
+    if (p->state == MC_PLAYER_PLAYING) {
+      p->state = MC_PLAYER_PAUSED;
+      p->pending_events |= EV(MC_PLAYER_EVENT_STATE);
+    }
+    mc_cond_broadcast(&p->wake);
+  }
+  mc_mutex_unlock(&p->lock);
+}
+
+void mc_player_remote_reload(mc_player *p) {
+  if (!p) return;
+  mc_mutex_lock(&p->lock);
+  if (p->remote && p->nsegs && p->r_loaded) {
+    p->pending_events |= count_heard(p, remote_played(p));
+    int64_t position = remote_position(p);
+    remote_hold(p);
+    p->segs[0].start = remote_played(p);
+    p->segs[0].offset = (uint64_t)(position > 0 ? position : 0);
+    p->nsegs = 1;
+    p->r_loaded = p->r_queued = 0;
+    p->r_queued_index = -1;
+    p->r_reload = 1;
+    mc_cond_broadcast(&p->wake);
+  }
   mc_mutex_unlock(&p->lock);
 }

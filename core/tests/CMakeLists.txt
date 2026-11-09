@@ -103,6 +103,7 @@ kithsong_test(test_scrobbler)
 target_link_libraries(test_scrobbler PRIVATE mbedcrypto mc_yyjson)  # checks the signature independently
 target_include_directories(test_scrobbler PRIVATE "${PROJECT_BINARY_DIR}/core/generated")  # config.h
 kithsong_test(test_player)
+kithsong_test(test_player_remote)
 kithsong_test(test_play_log)
 kithsong_test(test_up_next)
 kithsong_test(test_up_next_add)
