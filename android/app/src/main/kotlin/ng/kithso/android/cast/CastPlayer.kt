@@ -630,7 +630,7 @@ class CastPlayer(
         if (entryOf(status.mediaInfo) !== current) return
         val want = nextEntry()
         if (want?.serial == queued?.serial) return
-        val after = idsAfter(status.currentItemId)
+        val after = idsAfter(itemIdOf(status, current))
         queued = want
         serveOnly()
         queueing = true
@@ -679,9 +679,18 @@ class CastPlayer(
         return name.removePrefix(TRACK).substringBefore('.').toIntOrNull()?.let(entries::get)
     }
 
+    // The device's queue item id for [entry]. Not simply its currentItemId: while it loads the
+    // item it's going on to, the status has that item's media (its extended status) but still
+    // the finished item's id as current, and the item after that would be the one loading.
+    private fun itemIdOf(status: MediaStatus, entry: Entry): Int =
+        status.queueItems.firstOrNull { entryOf(it.media) === entry }?.itemId
+            ?: status.loadingItemId.takeIf { it != MediaQueueItem.INVALID_ITEM_ID }
+            ?: status.currentItemId
+
     // The device's queue items after [itemId], which it has queued to play next.
     private fun idsAfter(itemId: Int): List<Int> {
-        val ids = client?.mediaQueue?.itemIds ?: return emptyList()
+        val ids = client?.mediaStatus?.queueItems?.map { it.itemId }?.takeIf { it.isNotEmpty() }
+            ?: client?.mediaQueue?.itemIds?.toList() ?: return emptyList()
         val at = ids.indexOf(itemId)
         return if (at < 0) emptyList() else ids.drop(at + 1)
     }
