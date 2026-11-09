@@ -73,8 +73,8 @@ fun AlbumArt(album: AlbumInfo, size: Dp, modifier: Modifier = Modifier) {
 }
 
 /** Decodes the cover in [folder], subsampled to no less than [px] square. */
-private suspend fun loadCover(folder: String, px: Int): ImageBitmap? = withContext(Dispatchers.IO) {
-    val file = NativeCore.coverFile(folder)?.let(::File) ?: return@withContext null
+private suspend fun loadCover(folder: String, px: Int): ImageBitmap? = withContext(coverDispatcher) {
+    val file = coverFileOf(folder)?.let(::File) ?: return@withContext null
     val key = "${file.path}@$px"
     covers.get(key)?.let { return@withContext it }
 
@@ -86,5 +86,11 @@ private suspend fun loadCover(folder: String, px: Int): ImageBitmap? = withConte
         ?: return@withContext null
     bitmap.asImageBitmap().also { covers.put(key, it) }
 }
+
+/** Finds the cover file in an album's folder. The screenshot tests swap it, as they run without the core. */
+internal var coverFileOf: (String) -> String? = { NativeCore.coverFile(it) }
+
+/** Where covers decode; the screenshot tests decode them in place, so every one is drawn. */
+internal var coverDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO
 
 val ListArtSize = 36.dp

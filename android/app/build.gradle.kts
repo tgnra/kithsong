@@ -55,6 +55,16 @@ android {
     buildFeatures {
         compose = true
     }
+    // Screenshot tests (src/test/.../screenshots): Robolectric draws the Compose UI on the JVM
+    // and Roborazzi saves it, so they need the app's resources.
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            it.systemProperty("roborazzi.test.record", "true")
+            // Robolectric reaches into java.base on newer JDKs.
+            it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED", "--enable-native-access=ALL-UNNAMED")
+        }
+    }
 }
 
 // R.string/R.plurals from strings/en.json (see GenerateStrings in the root build.gradle.kts).
@@ -97,6 +107,13 @@ dependencies {
     // Only to cancel the background sync job versions up to 0.4.2 scheduled (KithsongApp).
     implementation("androidx.work:work-runtime-ktx:2.11.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    // Store screenshots on the JVM: Robolectric's native graphics and Roborazzi.
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.78.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.78.0")
     // Unit tests of what runs without a device, such as the smart list editor's rule model.
     testImplementation("junit:junit:4.13.2")
     // Virtual time, for what waits on a timer.
