@@ -54,6 +54,13 @@ static struct {
   int volume;
   BOOL muted;
 
+  /* Google Cast. */
+  mc_cast *cast;                     /* for the app's life, or NULL if it couldn't be made */
+  mc_cast_status cast_status;        /* as last read, on the UI thread */
+  char cast_name[MC_CAST_NAME_LEN];  /* the device of the cast under way or last tried */
+  BOOL cast_session;                 /* a cast is under way, or being tried: its end is news */
+  BOOL cast_failed;                  /* mc_cast_connect() itself refused */
+
   /* What's shown, to tell what changed. */
   int index;
   mc_player_state state;
@@ -227,6 +234,13 @@ static LRESULT CALLBACK msgs_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   return DefWindowProcW(wnd, msg, wp, lp);
 }
 
+/* On one of the cast's threads: never call mc_cast_* here. s.wnd is set before the cast is
+ * made and stays put until it's freed. */
+static void on_cast(void *user, mc_cast_event event) {
+  (void)user;
+  PostMessageW(s.wnd, WM_APP_CAST, (WPARAM)event, 0);
+}
+
 void playback_init(HWND wnd, void (*changed)(void)) {
   memset(&s, 0, sizeof s);
   s.wnd = wnd;
@@ -239,6 +253,9 @@ void playback_init(HWND wnd, void (*changed)(void)) {
   s.msgs = CreateWindowExW(0, L"kithsong_playback", NULL, 0, 0, 0, 0, 0, HWND_MESSAGE, NULL,
                            GetModuleHandleW(NULL), NULL);
   taskbar_init(wnd);
+  /* Looking all along, so the cast button can show only while there's a device. */
+  if (mc_cast_new(on_cast, NULL, &s.cast) == MC_OK) mc_cast_start_discovery(s.cast);
+  else s.cast = NULL;
 }
 
 void playback_on_recents_changed(void (*changed)(void)) {
@@ -246,6 +263,8 @@ void playback_on_recents_changed(void (*changed)(void)) {
 }
 
 void playback_free(void) {
+  mc_cast_free(s.cast); /* ends a cast, waiting for the player to be handed back, before it goes */
+  s.cast = NULL;
   playback_set_library(NULL, NULL);
   mc_player_free(s.player); /* first, so nothing more is posted */
   if (s.media_controls) media_controls_free();
@@ -531,22 +550,34 @@ void playback_seek_by(int delta_ms) {
   playback_seek(to > 0 ? (int)to : 0);
 }
 
+/* While casting, the volume is the device's: the computer's stays as it was. */
 void playback_set_volume(int volume) {
-  s.volume = max(0, min(volume, 100));
+  volume = max(0, min(volume, 100));
+  if (playback_casting()) {
+    mc_cast_set_volume(s.cast, volume); /* the status has it at once */
+    mc_cast_status_get(s.cast, &s.cast_status);
+    return;
+  }
+  s.volume = volume;
   if (s.player) mc_player_set_volume(s.player, s.volume);
 }
 
 int playback_volume(void) {
-  return s.volume;
+  return playback_casting() ? s.cast_status.volume : s.volume;
 }
 
 void playback_set_muted(BOOL muted) {
+  if (playback_casting()) {
+    if (!muted != !s.cast_status.muted) mc_cast_set_muted(s.cast, muted);
+    mc_cast_status_get(s.cast, &s.cast_status);
+    return;
+  }
   s.muted = muted;
   if (s.player) mc_player_set_muted(s.player, muted);
 }
 
 BOOL playback_muted(void) {
-  return s.muted;
+  return playback_casting() ? s.cast_status.muted != 0 : s.muted;
 }
 
 BOOL playback_is_playing(void) {
@@ -642,4 +673,62 @@ void playback_add(mc_up_next_kind what, const char *uid, const wchar_t *name, BO
     now_playing_notice(mc_wstr(MC_STR_QUEUE_NOTHING_HERE));
   }
   free(title);
+}
+
+/* --- Google Cast --- */
+
+static void copy_name(char *dst, const char *src) {
+  snprintf(dst, MC_CAST_NAME_LEN, "%s", src ? src : "");
+}
+
+BOOL playback_cast_update(mc_cast_end *ended, char *name) {
+  mc_cast_status_get(s.cast, &s.cast_status); /* all zero (idle) without a cast */
+  if (s.cast_status.state != MC_CAST_IDLE) {
+    s.cast_session = TRUE;
+    s.cast_failed = FALSE;
+    if (s.cast_status.device_name[0]) copy_name(s.cast_name, s.cast_status.device_name);
+    return FALSE;
+  }
+  if (!s.cast_session) return FALSE;
+  s.cast_session = FALSE; /* it's over: say why once */
+  mc_cast_end why = s.cast_failed ? MC_CAST_END_FAILED : s.cast_status.ended;
+  s.cast_failed = FALSE;
+  if (why != MC_CAST_END_FAILED && why != MC_CAST_END_LOST) return FALSE;
+  *ended = why;
+  copy_name(name, s.cast_name);
+  return TRUE;
+}
+
+const mc_cast_status *playback_cast_status(void) {
+  return &s.cast_status;
+}
+
+BOOL playback_casting(void) {
+  return s.cast && s.cast_status.state == MC_CAST_CASTING;
+}
+
+mc_cast_device_list *playback_cast_devices(void) {
+  mc_cast_device_list *list = NULL;
+  if (!s.cast || mc_cast_devices(s.cast, &list) != MC_OK) list = NULL;
+  return list;
+}
+
+void playback_cast_connect(const char *device_id) {
+  if (!s.cast || !device_id || !ensure_player()) return;
+  /* Its name now, for saying it couldn't connect if it's gone from the list meanwhile. */
+  mc_cast_device_list *list = playback_cast_devices();
+  for (int i = 0; list && i < list->count; i++) {
+    const mc_cast_device *d = &list->items[i];
+    if (!strcmp(d->id, device_id)) copy_name(s.cast_name, d->name[0] ? d->name : d->model);
+  }
+  mc_cast_device_list_free(list);
+  s.cast_session = TRUE;
+  s.cast_failed = mc_cast_connect(s.cast, device_id, s.player) != MC_OK;
+  mc_cast_status_get(s.cast, &s.cast_status);
+  /* The cast posts its own news, but not a refusal: this has the main window read it either way. */
+  PostMessageW(s.wnd, WM_APP_CAST, (WPARAM)MC_CAST_EVENT_STATE, 0);
+}
+
+void playback_cast_disconnect(void) {
+  if (s.cast) mc_cast_disconnect(s.cast);
 }

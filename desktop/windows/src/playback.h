@@ -90,7 +90,7 @@ void playback_seek_by(int delta_ms);
 
 /* The volume, 0 to 100, and muted (see mc_player_set_volume()). 100 and not muted to begin
  * with; main.c keeps the volume in the settings. They carry over to the player when it's
- * created. */
+ * created. While casting, they're the device's instead (see Google Cast, below). */
 void playback_set_volume(int volume);
 int playback_volume(void);
 void playback_set_muted(BOOL muted);
@@ -129,5 +129,35 @@ void playback_tracks_changed(void);
 /* The current track's uid, or "" with none or for one without. Valid until the queue changes. */
 const char *playback_current_uid(void);
 BOOL playback_has_next(void);
+
+/* --- Google Cast (kithcore/cast.h) ---
+ *
+ * One mc_cast for the app's life: playback_init() makes it and starts discovery, which runs
+ * as long as the app does, so the cast button can show only once there's a device to cast to;
+ * playback_free() frees it before the player. Its events, on core threads, are posted to the
+ * main window as WM_APP_CAST (wParam: the mc_cast_event); the main window passes them to
+ * playback_cast_update(), which reads the status on the UI thread.
+ *
+ * While casting, playback goes on as ever (the player sends it to the device), and the volume
+ * functions above are the device's: playback_volume(), playback_set_volume(), playback_muted()
+ * and playback_set_muted() read and set it, and the computer's own volume is left as it was,
+ * for when the cast ends. */
+#define WM_APP_CAST (WM_APP + 13)
+
+/* Reads the cast's status again, after WM_APP_CAST. TRUE if a cast just ended in a way the user
+ * should hear about (MC_CAST_END_FAILED or MC_CAST_END_LOST), with *ended saying which and name
+ * (MC_CAST_NAME_LEN bytes, UTF-8) the device's name, "" for one without. */
+BOOL playback_cast_update(mc_cast_end *ended, char *name);
+/* The status as playback_cast_update() last read it (or a connect or volume change since). */
+const mc_cast_status *playback_cast_status(void);
+/* Whether playback goes to a device now (MC_CAST_CASTING). */
+BOOL playback_casting(void);
+/* The devices found, or NULL. Free with mc_cast_device_list_free(). */
+mc_cast_device_list *playback_cast_devices(void);
+/* Casts to the device with id, with the player (made now if there's none yet), playing what it
+ * has. The status goes to MC_CAST_CONNECTING at once. */
+void playback_cast_connect(const char *device_id);
+/* Stops casting; playback comes back here, paused. */
+void playback_cast_disconnect(void);
 
 #endif
