@@ -198,7 +198,9 @@ int main(int argc, char **argv) {
   mc_player_remote_status(player, a_id, MC_REMOTE_PLAYING, 0);
   mc_sleep_ms(1300);
   mc_player_status_get(player, &st);
-  CHECK(st.position_ms >= 1300 && st.position_ms < 1700);
+  /* A tick short is fine: Windows' mc_mono_ms() moves in ~16 ms steps, so 1300 ms asleep can
+   * read as 1296. */
+  CHECK(st.position_ms >= 1250 && st.position_ms < 1700);
   int index;
   int64_t started;
   CHECK(mc_player_take_played(player, &index, &started) == MC_OK && index == 0); /* half of 2 s heard */

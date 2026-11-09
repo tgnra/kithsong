@@ -15,6 +15,8 @@
 #include "net/socket.h"
 #include "util/platform.h"
 
+enum { CLOSE_DRAIN_MS = 500 }; /* at most, waiting for the device to close after us */
+
 struct cast_tls {
   mc_socket *sock;
   int timeout_ms; /* for the read callback: the read under way's */
@@ -144,6 +146,11 @@ void cast_tls_close(cast_tls *t) {
   if (!t) return;
   if (t->sock) {
     mbedtls_ssl_close_notify(&t->ssl);
+    /* Closing with the device's replies unread resets the connection, and on Windows a reset
+     * drops what the device hadn't read yet: the STOP and CLOSE just sent. So the end is sent,
+     * and what comes back is read until the device closes too (it does on CLOSE). */
+    mc_socket_shutdown_send(t->sock);
+    mc_socket_drain(t->sock, CLOSE_DRAIN_MS);
     mc_socket_close(t->sock);
   }
   mbedtls_ssl_free(&t->ssl);
