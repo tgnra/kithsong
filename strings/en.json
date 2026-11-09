@@ -1007,7 +1007,17 @@
     "stats_empty_text": { "text": "Numbers about your library will show here once it has some music.", "note": "Library stats of a library with no music, under empty_title." },
     "stats_reading": { "text": "Counting…", "note": "In Library stats, in place of the numbers, while a large library is still being read." },
     "stats_failed": { "text": "Couldn't read the library ({0}).", "note": "In Library stats, in place of the numbers. {0} is the reason, one of the status strings such as \"database error\"." },
-    "about": { "text": "About", "note": "The row at the bottom of the desktop sidebar that opens the About box." }
+    "about": { "text": "About", "note": "The row at the bottom of the desktop sidebar that opens the About box." },
+    "cast": { "text": "Cast", "note": "The cast button's tooltip and name for accessibility while not casting (on the phone, at the top of the full player). It opens a list of Google Cast devices (TVs, speakers) on the network to play on." },
+    "cast_to": { "text": "Cast to", "note": "Heading of the list of Google Cast devices (TVs, speakers) found on the network, which the cast button opens; picking one plays there." },
+    "cast_looking": { "text": "Looking for devices…", "note": "In the list of Google Cast devices, while none has been found yet." },
+    "cast_looking_text": { "text": "Make sure your TV or speaker is on and connected to the same network as this device.", "note": "Under cast_looking: why a Google Cast device may not show up. \"This device\" is the phone or computer the app runs on." },
+    "cast_casting_to": { "text": "Casting to {0}", "note": "{0} is the name of the Google Cast device (TV, speaker) playing the music, e.g. \"Living Room TV\". Shown with the player while casting (on the phone, in the full player), and the cast button's tooltip and name for accessibility while casting." },
+    "cast_connecting_to": { "text": "Connecting to {0}…", "note": "{0} is the name of the Google Cast device being connected to. The cast button's tooltip and name for accessibility, and the heading of its list, while connecting." },
+    "cast_stop": { "text": "Stop casting", "note": "In the list the cast button opens while casting: stops playing on the Google Cast device, and playback comes back here, paused." },
+    "cast_device_unnamed": { "text": "Cast device", "note": "Stands in for {0} in the cast_ strings when the Google Cast device has no name." },
+    "cast_failed": { "text": "Couldn't connect to {0}.", "note": "Shown after picking a Google Cast device, when it can't be reached or won't start playing. {0} is the device's name, e.g. \"Living Room TV\"." },
+    "cast_lost": { "text": "Lost the connection to {0}.", "note": "Shown when casting ends because the Google Cast device stopped answering and couldn't be reached again; playback is back here, paused. {0} is the device's name." }
   },
 
   "linux": {
@@ -1441,15 +1451,7 @@
     "keys_back": { "text": "Back, or close the track list", "note": "In the list of keyboard shortcuts, beside Escape." },
     "keys_shortcuts": { "text": "Keyboard shortcuts", "note": "In the list of keyboard shortcuts, beside Ctrl+?, which shows it." },
     "keys_open": { "text": "Open or play the selected item", "note": "In the list of keyboard shortcuts, beside Enter: opens the album, artist or playlist the focus is on, or plays the track." },
-    "keys_item_menu": { "text": "The selected item's menu", "note": "In the list of keyboard shortcuts, beside the Menu key and Shift+F10." },
-    "cast": { "text": "Cast", "note": "For accessibility: the cast button at the top of the full player while not casting. It opens a list of Google Cast devices (TVs, speakers) on the network to play on." },
-    "cast_to": { "text": "Cast to", "note": "Heading of the list of Google Cast devices (TVs, speakers) found on the network, which the cast button opens; picking one plays there." },
-    "cast_looking": { "text": "Looking for devices…", "note": "In the list of Google Cast devices, while none has been found yet." },
-    "cast_looking_text": { "text": "Make sure your TV or speaker is on and connected to the same Wi-Fi network as this phone.", "note": "Under cast_looking: why a Google Cast device may not show up." },
-    "cast_casting_to": { "text": "Casting to {0}", "note": "{0} is the name of the Google Cast device (TV, speaker) playing the music, e.g. \"Living Room TV\". On the full player, and the cast button's name for accessibility while casting." },
-    "cast_connecting_to": { "text": "Connecting to {0}…", "note": "{0} is the name of the Google Cast device being connected to. The cast button's name for accessibility, and the heading of its list, while connecting." },
-    "cast_stop": { "text": "Stop casting", "note": "In the list the cast button opens while casting: stops playing on the Google Cast device." },
-    "cast_device_unnamed": { "text": "Cast device", "note": "Stands in for {0} in cast_casting_to and cast_connecting_to when the Google Cast device has no name." }
+    "keys_item_menu": { "text": "The selected item's menu", "note": "In the list of keyboard shortcuts, beside the Menu key and Shift+F10." }
   },
   "wear": {
     "watch_empty_text": "No music on this watch yet. Pair it under Sync to add some.",
