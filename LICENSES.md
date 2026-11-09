@@ -53,7 +53,10 @@ dependency is added.
   Kotlin, Media3, Coil, MaterialKolor, ...) aren't listed here: the build reads them off each
   app's dependencies and their POMs (`GenerateMavenLicenses` in `android/build.gradle.kts`),
   with the texts in `android/licenses/`. A library under a licence it doesn't know, or an MIT
-  one without its copyright notice there, fails the build.
+  one without its copyright notice there, fails the build. The phone's Google Cast support
+  comes with Google Play services, which is under the Android Software Development Kit
+  License Agreement rather than an open source licence; its text ships the same way
+  (`android/licenses/Android-SDK.txt`).
 
 ## Plugins
 

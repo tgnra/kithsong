@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- MusicBrainz lookups and LAN sync. -->
+    <!-- MusicBrainz lookups, LAN sync, and serving the music to a Cast device. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- To tell whether sync is on Wi-Fi. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -109,6 +109,11 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
+        <!-- Google Cast: its options (the Default Media Receiver, and no notification or media
+             session of its own) come from this class; see ng.kithso.android.cast. -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="ng.kithso.android.cast.CastOptionsProvider" />
         <!-- Android Auto: the app is a media app, which Auto browses through PlaybackService. -->
         <meta-data
             android:name="com.google.android.gms.car.application"

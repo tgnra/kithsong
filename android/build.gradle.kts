@@ -127,6 +127,8 @@ abstract class GenerateMavenLicenses : DefaultTask() {
         val licenseIds = listOf(
             Regex("""apache.*2\.0|apache-2\.0|LICENSE-2\.0""", RegexOption.IGNORE_CASE) to "Apache-2.0",
             Regex("""\bMIT\b""", RegexOption.IGNORE_CASE) to "MIT",
+            // Google Play services, for Google Cast.
+            Regex("""Android Software Development Kit License|developer\.android\.com/studio/terms""", RegexOption.IGNORE_CASE) to "Android-SDK",
         )
         fun licenseId(license: String) = licenseIds.firstOrNull { (re, _) -> re.containsMatchIn(license) }?.second
 

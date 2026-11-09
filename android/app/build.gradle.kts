@@ -39,10 +39,11 @@ android {
         release {
             // R8: shrinks, optimises and renames the code, then drops unused resources. The
             // JNI bridge's keep rules come with :native (native/consumer-rules.pro); the
-            // libraries bring their own. The map back is build/outputs/mapping/release/.
+            // libraries bring their own, and proguard-rules.pro has the app's. The map back is
+            // build/outputs/mapping/release/.
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
         }
     }
@@ -79,6 +80,10 @@ dependencies {
     // The media session, notification and MediaController around the core's player. Only the
     // session: the core decodes and plays, so there's no ExoPlayer.
     implementation("androidx.media3:media3-session:1.11.1")
+    // Google Cast (ng.kithso.android.cast), with MediaRouter for finding devices. It needs
+    // Google Play services on the phone, which is checked at run time: without it, casting
+    // isn't offered. Only the phone has it; :playback stays free of it for the watch.
+    implementation("com.google.android.gms:play-services-cast-framework:23.0.0")
     // Colour schemes from album art. 5.x is built with Kotlin 2.4, so it needs the project on
     // 2.4 too (the Compose compiler plugin's version in the root build.gradle.kts).
     implementation("com.materialkolor:material-kolor:5.0.1")

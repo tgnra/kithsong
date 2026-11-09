@@ -70,6 +70,10 @@ fun listPlaceOf(current: Int, listSize: Int, next: Int, before: Int): Int = when
  * either side of the current track, and shuffled the timeline's order has them where they play.
  * Up next isn't kept: [listItems] and [listPlace] are the queue without it.
  *
+ * While another device plays the queue ([remote], the phone's Google Cast), the core goes on
+ * keeping the place, the order, stations and up next, but plays nothing: it's muted and held
+ * paused, and a player around this one moves it along as the other device plays.
+ *
  * Use it on the main thread.
  */
 @OptIn(UnstableApi::class)
@@ -147,6 +151,38 @@ class CoreMediaPlayer(
     /** Up next now, in the order it plays. */
     val upNext: List<UpNextEntry> get() = core.upNext
 
+    /**
+     * Whether another device plays the queue (see the class's comment): the core is muted and
+     * never plays, and audio focus and the wake lock go. Playing is then the other player's to
+     * say, so this one's play-when-ready is left alone; set it false first.
+     */
+    var remote = false
+        set(value) {
+            if (value == field) return
+            field = value
+            core.setMuted(value)
+            update()
+        }
+
+    /**
+     * Gets the core onto what playing would play, paused: a queue that hasn't played yet starts
+     * where it would (a station gets going), and one that played out goes back to its start, or
+     * to up next. For [remote] playing, which then follows the core from there; it does nothing
+     * to a queue that's under way.
+     */
+    fun startPaused() {
+        if (items.isEmpty()) return
+        if (!started) start() else if (core.status.state == CorePlayer.State.Stopped) core.resume()
+        core.pause()
+        invalidateState()
+    }
+
+    /** Ends the play under way there and then, as stopped, and passes it on to [onPlayEnded]. */
+    fun endPlay() {
+        core.endPlay()
+        takePlays()
+    }
+
     /** See [CorePlayer.addUpNext]. Off the main thread, on [library]'s. */
     fun addUpNext(library: CoreLibrary, kind: CorePlayer.UpNextKind, uid: String, name: String?, asTracks: Boolean, front: Boolean) =
         core.addUpNext(library, kind, uid, name, asTracks, front)
@@ -160,12 +196,15 @@ class CoreMediaPlayer(
      * before), which Media3's timeline can't tell with up next about; null for none, or one
      * that's still being looked up.
      */
-    fun itemAt(place: Int): MediaItem? {
+    fun itemAt(place: Int): MediaItem? = items.getOrNull(indexAt(place))
+
+    /** The index in the queue of [itemAt]'s item, or -1. */
+    fun indexAt(place: Int): Int {
         val index = core.status.index
         // A seek before the first play moved the start, which the core hears of on playing.
-        if (!started && index >= 0 && index != startIndex) return items.getOrNull(startIndex + place)
+        if (!started && index >= 0 && index != startIndex) return (startIndex + place).takeIf { it in items.indices } ?: -1
         // With nothing current, what's shown as current is up next's first track.
-        return items.getOrNull(core.order(if (index < 0 && place > 0) place + 1 else place, 1)[0])
+        return core.order(if (index < 0 && place > 0) place + 1 else place, 1)[0]
     }
 
     /** The queue that was set, without what's been added to it. */
@@ -426,15 +465,15 @@ class CoreMediaPlayer(
 
     // Asks for audio focus if playing is wanted, then plays or pauses to match.
     private fun update() {
-        val wanted = wantPlaying && !idle && items.isNotEmpty()
+        val wanted = wantPlaying && !idle && !remote && items.isNotEmpty()
         val command = focus.updateAudioFocus(wanted, if (wanted) STATE_READY else STATE_IDLE)
         if (wanted) applyFocusCommand(command)
-        play(wantPlaying && !suppressed && !idle && items.isNotEmpty())
+        play(wantPlaying && !suppressed && !idle && !remote && items.isNotEmpty())
     }
 
     private fun onFocusCommand(command: Int) {
         applyFocusCommand(command)
-        play(wantPlaying && !suppressed && !idle && items.isNotEmpty())
+        play(wantPlaying && !suppressed && !idle && !remote && items.isNotEmpty())
         invalidateState()
     }
 
@@ -453,25 +492,7 @@ class CoreMediaPlayer(
     private fun play(playing: Boolean) {
         if (playing) {
             if (!started) {
-                // Loaded stopped on its item, unless another was picked since.
-                if (stationWaiting) {
-                    stationWaiting = false
-                    stationTries = STATION_TRIES
-                    val start = items.first()
-                    val seed = start.playOrigin.contextUid ?: start.mediaId
-                    core.resumeStation(libraryDir.orEmpty(), start.path.orEmpty(), start.mediaId, seed)
-                    // Up next added while it was loaded has new indexes now, so it's looked up again.
-                    if (items.size > listSize) {
-                        items = items.take(listSize)
-                        queueVersion++
-                        orderVersion++
-                        growQueue()
-                    }
-                } else if (startIndex == core.status.index || core.status.index < 0 || !skipTo(startIndex)) {
-                    core.resume() // with nothing current, up next's first track
-                }
-                if (startPositionMs > 0) core.seekMs(startPositionMs)
-                started = true
+                start()
             } else if (core.status.state != CorePlayer.State.Playing) {
                 core.resume()
             }
@@ -484,6 +505,29 @@ class CoreMediaPlayer(
         } else if (wakeLock.isHeld) {
             wakeLock.release()
         }
+    }
+
+    // Starts a queue loaded stopped, playing.
+    private fun start() {
+        // Loaded stopped on its item, unless another was picked since.
+        if (stationWaiting) {
+            stationWaiting = false
+            stationTries = STATION_TRIES
+            val start = items.first()
+            val seed = start.playOrigin.contextUid ?: start.mediaId
+            core.resumeStation(libraryDir.orEmpty(), start.path.orEmpty(), start.mediaId, seed)
+            // Up next added while it was loaded has new indexes now, so it's looked up again.
+            if (items.size > listSize) {
+                items = items.take(listSize)
+                queueVersion++
+                orderVersion++
+                growQueue()
+            }
+        } else if (startIndex == core.status.index || core.status.index < 0 || !skipTo(startIndex)) {
+            core.resume() // with nothing current, up next's first track
+        }
+        if (startPositionMs > 0) core.seekMs(startPositionMs)
+        started = true
     }
 
     private fun onCoreEvent(event: CorePlayer.Event) {
@@ -515,8 +559,10 @@ class CoreMediaPlayer(
             announced = status.index
             uidAt(status.index)?.let(onNowPlaying)
         }
-        // Next while paused on a station's last item: what it plays is only added now.
-        if (station && started && status.state == CorePlayer.State.Playing && (!wantPlaying || suppressed)) core.pause()
+        // Next while paused on a station's last item: what it plays is only added now. Playing
+        // elsewhere, nothing plays here whatever the core does, as a station's start or a seek
+        // from stopped would.
+        if (started && status.state == CorePlayer.State.Playing && (remote || station && (!wantPlaying || suppressed))) core.pause()
         // It stopped by itself: the queue played out, or there's no audio device. Not while a
         // station is still getting going, as it carries on past a seed that wouldn't open.
         val starting = stationTries > 0 && status.radio
