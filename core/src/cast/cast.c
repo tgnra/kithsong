@@ -15,9 +15,9 @@
  * What the device has is at most two items: the player's current one (dev_current) and the
  * one after it (dev_queued), which the receiver fetches PRELOAD_S before the first ends and
  * goes on to by itself. Each URL names the player's id for the item ("t<id>.flac"), which is
- * how statuses are tied to items. While requests are unanswered the device's statuses can be
- * from before them, so only its going on to the queued item counts then, as in Android's
- * CastPlayer. */
+ * how statuses are tied to items. While requests are unanswered, or the player has asked for
+ * something not yet sent, the device's statuses can be from before them, so only its going on
+ * to the queued item counts then, as in Android's CastPlayer. */
 #include "kithcore/cast.h"
 
 #include <stdio.h>
@@ -635,6 +635,14 @@ static int has_item_after(const session *s, int item) {
   return 0;
 }
 
+/* Whether the player has asked for something not yet sent: a status meanwhile would undo it. */
+static int ops_waiting(session *s) {
+  mc_mutex_lock(&s->cast->lock);
+  int n = s->nops;
+  mc_mutex_unlock(&s->cast->lock);
+  return n > 0;
+}
+
 static void media_status(session *s, const cast_media_status *m) {
   if (!m->present) { /* nothing loaded: what we had was stopped, or played out and was cleared */
     s->msid = 0;
@@ -670,7 +678,7 @@ static void media_status(session *s, const cast_media_status *m) {
     report_status(s, on, m);
     return;
   }
-  if (s->nrequests) return;
+  if (s->nrequests || ops_waiting(s)) return;
   if (!on || on != s->dev_current || s->dev_done) {
     /* A queue that played out can leave a status with no media at all. */
     if (m->state == CAST_PLAYER_IDLE && !m->content_id[0] && !m->current_item_id && s->dev_current &&
