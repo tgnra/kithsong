@@ -2040,28 +2040,6 @@ static gboolean take_options(int *argc, char **argv, app *a, gboolean *demo) {
   return TRUE;
 }
 
-/* The now-playing strip's width in the header bar, at most, and its margins. */
-enum { STRIP_WIDTH = 640, STRIP_MARGIN = 12 };
-
-/* The header bar gives its title widget only the width it would like (its natural width),
- * and the strip would like only as much as its track's name takes, so the seekbar was as
- * wide as the name, and next to nothing with no track. Wrapped in this, the strip would like
- * its full width; the header bar still gives it less in a narrow window. */
-static void strip_measure(GtkWidget *widget, GtkOrientation orientation, int for_size, int *minimum, int *natural,
-                          int *minimum_baseline, int *natural_baseline) {
-  GtkWidget *child = gtk_widget_get_first_child(widget);
-  *minimum = *natural = 0;
-  *minimum_baseline = *natural_baseline = -1;
-  if (child) gtk_widget_measure(child, orientation, for_size, minimum, natural, minimum_baseline, natural_baseline);
-  if (orientation == GTK_ORIENTATION_HORIZONTAL && *natural < STRIP_WIDTH + 2 * STRIP_MARGIN)
-    *natural = STRIP_WIDTH + 2 * STRIP_MARGIN;
-}
-
-static void strip_allocate(GtkWidget *widget, int width, int height, int baseline) {
-  GtkWidget *child = gtk_widget_get_first_child(widget);
-  if (child && gtk_widget_should_layout(child)) gtk_widget_allocate(child, width, height, baseline, NULL);
-}
-
 static void on_activate(GtkApplication *gapp, gpointer user) {
   app *a = user;
   if (a->win) { /* launched again: the app was already running */
@@ -2108,19 +2086,15 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
                                                                   "<Control>Right", "app.next"));
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), volume_button_new(on_volume, on_muted, a));
 
-  /* The now-playing strip takes the title's place, up to a point, whatever its track's name
-   * (strip_measure()). */
+  /* The now-playing strip takes the title's place, up to a point. */
   GtkWidget *clamp = adw_clamp_new();
-  adw_clamp_set_maximum_size(ADW_CLAMP(clamp), STRIP_WIDTH);
-  adw_clamp_set_tightening_threshold(ADW_CLAMP(clamp), STRIP_WIDTH);
+  adw_clamp_set_maximum_size(ADW_CLAMP(clamp), 640);
+  adw_clamp_set_tightening_threshold(ADW_CLAMP(clamp), 640);
   gtk_widget_set_hexpand(clamp, TRUE);
-  gtk_widget_set_margin_start(clamp, STRIP_MARGIN);
-  gtk_widget_set_margin_end(clamp, STRIP_MARGIN);
+  gtk_widget_set_margin_start(clamp, 12);
+  gtk_widget_set_margin_end(clamp, 12);
   adw_clamp_set_child(ADW_CLAMP(clamp), now_playing_new(on_seek, on_shuffle, a));
-  GtkWidget *strip = adw_bin_new();
-  gtk_widget_set_layout_manager(strip, gtk_custom_layout_new(NULL, strip_measure, strip_allocate));
-  adw_bin_set_child(ADW_BIN(strip), clamp);
-  adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), strip);
+  adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), clamp);
 
   /* Right-hand track pane: hidden until an album is selected. */
   GtkWidget *album_split = adw_overlay_split_view_new();
