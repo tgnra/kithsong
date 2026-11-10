@@ -34,7 +34,8 @@ out="${1:-out/linux}"
 width="${WIDTH:-1600}"
 height="${HEIGHT:-1000}"
 shots=(${SHOTS:-home albums album artist search import review sync})
-device_name="${DEVICE_NAME:-Alice's laptop}"
+default_device="Alice's laptop" # not inside ${...:-}, where bash reads the ' as a quote
+device_name="${DEVICE_NAME:-$default_device}"
 
 for tool in sway swaymsg grim sha256sum; do
     command -v "$tool" >/dev/null || { echo "$tool isn't installed." >&2; exit 1; }
