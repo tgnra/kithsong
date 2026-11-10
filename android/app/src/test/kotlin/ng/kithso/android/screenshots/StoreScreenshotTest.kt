@@ -65,7 +65,7 @@ import javax.imageio.ImageIO
  * 7" tablet 1080x1920 at 288 dpi in portrait, 10" tablet 2560x1440 at 288 dpi in landscape. The
  * set is the listing's (albums, an album and the player in light and dark, and Search in
  * light), then an import part way with an album waiting for a decision between candidates, and
- * a sync part way with Desk, as the Sync page lists it and as this device's page shows it, with
+ * a sync part way with Bob's laptop, as the Sync page lists it and as this device's page shows it, with
  * its selection and budget.
  *
  * Each is the real [App], the phone's layout or the tablet layout as the window's size picks, so
@@ -100,7 +100,7 @@ abstract class StoreScreenshots(
     private val settings by lazy { AppSettings(CoreSettings(dir.path), context.getSharedPreferences("store-app", 0)) }
 
     // What another device calls this one.
-    private val deviceName = if (tablet) "Tablet" else "Phone"
+    private val deviceName = if (tablet) "Bob's tablet" else "Bob's phone"
 
     // The zone the shots' dates and times are written in, wherever they're run.
     private val zone = TimeZone.getDefault()
@@ -156,11 +156,11 @@ abstract class StoreScreenshots(
         }
     }
 
-    // The Sync page, part way through a session with Desk. The tablet layout has none: its
-    // sidebar lists the devices, and Desk's page is shown, with the session.
+    // The Sync page, part way through a session with Bob's laptop. The tablet layout has none: its
+    // sidebar lists the devices, and Bob's laptop's page is shown, with the session.
     @Config(qualifiers = "+night")
     @Test fun syncDark() = shoot("sync-dark", dark(), sync = StoreSync.syncing(deviceName)) {
-        if (tablet) tap(hasText("Desk") and hasClickAction()) else menu(R.string.sync)
+        if (tablet) tap(hasText("Bob's laptop") and hasClickAction()) else menu(R.string.sync)
         // On the 10" held sideways the sidebar's Recents and Devices don't all fit, and scroll (see
         // Sidebar): to its end, so the group shows whole.
         if (wide) {
@@ -180,7 +180,7 @@ abstract class StoreScreenshots(
             tap(hasText(deviceName) and hasClickAction())
         }
         settle()
-        // Its profile, with the session over it (on the 10" only the group's syncing: the Desk shot
+        // Its profile, with the session over it (on the 10" only the group's syncing: the laptop's shot
         // has the session). The tablet layout's page has the group's Sync
         // now and Leave group between them as well.
         scrollTo("profile")

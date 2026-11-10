@@ -29,7 +29,7 @@ param(
   [int] $Width = 1600,
   [int] $Height = 1000,
   [string[]] $Shots = @('home', 'albums', 'album', 'artist', 'search', 'import', 'review', 'sync'),
-  [string] $DeviceName = 'Living Room PC',
+  [string] $DeviceName = "Alice's laptop",
   [switch] $Visible
 )
 $ErrorActionPreference = 'Stop'

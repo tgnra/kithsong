@@ -82,14 +82,14 @@ mc_status mc_demo_playing_track(mc_library *lib, const char *spec, char uid[MC_U
 
 /* The demo group, for --page sync: writes into config_dir's sync.db (made if missing) a group
  * syncing the demo library in library_dir, of this device (named device_name, NULL for
- * "Living Room PC"; the archive), MC_DEMO_PHONE_NAME (a selection of three albums as Opus
+ * "Alice's laptop"; the archive), MC_DEMO_PHONE_NAME (a selection of three albums as Opus
  * 160 kbps, last synced a few minutes ago, most of it still to come) and MC_DEMO_WATCH_NAME
  * (one album as Opus 96 kbps). Neither is real: nothing can connect as them. Does nothing if
  * config_dir's device is in a group already. Before mc_sync_new() for that config_dir. */
 mc_status mc_demo_sync_group(const char *library_dir, const char *config_dir, const char *device_name);
-#define MC_DEMO_PHONE_NAME "Ivy's phone"
+#define MC_DEMO_PHONE_NAME "Alice's phone"
 #define MC_DEMO_PHONE_UID "3f9c2d4e-8b1a-4c6f-a2d7-5e0b9c1f7a33"
-#define MC_DEMO_WATCH_NAME "Ivy's watch"
+#define MC_DEMO_WATCH_NAME "Alice's watch"
 
 /* Shows the phone of mc_demo_sync_group() online and part-way through a sync: sync's on_peer
  * and on_progress report it as a session would (files going to it, 7 of 11, with a speed and

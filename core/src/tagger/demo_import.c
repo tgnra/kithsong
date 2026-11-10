@@ -90,10 +90,10 @@ static void release_id(int item, int match, char *out, size_t n) {
 }
 
 #ifdef _WIN32
-#define DOWNLOADS "C:\\Users\\Ivy\\Downloads\\"
+#define DOWNLOADS "C:\\Users\\Alice\\Downloads\\"
 #define SEP "\\"
 #else
-#define DOWNLOADS "/home/ivy/Downloads/"
+#define DOWNLOADS "/home/alice/Downloads/"
 #define SEP "/"
 #endif
 

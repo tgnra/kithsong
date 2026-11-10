@@ -140,7 +140,7 @@ class StoreScreenshotTest {
     @Test fun sync() = shoot("6-sync") {
         SyncScreen(
             SyncState.Paired(
-                devices = listOf("Desk", "Phone"),
+                devices = listOf("Bob's laptop", "Bob's phone"),
                 confirm = ConfirmState.Confirmed,
                 synced = 38,
                 wanted = 62,

@@ -1,5 +1,5 @@
 /* The demo group (kithcore/demo.h): the demo library's group of three, this computer the
- * archive, Ivy's phone holding a selection as Opus and Ivy's watch one album, written straight
+ * archive, Alice's phone holding a selection as Opus and Alice's watch one album, written straight
  * into sync.db; and the phone shown part-way through a sync, with no peer and no network. */
 #include "kithcore/demo.h"
 
@@ -102,7 +102,7 @@ static mc_status write_group(mc_sync_db *sdb, mc_library *lib, const mc_album_li
   const char *g[] = {group, mc_library_uid(lib)};
   st = exec_args(db, "UPDATE local SET group_uid = ?1 WHERE id = 1", g, 1, NULL, 0);
   if (st == MC_OK) st = exec_args(db, "INSERT INTO sync_group (uid, library_uid) VALUES (?1, ?2)", g, 2, NULL, 0);
-  if (st == MC_OK) st = add_device(db, me, device_name ? device_name : "Living Room PC", "desktop",
+  if (st == MC_OK) st = add_device(db, me, device_name ? device_name : "Alice's laptop", "desktop",
                                    mc_sync_db_public_key(sdb), NULL);
   if (st == MC_OK) st = add_device(db, MC_DEMO_PHONE_UID, MC_DEMO_PHONE_NAME, "phone", phone_key, me);
   if (st == MC_OK) st = add_device(db, WATCH_UID, MC_DEMO_WATCH_NAME, "watch", watch_key, MC_DEMO_PHONE_UID);

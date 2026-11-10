@@ -124,8 +124,8 @@ object StoreImport {
 }
 
 /**
- * A sync group of this device, "Desk" (the archive, a desktop), "Living Room PC" and a watch,
- * part way through a session with Desk that brings this device the files its selection wants:
+ * A sync group of this device, "Bob's laptop" (the archive), "Bob's PC" and Bob's watch,
+ * part way through a session with Bob's laptop that brings this device the files its selection wants:
  * three albums, an artist and a playlist, within a 16 GB budget.
  */
 object StoreSync {
@@ -165,11 +165,11 @@ object StoreSync {
         self = device(SELF, deviceName, DeviceKind.Phone, self = true, address = "192.168.1.34", lastSyncMs = now - 26 * 3_600_000L,
             expected = 214, ok = 88, bytes = 2_410_000_000L),
         members = listOf(
-            device(DESK, "Desk", DeviceKind.Desktop, archive = true, address = "192.168.1.20", lastSyncMs = now - 26 * 3_600_000L,
+            device(DESK, "Bob's laptop", DeviceKind.Desktop, archive = true, address = "192.168.1.20", lastSyncMs = now - 26 * 3_600_000L,
                 expected = 1204, ok = 1204, bytes = 38_700_000_000L),
-            device("living", "Living Room PC", DeviceKind.Desktop, online = false, address = "192.168.1.27",
+            device("living", "Bob's PC", DeviceKind.Desktop, online = false, address = "192.168.1.27",
                 lastSyncMs = now - 3 * 86_400_000L, expected = 655, ok = 655, bytes = 19_200_000_000L),
-            device("watch", "Watch", DeviceKind.Watch, address = "192.168.1.41", lastSyncMs = now - 40 * 60_000L,
+            device("watch", "Bob's watch", DeviceKind.Watch, address = "192.168.1.41", lastSyncMs = now - 40 * 60_000L,
                 expected = 62, ok = 62, bytes = 290_000_000L),
         ),
         selfConfirm = ConfirmState.Confirmed,

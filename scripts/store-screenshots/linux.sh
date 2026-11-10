@@ -34,7 +34,7 @@ out="${1:-out/linux}"
 width="${WIDTH:-1600}"
 height="${HEIGHT:-1000}"
 shots=(${SHOTS:-home albums album artist search import review sync})
-device_name="${DEVICE_NAME:-Living Room PC}"
+device_name="${DEVICE_NAME:-Alice's laptop}"
 
 for tool in sway swaymsg grim sha256sum; do
     command -v "$tool" >/dev/null || { echo "$tool isn't installed." >&2; exit 1; }
