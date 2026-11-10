@@ -125,10 +125,17 @@ data class SyncProfile(
         opusKbps,
         budgetEnabled,
         budgetBytes,
-        // Kinds this version doesn't know are left out by the core already.
-        kinds.indices.map { ProfileItem(ProfileItemKind.entries[kinds[it]], uids[it]) },
-        removedKinds.indices.map { ProfileItem(ProfileItemKind.entries[removedKinds[it]], removedUids[it]) },
+        items(kinds, uids),
+        items(removedKinds, removedUids),
     )
+
+    private companion object {
+        // Kinds this version doesn't know are left out by the core already. A function of its
+        // own, as two maps inlined into the constructor make a class Robolectric (the store
+        // screenshots) refuses to load: their local variables clash.
+        fun items(kinds: IntArray, uids: Array<String>): List<ProfileItem> =
+            kinds.indices.map { ProfileItem(ProfileItemKind.entries[kinds[it]], uids[it]) }
+    }
 }
 
 /** How much a device would hold with a profile (mc_sync_estimate). */

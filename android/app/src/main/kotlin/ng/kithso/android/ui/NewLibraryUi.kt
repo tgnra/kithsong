@@ -28,7 +28,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import ng.kithso.android.KithsongApp
 import ng.kithso.android.NewLibrary
 import ng.kithso.android.R
 import ng.kithso.android.exportProgressText
@@ -54,11 +53,10 @@ class NewLibraryActions(
  * went, and Start new library once it's done; or, without exporting, the question that says
  * the library will be deleted. After the restart into the new library, Pair again. Shown over
  * everything, with the pairing dialogs; the returned actions are for the mismatch's dialog.
+ * [ownLibrary]: the phone's own library is open, not a stress test library or the demo library.
  */
 @Composable
-fun NewLibraryDialogs(syncer: Syncer): NewLibraryActions {
-    val app = LocalContext.current.applicationContext as KithsongApp
-    val newLibrary = app.newLibrary
+fun NewLibraryDialogs(syncer: Syncer, newLibrary: NewLibrary, ownLibrary: Boolean): NewLibraryActions {
     val status by syncer.status.collectAsState()
     // The device the export or question is for, kept through the picker and turning the phone.
     var exportFor by rememberSaveable { mutableStateOf<String?>(null) }
@@ -139,7 +137,7 @@ fun NewLibraryDialogs(syncer: Syncer): NewLibraryActions {
 
     // As could_join on the desktops; never in a stress library, which doesn't sync, nor in the
     // demo library, which isn't the phone's own.
-    val canStart = status.libraryState == CoreSync.LibraryState.NoGroup && !app.testing.inStress && !app.testing.inDemo
+    val canStart = status.libraryState == CoreSync.LibraryState.NoGroup && ownLibrary
     val latestPicker by rememberUpdatedState(picker)
     return remember(canStart) {
         NewLibraryActions(

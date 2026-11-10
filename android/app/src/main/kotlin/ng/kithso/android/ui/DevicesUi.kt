@@ -49,6 +49,7 @@ import ng.kithso.core.ConfirmState
 import ng.kithso.core.CoreSync
 import ng.kithso.core.DeviceKind
 import ng.kithso.android.AppSettings
+import ng.kithso.android.NewLibrary
 import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
 import ng.kithso.android.sync.MergeProposal
@@ -103,13 +104,19 @@ fun AddDeviceDialog(onConnect: (host: String, port: Int) -> Unit, onDismiss: () 
 /**
  * [PairingDialog] for the pairing under way, if any, and [NewLibraryDialogs]. [onChooseWhatToSync]
  * opens a device's page (a member's uid, or [THIS_DEVICE]) after pairing, to choose its sync
- * settings.
+ * settings. [newLibrary] and [ownLibrary] are [NewLibraryDialogs]'.
  */
 @Composable
-fun PairingDialogs(syncer: Syncer, settings: AppSettings, onChooseWhatToSync: (String) -> Unit) {
-    val newLibrary = NewLibraryDialogs(syncer)
+fun PairingDialogs(
+    syncer: Syncer,
+    settings: AppSettings,
+    newLibrary: NewLibrary,
+    ownLibrary: Boolean,
+    onChooseWhatToSync: (String) -> Unit,
+) {
+    val newLibraryActions = NewLibraryDialogs(syncer, newLibrary, ownLibrary)
     val pairing = syncer.status.collectAsState().value.pairing ?: return
-    PairingDialog(pairing, syncer, settings, onChooseWhatToSync, newLibrary)
+    PairingDialog(pairing, syncer, settings, onChooseWhatToSync, newLibraryActions)
 }
 
 /**

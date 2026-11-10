@@ -8,7 +8,7 @@ import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import ng.kithso.android.KithsongApp
+import ng.kithso.android.NewLibrary
 import ng.kithso.android.R
 import ng.kithso.core.CoreLibrary
 import ng.kithso.core.CoreTesting
@@ -93,7 +93,8 @@ import java.io.File
  * do the smart list editor ([SmartEditorScreen]) and the tag editor ([TagEditorScreen]) while
  * they're open. [libraryDir] is the library
  * folder, for settings to show its size. [shortcuts] are the keyboard's, which this says what
- * to do for.
+ * to do for. [newLibrary] is what a library mismatch's dialog offers; [stress] and [demo] say
+ * a stress test library or the demo library is open ([ng.kithso.android.Testing]).
  */
 @Composable
 fun App(
@@ -103,6 +104,9 @@ fun App(
     importer: Importer,
     settings: AppSettings,
     libraryDir: File,
+    newLibrary: NewLibrary,
+    stress: Boolean,
+    demo: Boolean,
     onPlay: () -> Unit = {},
     onImportStarted: () -> Unit = {},
     onLeave: (() -> Unit)? = null,
@@ -273,8 +277,6 @@ fun App(
     }
 
     val top = nav.top
-    val app = context.applicationContext as KithsongApp
-    val stress = app.testing.inStress
     // A view switch is over once a frame has been drawn with the new page, and the frame after
     // has begun.
     LaunchedEffect(top?.id) {
@@ -658,7 +660,7 @@ fun App(
             )
             // Over everything: another device may ask to pair at any time.
             // Choose What to Sync: the device's page, over Sync as when it's tapped there.
-            PairingDialogs(syncer, settings, openDevice)
+            PairingDialogs(syncer, settings, newLibrary, ownLibrary = !stress && !demo, openDevice)
         }
     }
 }

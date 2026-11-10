@@ -263,8 +263,11 @@ data class SyncStatus(
  *
  * Every call on the core runs on one thread ([thread]); the core's events arrive on its threads
  * and are queued over to that one.
+ *
+ * It's open only so the store screenshots (src/test/.../screenshots) can show a sync part way
+ * through, through [status], [profile], [estimate] and [profileChoices], without the core.
  */
-class Syncer(
+open class Syncer(
     private val context: Context,
     private val source: CoreLibrarySource,
     private val configDir: File,
@@ -274,7 +277,7 @@ class Syncer(
 ) : DeviceRemover, RecycleBin {
     private val thread = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow(SyncStatus(deviceName))
-    val status: StateFlow<SyncStatus> = state
+    open val status: StateFlow<SyncStatus> = state
 
     /**
      * This phone's library was set aside for the one it paired into, as a merge of the old one
@@ -484,7 +487,7 @@ class Syncer(
     // phone isn't in a group, or [uid] isn't a member; see CoreSync for the others.
 
     /** [uid]'s profile, this phone's ([SyncStatus.self]) or any other member's. */
-    suspend fun profile(uid: String): SyncProfile = onCore { it.profile(uid) }
+    open suspend fun profile(uid: String): SyncProfile = onCore { it.profile(uid) }
 
     /**
      * Changes [uid]'s profile with [edit], applied to the one stored now and stored straight
@@ -569,7 +572,7 @@ class Syncer(
      * track, so it may take a moment on a big library. ERR_LIBRARY_MISMATCH if this phone's
      * library isn't the group's.
      */
-    suspend fun estimate(uid: String, profile: SyncProfile): SyncEstimate = onCore { it.estimate(uid, profile) }
+    open suspend fun estimate(uid: String, profile: SyncProfile): SyncEstimate = onCore { it.estimate(uid, profile) }
 
     // Remove from this phone ([DeviceRemover]). Like the profile calls, these work whenever
     // sync has been opened; failures are logged and reported as null or false.
@@ -637,7 +640,7 @@ class Syncer(
     }
 
     /** What a profile can select, from the whole library. Throws KithCoreException. */
-    suspend fun profileChoices(): ProfileChoices = source.profileChoices()
+    open suspend fun profileChoices(): ProfileChoices = source.profileChoices()
 
     /**
      * Checks this phone's files, [deep]ly by reading every one, else by size and time, and

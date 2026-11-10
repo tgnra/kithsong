@@ -167,8 +167,11 @@ data class ImportProgress(
  * It belongs to the process, not the UI, and [ImportService] keeps the process running while
  * it works. Every call on the sessions, and all of the state below, is on one thread
  * ([thread]); the core's events arrive on its import threads and are queued over to it.
+ *
+ * It's open only so the store screenshots (src/test/.../screenshots) can show an import part
+ * way through, through [progress] and [details], without the core.
  */
-class Importer(
+open class Importer(
     private val context: Context,
     private val source: CoreLibrarySource,
     private val scope: CoroutineScope,
@@ -181,7 +184,7 @@ class Importer(
     private val root = File(context.cacheDir, "import")
 
     /** The current or last import, or null for none (or once [dismiss]ed). */
-    val progress: StateFlow<ImportProgress?> = state
+    open val progress: StateFlow<ImportProgress?> = state
 
     val isRunning: Boolean get() = state.value?.phase?.isOver == false
 
@@ -399,7 +402,7 @@ class Importer(
     }
 
     /** What an item's page shows of [key], whatever its state, or null once its session is gone. */
-    suspend fun details(key: ItemKey): ReviewDetails? = withContext(thread) {
+    open suspend fun details(key: ItemKey): ReviewDetails? = withContext(thread) {
         val batch = batches.getOrNull(key.batch) ?: return@withContext null
         val session = batch.session ?: return@withContext null
         try {
