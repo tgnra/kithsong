@@ -136,8 +136,12 @@ for theme in light dark; do
         # their least.
         mkdir -p "$home/config/gtk-4.0"
         printf '[Settings]\ngtk-font-name=Cantarell 11\ngtk-xft-dpi=98304\n' >"$home/config/gtk-4.0/settings.ini"
+        # Each shot shows one person's devices (Alice's here), except this one: Mallory's
+        # laptop lurks among the unpaired devices.
+        stranger=""
+        [[ "$shot" == sync && "$theme" == dark ]] && stranger="Mallory's laptop"
         XDG_CONFIG_HOME="$home/config" XDG_DATA_HOME="$home/data" XDG_CACHE_HOME="$home/cache" \
-            KITHSONG_THEME="$theme" GDK_BACKEND=wayland GSETTINGS_BACKEND=memory NO_AT_BRIDGE=1 \
+            KITHSONG_DEMO_STRANGER="$stranger" KITHSONG_THEME="$theme" GDK_BACKEND=wayland GSETTINGS_BACKEND=memory NO_AT_BRIDGE=1 \
             "$scratch/app/bin/kithsong" --demo-library --window-size "${width}x${height}" \
             --page "$page" --demo-playing "$(playing_of "$theme")" >"$home/app.log" 2>&1 &
         app_pid=$!

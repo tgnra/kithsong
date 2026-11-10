@@ -1924,6 +1924,9 @@ static gboolean open_start_page(gpointer user) {
       if (++tries < 40) return G_SOURCE_CONTINUE;
     } else {
       mc_demo_sync_show(sync);
+      /* A made-up stranger nearby, for one of the store shots (scripts/store-screenshots). */
+      const char *stranger = g_getenv("KITHSONG_DEMO_STRANGER");
+      if (stranger && *stranger) mc_demo_sync_stranger(sync, stranger);
     }
   } else if (!strcmp(page, "home")) {
     GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->top_nav, TOP_NAV_HOME);

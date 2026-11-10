@@ -225,3 +225,37 @@ mc_status mc_demo_sync_show(mc_sync *sync) {
   mc_sync_emit_progress(sync, &progress);
   return MC_OK;
 }
+
+#define STRANGER_UID "0badc0de-6d61-4c6c-8f72-79a1b2c3d4e5"
+
+mc_status mc_demo_sync_stranger(mc_sync *sync, const char *name) {
+  if (!sync || !name) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = NULL;
+  for (int i = 0; i < sync->npeers && !p; i++)
+    if (!strcmp(sync->peers[i].uid, STRANGER_UID)) p = &sync->peers[i];
+  if (!p) {
+    mc_sync_peer *grown = realloc(sync->peers, (size_t)(sync->npeers + 1) * sizeof *grown);
+    if (grown) {
+      sync->peers = grown;
+      p = &sync->peers[sync->npeers++];
+      memset(p, 0, sizeof *p);
+      memcpy(p->uid, STRANGER_UID, MC_UID_STRLEN);
+    }
+  }
+  if (p) {
+    snprintf(p->name, sizeof p->name, "%s", name);
+    snprintf(p->kind, sizeof p->kind, "%s", "desktop");
+    snprintf(p->address, sizeof p->address, "%s", "192.168.1.66");
+    p->port = 40001;
+    p->discovered = 1;
+  }
+  mc_mutex_unlock(&sync->lock);
+  if (!p) return MC_ERR_NOMEM;
+  if (sync->ev.on_peer) {
+    mc_mutex_lock(&sync->cb_lock);
+    sync->ev.on_peer(sync->user, STRANGER_UID, 1, 0);
+    mc_mutex_unlock(&sync->cb_lock);
+  }
+  return MC_OK;
+}

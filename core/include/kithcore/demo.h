@@ -97,6 +97,9 @@ mc_status mc_demo_sync_group(const char *library_dir, const char *config_dir, co
  * afterwards. Call once sync has started, from the thread that drives it. */
 typedef struct mc_sync mc_sync;
 mc_status mc_demo_sync_show(mc_sync *sync);
+/* Shows a made-up computer named name as nearby and unpaired, as discovery would: the
+ * Unpaired devices list has it. Nothing can connect as it. After mc_demo_sync_show(). */
+mc_status mc_demo_sync_stranger(mc_sync *sync, const char *name);
 
 #ifdef __cplusplus
 }
