@@ -2963,6 +2963,7 @@ enum { SCROLL_ALBUMS, SCROLL_ARTISTS, SCROLL_TRACKS, SCROLL_VIEWS };
 
 static struct {
   int view, frame;
+  int pass, passes; /* mc_perf_run_passes(): each pass is every view again */
   BOOL running;
 } g_scroll_test;
 
@@ -2977,6 +2978,9 @@ static scroller *scroll_test_view(void) {
 /* Opens the view the test has got to, at its top. */
 static void scroll_test_enter(void) {
   g_scroll_test.frame = 0;
+  /* Its run starts here: on a later pass the view may have painted, moved, while another was
+   * tested, and the time since then is no frame. */
+  mc_perf_frame_break(scroll_test_view()->perf_name);
   if (g_scroll_test.view == SCROLL_ALBUMS) {
     show_page(PAGE_ALBUMS);
     album_grid_unselect();
@@ -2988,14 +2992,18 @@ static void scroll_test_enter(void) {
     if (mc_library_biggest_album(g_app.lib, uid) == MC_OK) open_album(uid, NULL);
   }
   RedrawWindow(g_app.wnd, NULL, NULL, RDW_UPDATENOW | RDW_ALLCHILDREN);
+  mc_perf_frame_break(scroll_test_view()->perf_name); /* nor is opening it */
   scroller_jump(scroll_test_view(), 0);
 }
 
 static void scroll_test_start(void) {
   if (!mc_perf_enabled() || !g_app.lib || g_scroll_test.running) return;
+  mc_perf_memory_sample("scroll_start");
   mc_perf_auto_begin();
   g_scroll_test.running = TRUE;
   g_scroll_test.view = SCROLL_ALBUMS;
+  g_scroll_test.pass = 1;
+  g_scroll_test.passes = mc_perf_run_passes();
   scroll_test_enter();
   PostMessageW(g_app.wnd, WM_APP_SCROLL_TEST, 0, 0);
 }
@@ -3024,8 +3032,14 @@ static void scroll_test_frame(void) {
     s->perf_pos = -1;
     mc_perf_frame_break(s->perf_name);
     if (++g_scroll_test.view == SCROLL_VIEWS) {
-      scroll_test_end();
-      return;
+      char name[16];
+      snprintf(name, sizeof name, "pass_%d", g_scroll_test.pass);
+      mc_perf_memory_sample(name);
+      if (g_scroll_test.pass++ >= g_scroll_test.passes) {
+        scroll_test_end();
+        return;
+      }
+      g_scroll_test.view = SCROLL_ALBUMS; /* the same again: what it holds should stay level */
     }
     scroll_test_enter();
   } else {

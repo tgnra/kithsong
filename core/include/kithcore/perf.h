@@ -68,6 +68,12 @@ void mc_perf_frame_break(const char *series);
 void mc_perf_auto_begin(void);
 void mc_perf_auto_end(void);
 int mc_perf_auto_running(void);
+/* How many times a scroll test goes through its views: KITHSONG_PERF_PASSES, 1 to 40, else 1.
+ * Frames of every pass go in the same series. Frontends take a memory reading (below) named
+ * "scroll_start" before the first and "pass_<n>" after each, so memory that keeps growing over
+ * the same scrolling shows as a leak. */
+#define MC_PERF_MAX_PASSES 40
+int mc_perf_run_passes(void);
 
 /* A view switch: the click happened (view is what it opens), and then the view was painted.
  * begin again before end replaces the switch under way. */
@@ -75,6 +81,22 @@ void mc_perf_view_begin(const char *view);
 void mc_perf_view_end(void);
 /* Whether a switch is waiting for its mc_perf_view_end(). */
 int mc_perf_view_pending(void);
+
+/* Memory: what this process holds now, in bytes. resident is what's in RAM (the working set on
+ * Windows, VmRSS on Linux and Android), peak the most it has been, and private what's this
+ * process's own: committed private bytes on Windows, anonymous resident memory elsewhere,
+ * which leaves out mapped files and shared libraries, so a leak shows in it first. A figure
+ * the system won't give is 0. Works whether or not the profiler is on; MC_ERR_UNIMPLEMENTED
+ * if none can be had. */
+typedef struct mc_perf_memory {
+  uint64_t resident, peak, private_bytes;
+} mc_perf_memory;
+mc_status mc_perf_memory_now(mc_perf_memory *out);
+
+/* Takes a reading now, for the report's [memory] section, under name ("startup",
+ * "pass_1"...). They're listed in the order taken; a repeated name is another line. Kept by
+ * mc_perf_clear(), as startup's are; the oldest give way after a few dozen. */
+void mc_perf_memory_sample(const char *name);
 
 /* Forgets the frames and view switches, keeping startup's marks and the notes. */
 void mc_perf_clear(void);

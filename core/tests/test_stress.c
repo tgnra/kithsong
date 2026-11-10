@@ -224,6 +224,22 @@ static void test_perf(const char *base) {
   mc_perf_frame("albums", 0);
   mc_perf_auto_end();
 
+  /* Memory: a reading that grows when this process takes more. */
+  mc_perf_memory m0, m1;
+  CHECK(mc_perf_memory_now(&m0) == MC_OK && m0.resident > 0 && m0.peak >= m0.resident);
+  mc_perf_memory_sample("before");
+  size_t big = 64u << 20;
+  char *hold = malloc(big);
+  CHECK(hold != NULL);
+  /* Each page touched, so it's resident: through volatile, or the compiler may drop the writes
+   * or put them after the reading, as nothing else looks at them. */
+  volatile char *touch = hold;
+  for (size_t i = 0; hold && i < big; i += 4096) touch[i] = 1;
+  CHECK(mc_perf_memory_now(&m1) == MC_OK && m1.private_bytes >= m0.private_bytes + big / 2);
+  CHECK(m1.resident >= m0.resident + big / 2 && m1.peak >= m1.resident);
+  mc_perf_memory_sample("after");
+  free(hold);
+
   report = mc_perf_report();
   CHECK(report != NULL);
   if (report) {
@@ -234,6 +250,8 @@ static void test_perf(const char *base) {
     CHECK(strstr(report, "paint_median_ms 1.50\n"));
     CHECK(strstr(report, "[views]\n") && strstr(report, "artists 1 "));
     CHECK(strstr(report, "refresh_hz 100\n"));
+    const char *mem = strstr(report, "[memory]\n");
+    CHECK(mem && strstr(mem, "\nbefore ") && strstr(mem, "\nafter ") && strstr(mem, "\nbefore ") < strstr(mem, "\nafter "));
     /* At 100 Hz the 60 ms frame missed several refreshes. */
     const char *dropped = strstr(report, "dropped ");
     CHECK(dropped && atoi(dropped + 8) >= 4);
@@ -249,7 +267,7 @@ static void test_perf(const char *base) {
 
   mc_perf_clear();
   report = mc_perf_report();
-  CHECK(report && !strstr(report, "[scroll") && strstr(report, "window_shown "));
+  CHECK(report && !strstr(report, "[scroll") && strstr(report, "window_shown ") && strstr(report, "[memory]"));
   mc_free(report);
   mc_perf_set_enabled(0);
 }

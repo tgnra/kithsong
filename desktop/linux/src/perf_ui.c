@@ -1,5 +1,6 @@
 #include "perf_ui.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "album_grid.h"
@@ -15,6 +16,7 @@ typedef struct watched {
 
 /* The scroll test's views, in order. */
 enum { TEST_ALBUMS, TEST_ARTISTS, TEST_TRACKS, TEST_VIEWS };
+static const char *const k_test_series[TEST_VIEWS] = {"albums", "artists", "tracks"};
 
 static struct {
   app *a;
@@ -23,6 +25,7 @@ static struct {
   gboolean first_frame, content_ready;
   guint tick;
   int view, frame;
+  int pass, passes; /* mc_perf_run_passes(): each pass is every view again */
   GtkAdjustment *adj; /* what the test is scrolling */
   gboolean settling;  /* the view just opened: its first frames only lay it out */
 } p;
@@ -109,6 +112,9 @@ static void enter_view(void) {
   app *a = p.a;
   p.frame = 0;
   p.settling = TRUE;
+  /* Its run starts here: on a later pass the list may have painted, moved, while another view
+   * was tested, and the time since then is no frame. */
+  mc_perf_frame_break(k_test_series[p.view]);
   if (p.view == TEST_ALBUMS) {
     app_show_view(a, APP_VIEW_ALBUMS);
     p.adj = adjustment_of(album_grid_scrolled(a->album_grid));
@@ -156,11 +162,16 @@ static gboolean on_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data) 
   double max = p.adj ? gtk_adjustment_get_upper(p.adj) - gtk_adjustment_get_page_size(p.adj) : 0;
   double value = p.adj ? gtk_adjustment_get_value(p.adj) : 0;
   if (p.frame >= MC_PERF_SCROLL_FRAMES || value >= max) {
-    static const char *const names[TEST_VIEWS] = {"albums", "artists", "tracks"};
-    mc_perf_frame_break(names[p.view]);
+    mc_perf_frame_break(k_test_series[p.view]);
     if (++p.view == TEST_VIEWS) {
-      test_ended();
-      return G_SOURCE_REMOVE;
+      char name[16];
+      snprintf(name, sizeof name, "pass_%d", p.pass);
+      mc_perf_memory_sample(name);
+      if (p.pass++ >= p.passes) {
+        test_ended();
+        return G_SOURCE_REMOVE;
+      }
+      p.view = TEST_ALBUMS; /* the same again: what it holds should stay level */
     }
     enter_view();
     return G_SOURCE_CONTINUE;
@@ -172,8 +183,11 @@ static gboolean on_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data) 
 
 void perf_ui_run_scroll_test(void) {
   if (!mc_perf_enabled() || p.tick || !p.a || !p.a->lib) return;
+  mc_perf_memory_sample("scroll_start");
   mc_perf_auto_begin();
   p.view = TEST_ALBUMS;
+  p.pass = 1;
+  p.passes = mc_perf_run_passes();
   enter_view();
   p.tick = gtk_widget_add_tick_callback(GTK_WIDGET(p.a->win), on_tick, NULL, NULL);
 }

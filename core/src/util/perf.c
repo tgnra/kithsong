@@ -12,6 +12,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+/* After windows.h. K32GetProcessMemoryInfo is in kernel32 itself: no psapi.lib. */
+#include <psapi.h>
 #else
 #include <time.h>
 #include <unistd.h>
@@ -27,6 +29,7 @@ enum {
   MAX_FRAMES = 16384, /* per series: minutes of scrolling */
   MAX_VIEWS = 24,
   MAX_SWITCHES = 64, /* per view */
+  MAX_MEMORY = 48,
   NAME_CAP = 48,
   VALUE_CAP = 96,
   PAUSE_US = 500000,
@@ -55,6 +58,12 @@ typedef struct view {
   int count;
 } view;
 
+typedef struct memory_sample {
+  char name[NAME_CAP];
+  uint64_t at_us;
+  mc_perf_memory m;
+} memory_sample;
+
 static struct {
   mc_mutex lock;
   volatile int on, ready;
@@ -70,6 +79,8 @@ static struct {
   int nseries;
   view views[MAX_VIEWS];
   int nviews;
+  memory_sample memory[MAX_MEMORY];
+  int nmemory;
   char switching[NAME_CAP]; /* the view switch under way; "" for none */
   uint64_t switch_us;
 } P;
@@ -283,6 +294,12 @@ int mc_perf_auto_running(void) {
   return P.auto_on;
 }
 
+int mc_perf_run_passes(void) {
+  const char *v = getenv("KITHSONG_PERF_PASSES");
+  int n = v ? atoi(v) : 1;
+  return n < 1 ? 1 : n > MC_PERF_MAX_PASSES ? MC_PERF_MAX_PASSES : n;
+}
+
 void mc_perf_view_begin(const char *name) {
   if (!P.on || !name) return;
   uint64_t now = mc_perf_now_us();
@@ -318,6 +335,59 @@ void mc_perf_view_end(void) {
     }
     P.switching[0] = '\0';
   }
+  mc_mutex_unlock(&P.lock);
+}
+
+#ifndef _WIN32
+/* The kB figure on /proc/self/status's line starting key ("VmRSS:"), in bytes; 0 if none. */
+static uint64_t status_kb(const char *status, const char *key) {
+  const char *p = strstr(status, key);
+  if (!p || (p != status && p[-1] != '\n')) return 0;
+  return (uint64_t)strtoull(p + strlen(key), NULL, 10) * 1024u;
+}
+#endif
+
+mc_status mc_perf_memory_now(mc_perf_memory *out) {
+  if (!out) return MC_ERR_INVALID_ARG;
+  memset(out, 0, sizeof *out);
+#ifdef _WIN32
+  PROCESS_MEMORY_COUNTERS_EX pmc;
+  memset(&pmc, 0, sizeof pmc);
+  pmc.cb = sizeof pmc;
+  if (!K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS *)&pmc, sizeof pmc))
+    return MC_ERR_UNIMPLEMENTED;
+  out->resident = pmc.WorkingSetSize;
+  out->peak = pmc.PeakWorkingSetSize;
+  out->private_bytes = pmc.PrivateUsage;
+  return MC_OK;
+#else
+  char buf[4096];
+  FILE *f = fopen("/proc/self/status", "r");
+  if (!f) return MC_ERR_UNIMPLEMENTED;
+  size_t n = fread(buf, 1, sizeof buf - 1, f);
+  fclose(f);
+  buf[n] = '\0';
+  out->resident = status_kb(buf, "VmRSS:");
+  out->peak = status_kb(buf, "VmHWM:");
+  out->private_bytes = status_kb(buf, "RssAnon:"); /* Linux 4.5 on */
+  return out->resident ? MC_OK : MC_ERR_UNIMPLEMENTED;
+#endif
+}
+
+void mc_perf_memory_sample(const char *name) {
+  if (!P.on || !name) return;
+  mc_perf_memory m;
+  if (mc_perf_memory_now(&m) != MC_OK) return;
+  uint64_t now = mc_perf_now_us();
+  mc_mutex_lock(&P.lock);
+  if (P.nmemory == MAX_MEMORY) { /* full: the oldest goes */
+    memmove(P.memory, P.memory + 1, sizeof P.memory - sizeof P.memory[0]);
+    P.nmemory--;
+  }
+  memory_sample *s = &P.memory[P.nmemory++];
+  snprintf(s->name, NAME_CAP, "%s", name);
+  s->at_us = now;
+  s->m = m;
   mc_mutex_unlock(&P.lock);
 }
 
@@ -480,6 +550,14 @@ char *mc_perf_report(void) {
     add(&t, "%s %d %.1f %.1f\n", vs[i]->name, vs[i]->count, percentile(sorted, vs[i]->count, 50),
         (double)sorted[vs[i]->count - 1]);
     free(sorted);
+  }
+
+  if (P.nmemory) add(&t, "\n[memory]\n# sample  ms_since_process_start  resident_mb  peak_mb  private_mb\n");
+  for (int i = 0; i < P.nmemory; i++) {
+    const memory_sample *s = &P.memory[i];
+    add(&t, "%s %.1f %.1f %.1f %.1f\n", s->name, (double)(s->at_us - P.t0_us) / 1000.0,
+        (double)s->m.resident / 1048576.0, (double)s->m.peak / 1048576.0,
+        (double)s->m.private_bytes / 1048576.0);
   }
   mc_mutex_unlock(&P.lock);
   if (t.failed) {
