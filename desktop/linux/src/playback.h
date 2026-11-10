@@ -159,4 +159,8 @@ const char *playback_queue_uid(int i);
 int64_t playback_position_ms(void);
 int64_t playback_duration_ms(void);
 
+/* For screenshots (--demo-playing): shows track uid in the now-playing strip, paused at
+ * position_ms, and marks it in the track lists, without loading it into the player. */
+void playback_demo_show(const char *uid, int position_ms);
+
 #endif

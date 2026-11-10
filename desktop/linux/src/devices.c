@@ -364,6 +364,19 @@ static void open_device(const char *uid) {
   gtk_stack_set_visible_child_name(d.a->pages, "device");
 }
 
+gboolean devices_open(const char *uid) {
+  if (!d.paired || !uid) return FALSE;
+  refresh_devices();
+  for (GtkWidget *row = gtk_widget_get_first_child(d.paired); row; row = gtk_widget_get_next_sibling(row)) {
+    const char *row_uid = g_object_get_data(G_OBJECT(row), "uid");
+    if (!GTK_IS_LIST_BOX_ROW(row) || !row_uid || strcmp(row_uid, uid)) continue;
+    open_device(uid);
+    gtk_list_box_select_row(GTK_LIST_BOX(d.paired), GTK_LIST_BOX_ROW(row));
+    return TRUE;
+  }
+  return FALSE;
+}
+
 static void on_paired_activated(GtkListBox *list, GtkListBoxRow *row, gpointer data) {
   (void)list, (void)data;
   const char *uid = g_object_get_data(G_OBJECT(row), "uid");

@@ -57,6 +57,9 @@ typedef enum devices_state {
   DEVICES_GROUPED,  /* this computer is in a group */
 } devices_state;
 devices_state devices_sync_state(void);
+/* Shows group member uid's page, selected in the sidebar, as picking it there does
+ * (--page sync). FALSE if it isn't listed (yet). */
+gboolean devices_open(const char *uid);
 /* Shows this computer's page, where What to sync is, while it's in a group. */
 void devices_open_self(void);
 

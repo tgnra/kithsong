@@ -1899,11 +1899,32 @@ static void on_page_changed(GObject *pages, GParamSpec *pspec, gpointer user) {
 }
 
 /* --page's page (see main()), once the window is up: home, albums, artists, album:<title>,
- * artist:<name> or search:<text>. An unknown page, or a title not there, is passed over. */
+ * artist:<name> or search:<text>; with --demo-library, import, import-review and sync too.
+ * An unknown page, or a title not there, is passed over. Then --demo-playing's track. Called
+ * again (G_SOURCE_CONTINUE) until a page that needs something to come first can open. */
 static gboolean open_start_page(gpointer user) {
   app *a = user;
   const char *page = a->start_page;
+  static gboolean demo_import_started;
+  static int tries;
   if (!page || !a->lib) {
+  } else if (a->demo && (!strcmp(page, "import") || !strcmp(page, "import-review"))) {
+    if (!demo_import_started) {
+      demo_import_started = TRUE;
+      show_page(a, "import");
+      import_view_start_demo(a->import);
+    }
+    if (!strcmp(page, "import-review")) {
+      if (!import_view_item_shown(a->import, MC_DEMO_IMPORT_REVIEW) && ++tries < 40) return G_SOURCE_CONTINUE;
+      import_view_open_review(a->import, MC_DEMO_IMPORT_REVIEW);
+    }
+  } else if (a->demo && !strcmp(page, "sync")) {
+    mc_sync *sync = devices_sync();
+    if (!sync || !devices_open(MC_DEMO_PHONE_UID)) {
+      if (++tries < 40) return G_SOURCE_CONTINUE;
+    } else {
+      mc_demo_sync_show(sync);
+    }
   } else if (!strcmp(page, "home")) {
     GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->top_nav, TOP_NAV_HOME);
     gtk_list_box_select_row(a->top_nav, row);
@@ -1934,14 +1955,22 @@ static gboolean open_start_page(gpointer user) {
   }
   g_free(a->start_page);
   a->start_page = NULL;
+  if (a->demo_playing && a->lib) {
+    char uid[MC_UID_STRLEN];
+    int position = 0;
+    if (mc_demo_playing_track(a->lib, a->demo_playing, uid, &position) == MC_OK) playback_demo_show(uid, position);
+    else g_printerr("--demo-playing: no track %s in the library\n", a->demo_playing);
+  }
+  g_clear_pointer(&a->demo_playing, g_free);
   return G_SOURCE_REMOVE;
 }
 
 /* --demo-library (see main()): the demo library in settings_dir/demo-library, made if it
  * isn't there, as the settings' library. NULL if so, else why not, to free: the settings
  * name another library already (a real settings folder never loses its library to it), or
- * it couldn't be made. */
-static char *use_demo_library(const char *settings_dir, mc_settings *settings) {
+ * it couldn't be made. With --page sync, the made-up group of kithcore/demo.h is written into
+ * settings_dir's sync.db too, before sync starts. */
+static char *use_demo_library(const char *settings_dir, mc_settings *settings, const char *page) {
   char *dir = g_build_filename(settings_dir, MC_DEMO_DIR_NAME, NULL), *why = NULL;
   const char *current = mc_settings_library_dir(settings);
   if (current && strcmp(current, dir)) {
@@ -1950,14 +1979,18 @@ static char *use_demo_library(const char *settings_dir, mc_settings *settings) {
     mc_status st = mc_demo_is_complete(dir) ? MC_OK : mc_demo_create(dir, NULL);
     if (st != MC_OK) why = mc_format_alloc(mc_str(MC_STR_DEMO_LIBRARY_FAILED), MC_S(dir), MC_S(mc_status_str(st)));
     else if (!current && mc_settings_set_library_dir(settings, dir) == MC_OK) mc_settings_save(settings);
+    if (st == MC_OK && page && !strcmp(page, "sync")) {
+      st = mc_demo_sync_group(dir, settings_dir, mc_settings_device_name(settings));
+      if (st != MC_OK) why = mc_format_alloc(mc_str(MC_STR_DEMO_LIBRARY_FAILED), MC_S(dir), MC_S(mc_status_str(st)));
+    }
   }
   g_free(dir);
   return why;
 }
 
 /* Takes the screenshot options out of argv, which GApplication would refuse:
- * --demo-library, --window-size WxH and --page <page> (each also as --x=value). FALSE, having
- * said why, for a bad one. */
+ * --demo-library, --window-size WxH, --page <page> and --demo-playing <album>#<n>@<m:ss>
+ * (each also as --x=value). FALSE, having said why, for a bad one. */
 static gboolean take_options(int *argc, char **argv, app *a, gboolean *demo) {
   int out = 1;
   for (int i = 1; i < *argc; i++) {
@@ -1972,7 +2005,8 @@ static gboolean take_options(int *argc, char **argv, app *a, gboolean *demo) {
     }
     gboolean size = !strcmp(arg, "--window-size") || g_str_has_prefix(arg, "--window-size=");
     gboolean page = !strcmp(arg, "--page") || g_str_has_prefix(arg, "--page=");
-    if (!size && !page) {
+    gboolean playing = !strcmp(arg, "--demo-playing") || g_str_has_prefix(arg, "--demo-playing=");
+    if (!size && !page && !playing) {
       argv[out++] = argv[i];
       continue;
     }
@@ -1987,6 +2021,11 @@ static gboolean take_options(int *argc, char **argv, app *a, gboolean *demo) {
       a->start_page = g_strdup(value);
       continue;
     }
+    if (playing) {
+      g_free(a->demo_playing);
+      a->demo_playing = g_strdup(value);
+      continue;
+    }
     int w = 0, h = 0;
     char end = 0;
     if (sscanf(value, "%dx%d%c", &w, &h, &end) != 2 || w < 320 || h < 240 || w > 16384 || h > 16384) {
@@ -1999,6 +2038,28 @@ static gboolean take_options(int *argc, char **argv, app *a, gboolean *demo) {
   argv[out] = NULL;
   *argc = out;
   return TRUE;
+}
+
+/* The now-playing strip's width in the header bar, at most, and its margins. */
+enum { STRIP_WIDTH = 640, STRIP_MARGIN = 12 };
+
+/* The header bar gives its title widget only the width it would like (its natural width),
+ * and the strip would like only as much as its track's name takes, so the seekbar was as
+ * wide as the name, and next to nothing with no track. Wrapped in this, the strip would like
+ * its full width; the header bar still gives it less in a narrow window. */
+static void strip_measure(GtkWidget *widget, GtkOrientation orientation, int for_size, int *minimum, int *natural,
+                          int *minimum_baseline, int *natural_baseline) {
+  GtkWidget *child = gtk_widget_get_first_child(widget);
+  *minimum = *natural = 0;
+  *minimum_baseline = *natural_baseline = -1;
+  if (child) gtk_widget_measure(child, orientation, for_size, minimum, natural, minimum_baseline, natural_baseline);
+  if (orientation == GTK_ORIENTATION_HORIZONTAL && *natural < STRIP_WIDTH + 2 * STRIP_MARGIN)
+    *natural = STRIP_WIDTH + 2 * STRIP_MARGIN;
+}
+
+static void strip_allocate(GtkWidget *widget, int width, int height, int baseline) {
+  GtkWidget *child = gtk_widget_get_first_child(widget);
+  if (child && gtk_widget_should_layout(child)) gtk_widget_allocate(child, width, height, baseline, NULL);
 }
 
 static void on_activate(GtkApplication *gapp, gpointer user) {
@@ -2047,15 +2108,19 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
                                                                   "<Control>Right", "app.next"));
   adw_header_bar_pack_end(ADW_HEADER_BAR(header), volume_button_new(on_volume, on_muted, a));
 
-  /* The now-playing strip takes the title's place, up to a point. */
+  /* The now-playing strip takes the title's place, up to a point, whatever its track's name
+   * (strip_measure()). */
   GtkWidget *clamp = adw_clamp_new();
-  adw_clamp_set_maximum_size(ADW_CLAMP(clamp), 640);
-  adw_clamp_set_tightening_threshold(ADW_CLAMP(clamp), 640);
+  adw_clamp_set_maximum_size(ADW_CLAMP(clamp), STRIP_WIDTH);
+  adw_clamp_set_tightening_threshold(ADW_CLAMP(clamp), STRIP_WIDTH);
   gtk_widget_set_hexpand(clamp, TRUE);
-  gtk_widget_set_margin_start(clamp, 12);
-  gtk_widget_set_margin_end(clamp, 12);
+  gtk_widget_set_margin_start(clamp, STRIP_MARGIN);
+  gtk_widget_set_margin_end(clamp, STRIP_MARGIN);
   adw_clamp_set_child(ADW_CLAMP(clamp), now_playing_new(on_seek, on_shuffle, a));
-  adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), clamp);
+  GtkWidget *strip = adw_bin_new();
+  gtk_widget_set_layout_manager(strip, gtk_custom_layout_new(NULL, strip_measure, strip_allocate));
+  adw_bin_set_child(ADW_BIN(strip), clamp);
+  adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), strip);
 
   /* Right-hand track pane: hidden until an album is selected. */
   GtkWidget *album_split = adw_overlay_split_view_new();
@@ -2183,7 +2248,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   g_signal_connect(win, "destroy", G_CALLBACK(on_window_destroy), a);
   gtk_window_present(a->win);
   mc_perf_mark("window_shown");
-  if (a->start_page) g_timeout_add(500, open_start_page, a); /* once the window has settled */
+  if (a->start_page || a->demo_playing) g_timeout_add(500, open_start_page, a); /* once the window has settled */
   if (a->first_run) first_run_present(win, on_first_run_done, a);
   if (a->reset_failed) {
     AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_SETTINGS_RESET), a->reset_failed);
@@ -2208,7 +2273,11 @@ static void set_strings_locale(void) {
  * library (kithcore/demo.h) in <settings folder>/demo-library, making it first, and refuses a
  * settings folder that names another library; point XDG_CONFIG_HOME at a new folder for it.
  * --window-size WxH is the window's starting size, --page what it opens on: home, albums,
- * artists, album:<title>, artist:<name> or search:<text>. */
+ * artists, album:<title>, artist:<name> or search:<text>; with --demo-library also import
+ * (a made-up import part-way through), import-review (the same, with the album needing a
+ * decision under review) or sync (a made-up phone part-way through a sync, kithcore/demo.h).
+ * --demo-playing <album>#<track>@<m:ss> shows that track paused part-way in the now-playing
+ * strip, without playing it (playback_demo_show()). */
 int main(int argc, char **argv) {
   uint64_t main_us = mc_perf_now_us();
   app a = {0};
@@ -2219,6 +2288,7 @@ int main(int argc, char **argv) {
     mc_shutdown();
     return 2;
   }
+  a.demo = demo;
 
   /* Settings in ~/.config/kithsong say where the library folder is. With none yet, the first
    * run asks, once the window is up. Run from a checkout, settings are in kithsong-debug
@@ -2242,13 +2312,14 @@ int main(int argc, char **argv) {
   if (demo) {
     char *why = loaded != MC_OK ? mc_format_alloc(mc_str(MC_STR_DEMO_LIBRARY_FAILED), MC_S(settings_dir),
                                                   MC_S(mc_status_str(loaded)))
-                                : use_demo_library(settings_dir, settings);
+                                : use_demo_library(settings_dir, settings, a.start_page);
     if (why) {
       g_printerr("%s\n", why);
       mc_free(why);
       mc_settings_free(settings);
       g_free(settings_dir);
       g_free(a.start_page);
+      g_free(a.demo_playing);
       mc_free(a.reset_failed);
       mc_shutdown();
       return 2;
@@ -2286,6 +2357,7 @@ int main(int argc, char **argv) {
   g_free(a.settings_dir);
   g_free(a.art_dir);
   g_free(a.start_page);
+  g_free(a.demo_playing);
   mc_free(a.reset_failed);
   mc_shutdown();
   return status;

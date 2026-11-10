@@ -59,6 +59,8 @@ typedef struct app {
   /* For screenshots (main()): --window-size, or 0; --page's page until it's opened, or NULL. */
   int window_w, window_h;
   char *start_page;
+  char *demo_playing; /* --demo-playing, until the start page has shown it */
+  gboolean demo;      /* --demo-library */
 } app;
 
 /* Reloads the album and playlist grids, the album groups, the artists and the shown tracks

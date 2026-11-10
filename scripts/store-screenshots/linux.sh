@@ -13,7 +13,13 @@
 #
 # Needs sway and grim (sway --headless draws with pixman, no GPU), and fonts-cantarell and
 # adwaita-icon-theme for the app to look as it does on GNOME. WIDTH, HEIGHT and SHOTS (a space
-# separated list of home albums album artist search) can be set.
+# separated list of home albums album artist search import review sync) can be set.
+#
+# As on Windows (windows.ps1): import is the import page part-way through a made-up import,
+# review the same with the review of the album that needs a decision open, and sync a made-up
+# phone's page part-way through a sync with a selection as Opus. Each has a track paused
+# part-way in the now-playing strip: Copperline's first at 0:21 in light, Nightjar Season's at
+# 0:08 in dark (--demo-playing). See kithcore/demo.h.
 set -euo pipefail
 
 # Under a session bus of its own where there's dbus-run-session, so the app can't reach the
@@ -27,7 +33,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 out="${1:-out/linux}"
 width="${WIDTH:-1600}"
 height="${HEIGHT:-1000}"
-shots=(${SHOTS:-home albums album artist search})
+shots=(${SHOTS:-home albums album artist search import review sync})
 device_name="${DEVICE_NAME:-Living Room PC}"
 
 for tool in sway swaymsg grim sha256sum; do
@@ -49,7 +55,18 @@ page_of() {
         album) echo "album:Copperline" ;;
         artist) echo "artist:Ivy Sunderholt" ;;
         search) echo "search:night" ;;
-        *) echo "Unknown shot $1; one of home albums album artist search." >&2; return 1 ;;
+        import) echo import ;;
+        review) echo import-review ;;
+        sync) echo sync ;;
+        *) echo "Unknown shot $1; one of home albums album artist search import review sync." >&2; return 1 ;;
+    esac
+}
+
+# The track paused in the now-playing strip, by theme (--demo-playing).
+playing_of() {
+    case "$1" in
+        light) echo "Copperline#1@0:21" ;;
+        dark) echo "Nightjar Season#1@0:08" ;;
     esac
 }
 
@@ -119,7 +136,7 @@ for theme in light dark; do
         XDG_CONFIG_HOME="$home/config" XDG_DATA_HOME="$home/data" XDG_CACHE_HOME="$home/cache" \
             KITHSONG_THEME="$theme" GDK_BACKEND=wayland GSETTINGS_BACKEND=memory NO_AT_BRIDGE=1 \
             "$scratch/app/bin/kithsong" --demo-library --window-size "${width}x${height}" \
-            --page "$page" >"$home/app.log" 2>&1 &
+            --page "$page" --demo-playing "$(playing_of "$theme")" >"$home/app.log" 2>&1 &
         app_pid=$!
         shown=""
         for _ in $(seq 300); do

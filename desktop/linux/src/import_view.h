@@ -84,6 +84,14 @@ void import_view_set_library(GtkWidget *view, mc_library *lib);
  * replaced. */
 gboolean import_view_start(GtkWidget *view, const char *const *paths, int count);
 
+/* For screenshots (--page import, import-review, with --demo-library): starts the demo import
+ * (kithcore/demo.h) as import_view_start() starts a real one, if no session is open.
+ * import_view_item_shown() says whether item idx is in the list yet, and
+ * import_view_open_review() opens its review dialog. */
+gboolean import_view_start_demo(GtkWidget *view);
+gboolean import_view_item_shown(GtkWidget *view, int idx);
+void import_view_open_review(GtkWidget *view, int idx);
+
 /* Opens the folder chooser (several folders may be picked) and imports them. */
 void import_view_choose_folders(GtkWidget *view);
 

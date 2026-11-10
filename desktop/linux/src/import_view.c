@@ -525,6 +525,31 @@ gboolean import_view_start(GtkWidget *view, const char *const *paths, int count)
   return TRUE;
 }
 
+gboolean import_view_start_demo(GtkWidget *view) {
+  import_view *v = get_view(view);
+  if (!v || v->imp) return FALSE;
+  close_session(v);
+  v->idle = FALSE;
+  session_tag *tag = g_new(session_tag, 1);
+  tag->v = v;
+  tag->gen = v->generation;
+  if (mc_demo_import_start(on_import_event, tag, &v->imp) != MC_OK) {
+    g_free(tag);
+    v->imp = NULL;
+    return FALSE;
+  }
+  v->tag = tag;
+  update_status(v);
+  gtk_stack_set_visible_child_name(GTK_STACK(v->root), "session");
+  if (v->cb.session_changed) v->cb.session_changed(v->cb.user, TRUE);
+  return TRUE;
+}
+
+gboolean import_view_item_shown(GtkWidget *view, int idx) {
+  import_view *v = get_view(view);
+  return v && v->imp && v->states && idx >= 0 && idx < v->item_count;
+}
+
 /* --- Picking and dropping folders and zips --- */
 
 /* Imports the native paths of a list of GFiles: folders, zips or loose files, as the core
@@ -1513,6 +1538,11 @@ static void open_review(import_view *v, int idx) {
 
   review_load(r);
   if (v->rev == r) adw_dialog_present(r->dialog, v->root);
+}
+
+void import_view_open_review(GtkWidget *view, int idx) {
+  import_view *v = get_view(view);
+  if (v) open_review(v, idx);
 }
 
 static void on_row_activated(GtkListBox *list, GtkListBoxRow *row, gpointer data) {

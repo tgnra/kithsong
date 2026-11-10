@@ -339,6 +339,18 @@ void playback_set_library(mc_library *lib, const char *config_dir) {
   if (lib && config_dir && mc_scrobbler_new(lib, config_dir, &s.scrobbler) != MC_OK) s.scrobbler = NULL;
 }
 
+void playback_demo_show(const char *uid, int position_ms) {
+  mc_track_list *list = NULL;
+  if (s.lib && uid && mc_library_get_track(s.lib, uid, &list) == MC_OK && list->count) {
+    const mc_track_info *t = &list->items[0];
+    now_playing_show(t->title ? t->title : "", t->artist, t->duration_ms, t->cover_dir);
+    now_playing_set_position(position_ms);
+    track_list_set_playing(t->uid);
+    artist_view_set_playing(t->uid);
+  }
+  mc_track_list_free(list);
+}
+
 void playback_clear(void) {
   if (!s.player) return;
   mc_player_end_play(s.player);
