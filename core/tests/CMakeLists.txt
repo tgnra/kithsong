@@ -152,6 +152,10 @@ set_tests_properties(test_discovery PROPERTIES SKIP_RETURN_CODE 77)  # no multic
 add_executable(manual_stress manual_stress.c)
 target_link_libraries(manual_stress PRIVATE kithcore)
 target_include_directories(manual_stress PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
+# Times sync with a big library over loopback and checks it all arrived; see its top.
+add_executable(manual_sync_stress manual_sync_stress.c)
+target_link_libraries(manual_sync_stress PRIVATE kithcore mc_sqlite3)
+target_include_directories(manual_sync_stress PRIVATE "${PROJECT_SOURCE_DIR}/core/src")
 add_executable(manual_demo manual_demo.c)
 target_link_libraries(manual_demo PRIVATE kithcore)
 
