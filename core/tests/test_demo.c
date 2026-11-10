@@ -236,6 +236,157 @@ static void test_create(const char *base) {
   free(staging);
 }
 
+/* --- Screenshot states --- */
+
+static struct {
+  mc_mutex lock;
+  int scanned, changed;
+  int phone_online;
+  mc_sync_progress progress;
+  int progress_count;
+} g_ev;
+
+static void on_import(void *user, mc_import_event ev, int arg) {
+  (void)user;
+  (void)arg;
+  mc_mutex_lock(&g_ev.lock);
+  if (ev == MC_IMPORT_EV_SCANNED) g_ev.scanned = arg;
+  if (ev == MC_IMPORT_EV_ITEM_CHANGED) g_ev.changed++;
+  CHECK(ev != MC_IMPORT_EV_IDLE);
+  mc_mutex_unlock(&g_ev.lock);
+}
+
+static void test_import(void) {
+  mc_mutex_init(&g_ev.lock);
+  mc_import *imp = NULL;
+  CHECK(mc_demo_import_start(on_import, NULL, &imp) == MC_OK && imp);
+  int n = mc_import_item_count(imp);
+  CHECK(n >= 6);
+  for (int i = 0; i < 200; i++) {
+    mc_mutex_lock(&g_ev.lock);
+    int done = g_ev.changed == n;
+    mc_mutex_unlock(&g_ev.lock);
+    if (done) break;
+    mc_sleep_ms(10);
+  }
+  CHECK(g_ev.scanned == n && g_ev.changed == n);
+  int states[MC_IMPORT_FAILED + 1] = {0};
+  for (int i = 0; i < n; i++) {
+    mc_import_item *it = NULL;
+    CHECK(mc_import_item_get(imp, i, &it) == MC_OK && it);
+    if (!it) continue;
+    states[it->state]++;
+    CHECK(it->artist && it->album && it->folder && it->file_count > 0);
+    for (int m = 0; m < it->match_count; m++)
+      CHECK(it->matches[m].confidence > 0 && it->matches[m].confidence <= 1 && it->matches[m].track_count > 0);
+    mc_import_item_free(it);
+  }
+  CHECK(states[MC_IMPORT_DONE] >= 2 && states[MC_IMPORT_REVIEW] == 1 && states[MC_IMPORT_PENDING] >= 1 &&
+        states[MC_IMPORT_MATCHING] == 1 && states[MC_IMPORT_WRITING] == 1);
+
+  /* The one needing a decision: candidates best first, the best missing a track. */
+  mc_import_item *rev = NULL;
+  CHECK(mc_import_item_get(imp, MC_DEMO_IMPORT_REVIEW, &rev) == MC_OK && rev);
+  if (rev) {
+    CHECK(rev->state == MC_IMPORT_REVIEW && rev->chosen == -1 && rev->match_count == 3);
+    if (rev->match_count == 3) {
+      const mc_import_match *best = &rev->matches[0];
+      CHECK(best->confidence > rev->matches[1].confidence && rev->matches[1].confidence > rev->matches[2].confidence);
+      CHECK(best->track_count == rev->file_count + 1 && best->tracks[best->track_count - 1].file == -1);
+      CHECK(best->tracks[0].file == 0 && best->extra_files == 0);
+      CHECK(rev->matches[2].extra_files > 0);
+    }
+    mc_import_item_free(rev);
+  }
+  /* Asking changes nothing, and freeing doesn't wait on anything. */
+  CHECK(mc_import_skip(imp, MC_DEMO_IMPORT_REVIEW) == MC_OK);
+  mc_import_free(imp);
+  mc_mutex_destroy(&g_ev.lock);
+}
+
+static void on_peer(void *user, const char *uid, int online, int member) {
+  (void)user;
+  if (!strcmp(uid, MC_DEMO_PHONE_UID) && online && member) g_ev.phone_online = 1;
+}
+
+static void on_progress(void *user, const mc_sync_progress *p) {
+  (void)user;
+  g_ev.progress = *p;
+  g_ev.progress.device_uid = NULL;
+  CHECK(p->device_uid && !strcmp(p->device_uid, MC_DEMO_PHONE_UID));
+  g_ev.progress_count++;
+}
+
+static void test_states(const char *base) {
+  char *dir = join(base, "demo-states");
+  char *config = join(base, "demo-states-config");
+  mc_remove_tree(dir);
+  mc_remove_tree(config);
+  CHECK(mc_demo_create(dir, base) == MC_OK);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(dir, &lib) == MC_OK);
+  char uid[MC_UID_STRLEN];
+  int pos = 0;
+  CHECK(mc_demo_playing_track(lib, "Copperline#1@0:21", uid, &pos) == MC_OK && pos == 21000);
+  mc_track_list *t = NULL;
+  CHECK(mc_library_get_track(lib, uid, &t) == MC_OK && t && t->count == 1);
+  if (t && t->count == 1) CHECK_STR(t->items[0].title, "Copperline");
+  mc_track_list_free(t);
+  CHECK(mc_demo_playing_track(lib, "Nightjar Season#2@1:05", uid, &pos) == MC_OK && pos == 65000);
+  CHECK(mc_demo_playing_track(lib, "Nightjar Season#9@0:01", uid, &pos) == MC_ERR_NOT_FOUND);
+  CHECK(mc_demo_playing_track(lib, "Nowhere#1@0:01", uid, &pos) == MC_ERR_NOT_FOUND);
+  CHECK(mc_demo_playing_track(lib, "Copperline@0:21", uid, &pos) == MC_ERR_INVALID_ARG);
+  CHECK(mc_demo_playing_track(lib, "Copperline#1@0:75", uid, &pos) == MC_ERR_INVALID_ARG);
+
+  /* The group: three devices, the phone a confirmed selection, nothing paused. */
+  CHECK(mc_demo_sync_group(dir, config, "Test PC") == MC_OK);
+  CHECK(mc_demo_sync_group(dir, config, "Test PC") == MC_OK); /* once in a group, left alone */
+  mc_sync_events ev = {.on_peer = on_peer, .on_progress = on_progress};
+  mc_sync *sync = NULL;
+  CHECK(mc_sync_new(lib, config, "Test PC", MC_DEVICE_DESKTOP, &ev, NULL, &sync) == MC_OK);
+  mc_sync_device_list *devs = NULL;
+  CHECK(sync && mc_sync_list_devices(sync, &devs) == MC_OK && devs);
+  CHECK(devs && devs->count == 3);
+  for (int i = 0; devs && i < devs->count; i++) {
+    const mc_sync_device *d = &devs->items[i];
+    CHECK(d->confirm == MC_SYNC_CONFIRMED && !d->removed);
+    if (d->is_self) CHECK(d->archive);
+    if (!strcmp(d->uid, MC_DEMO_PHONE_UID)) {
+      CHECK_STR(d->name, MC_DEMO_PHONE_NAME);
+      CHECK(d->kind == MC_DEVICE_PHONE && !d->archive && d->has_status && d->missing > 0 && d->last_sync_ms > 0);
+      CHECK(!d->online);
+    }
+  }
+  mc_sync_device_list_free(devs);
+  mc_sync_lib_state state;
+  CHECK(mc_sync_library_state(sync, &state) == MC_OK && state == MC_SYNC_LIBRARY_GROUP);
+  mc_sync_profile *prof = NULL;
+  CHECK(mc_sync_get_profile(sync, MC_DEMO_PHONE_UID, &prof) == MC_OK && prof);
+  if (prof) {
+    CHECK(!prof->sync_all && prof->count == 3 && prof->format.format == MC_FORMAT_OPUS && prof->format.bitrate_kbps == 160);
+    mc_sync_estimate est;
+    CHECK(mc_sync_estimate_profile(sync, MC_DEMO_PHONE_UID, prof, &est) == MC_OK && est.tracks == 17);
+  }
+  mc_sync_profile_free(prof);
+
+  /* Shown syncing: online, files going to it. */
+  CHECK(mc_demo_sync_show(sync) == MC_OK);
+  CHECK(g_ev.phone_online && g_ev.progress_count == 1);
+  CHECK(g_ev.progress.phase == MC_SYNC_PHASE_FILES && g_ev.progress.sends_done < g_ev.progress.sends_total &&
+        g_ev.progress.user && g_ev.progress.connected);
+  CHECK(mc_sync_list_devices(sync, &devs) == MC_OK && devs);
+  for (int i = 0; devs && i < devs->count; i++)
+    if (!strcmp(devs->items[i].uid, MC_DEMO_PHONE_UID)) CHECK(devs->items[i].online);
+  mc_sync_device_list_free(devs);
+  mc_sync_free(sync);
+  mc_library_close(lib);
+  mc_remove_tree(dir);
+  mc_remove_tree(config);
+  free(dir);
+  free(config);
+}
+
 int main(int argc, char **argv) {
   CHECK(mc_init() == MC_OK);
   const char *base = argc > 1 ? argv[1] : ".";
@@ -243,6 +394,8 @@ int main(int argc, char **argv) {
   test_cover();
   test_folder(base);
   test_create(base);
+  test_import();
+  test_states(base);
   mc_shutdown();
   return TEST_RESULT();
 }

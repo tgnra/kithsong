@@ -442,6 +442,11 @@ mc_status mc_import_retry_unreachable(mc_import *imp);
 /* Whether the session last found MusicBrainz unreachable (see MC_IMPORT_EV_OFFLINE). */
 int mc_import_offline(mc_import *imp);
 
+/* The demo import, for the import page's store screenshots: see kithcore/demo.h. Here for
+ * the types it takes. MC_DEMO_IMPORT_REVIEW is its item that needs a decision. */
+mc_status mc_demo_import_start(mc_import_fn callback, void *user, mc_import **out);
+#define MC_DEMO_IMPORT_REVIEW 2
+
 #ifdef __cplusplus
 }
 #endif

@@ -106,6 +106,7 @@ add_library(kithcore STATIC
   src/tagger/organize.c
   src/tagger/unzip.c
   src/tagger/tagger.c
+  src/tagger/demo_import.c
   src/tagger/refresh.c
   src/net/http.c
   src/scrobble/lastfm.c
@@ -124,6 +125,7 @@ add_library(kithcore STATIC
   src/cast/cast_tls.c
   src/cast/castv2.c
   src/sync/sync.c
+  src/sync/demo_sync.c
   src/sync/sync_db.c
   src/sync/frame.c
   src/sync/filepipe.c

@@ -3284,6 +3284,123 @@ void mc_import_free(mc_import *imp) {
   free(imp);
 }
 
+/* --- A session of fixed items (tagger_internal.h) --- */
+
+static void fixed_thread(void *arg) {
+  mc_import *imp = arg;
+  emit(imp, MC_IMPORT_EV_SCANNING, imp->file_count);
+  emit(imp, MC_IMPORT_EV_SCANNED, imp->item_count);
+  for (int i = 0; i < imp->item_count && !cancelled(imp); i++) emit(imp, MC_IMPORT_EV_ITEM_CHANGED, i);
+}
+
+/* A snapshot's file as the session's own. */
+static mc_status fixed_file(mc_import *imp, const mc_import_file *f) {
+  if (imp->file_count == imp->file_cap) {
+    int cap = imp->file_cap ? imp->file_cap * 2 : 32;
+    file_entry *grown = realloc(imp->files, (size_t)cap * sizeof *grown);
+    if (!grown) return MC_ERR_NOMEM;
+    imp->files = grown;
+    imp->file_cap = cap;
+  }
+  file_entry *e = &imp->files[imp->file_count++];
+  memset(e, 0, sizeof *e);
+  e->path = mc_strdup(f->path);
+  e->tags.title = mc_strdup(f->title);
+  e->tags.artist = mc_strdup(f->artist);
+  e->tags.track = f->track;
+  e->tags.disc = f->disc;
+  e->tags.duration_ms = f->duration_ms;
+  return e->path ? MC_OK : MC_ERR_NOMEM;
+}
+
+/* A snapshot's match as a candidate of an item with file_count files. */
+static mc_status fixed_candidate(const mc_import_match *m, int file_count, candidate *c) {
+  memset(c, 0, sizeof *c);
+  mb_release *rel = &c->rel;
+  rel->id = mc_strdup(m->mb_albumid);
+  rel->title = mc_strdup(m->album);
+  rel->artist = mc_strdup(m->album_artist);
+  rel->primary_artist = mc_strdup(m->album_artist);
+  rel->release_type = mc_strdup(m->release_type);
+  rel->country = mc_strdup(m->country);
+  rel->label = mc_strdup(m->label);
+  rel->catalog = mc_strdup(m->catalog);
+  rel->format = mc_strdup(m->format);
+  rel->year = rel->original_year = m->year;
+  rel->is_single = m->is_single;
+  c->from_recording = m->is_single;
+  c->distance = 1.0 - m->confidence;
+  c->extra = m->extra_files;
+  c->map = malloc(((size_t)file_count + 1) * sizeof *c->map);
+  rel->tracks = calloc((size_t)m->track_count + 1, sizeof *rel->tracks);
+  if (!c->map || !rel->tracks) return MC_ERR_NOMEM;
+  for (int i = 0; i < file_count; i++) c->map[i] = -1;
+  rel->track_count = m->track_count;
+  for (int j = 0; j < m->track_count; j++) {
+    const mc_import_match_track *t = &m->tracks[j];
+    rel->tracks[j].title = mc_strdup(t->title);
+    rel->tracks[j].artist = mc_strdup(t->artist);
+    rel->tracks[j].disc = t->disc;
+    rel->tracks[j].number = t->number;
+    rel->tracks[j].length_ms = t->length_ms;
+    if (t->file >= 0 && t->file < file_count) c->map[t->file] = j;
+    else c->missing++;
+  }
+  return MC_OK;
+}
+
+mc_status mc_import_start_fixed(const mc_import_item *items, int count, mc_import_fn callback,
+                                void *user, mc_import **out) {
+  if (!items || count <= 0 || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  mc_import *imp = calloc(1, sizeof *imp);
+  if (!imp) return MC_ERR_NOMEM;
+  mc_mutex_init(&imp->lock);
+  mc_cond_init(&imp->wake);
+  imp->threshold = DEFAULT_THRESHOLD;
+  imp->callback = callback;
+  imp->user = user;
+  imp->items = calloc((size_t)count, sizeof *imp->items);
+  mc_status st = imp->items ? MC_OK : MC_ERR_NOMEM;
+  for (int k = 0; k < count && st == MC_OK; k++) {
+    const mc_import_item *src = &items[k];
+    item *it = &imp->items[imp->item_count++];
+    it->kind = src->kind;
+    it->state = src->state;
+    it->folder = mc_strdup(src->folder);
+    it->artist = mc_strdup(src->artist);
+    it->album = mc_strdup(src->album);
+    it->error = mc_strdup(src->error);
+    it->chosen = src->chosen;
+    it->searched_wider = src->searched_wider;
+    it->unreachable = src->unreachable;
+    it->outcome = src->outcome;
+    it->replaced = src->replaced_files;
+    it->duplicates = src->duplicate_files;
+    it->disc_set = -1;
+    it->joined = 1;
+    if (src->file_count && !(it->files = calloc((size_t)src->file_count, sizeof *it->files))) st = MC_ERR_NOMEM;
+    for (int i = 0; i < src->file_count && st == MC_OK; i++) {
+      it->files[i] = imp->file_count;
+      if ((st = fixed_file(imp, &src->files[i])) == MC_OK) it->file_count++;
+    }
+    if (st == MC_OK && src->match_count &&
+        !(it->cands = calloc((size_t)src->match_count, sizeof *it->cands)))
+      st = MC_ERR_NOMEM;
+    for (int i = 0; i < src->match_count && st == MC_OK; i++) {
+      st = fixed_candidate(&src->matches[i], src->file_count, &it->cands[i]);
+      it->cand_count++;
+    }
+  }
+  if (st == MC_OK && (st = mc_thread_start(&imp->thread, fixed_thread, imp)) == MC_OK) imp->thread_started = 1;
+  if (st != MC_OK) {
+    mc_import_free(imp);
+    return st;
+  }
+  *out = imp;
+  return MC_OK;
+}
+
 int mc_import_item_count(mc_import *imp) {
   if (!imp) return 0;
   mc_mutex_lock(&imp->lock);

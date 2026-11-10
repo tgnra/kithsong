@@ -578,3 +578,32 @@ mc_status mc_demo_create(const char *library_dir, const char *staging_dir) {
   if (st != MC_OK && marker_says(library_dir, NULL)) mc_remove_tree(library_dir);
   return st;
 }
+
+/* --- Screenshot states --- */
+
+mc_status mc_demo_playing_track(mc_library *lib, const char *spec, char uid[MC_UID_STRLEN], int *position_ms) {
+  if (!lib || !spec || !uid || !position_ms) return MC_ERR_INVALID_ARG;
+  uid[0] = '\0';
+  const char *hash = strrchr(spec, '#'), *at = hash ? strchr(hash, '@') : NULL;
+  int number = 0, min = 0, sec = 0;
+  char end = 0;
+  if (!hash || !at || hash == spec || sscanf(hash + 1, "%d", &number) != 1 || number <= 0 ||
+      sscanf(at + 1, "%d:%d%c", &min, &sec, &end) != 2 || min < 0 || sec < 0 || sec > 59)
+    return MC_ERR_INVALID_ARG;
+  size_t title_len = (size_t)(hash - spec);
+  mc_album_list *albums = NULL;
+  mc_status st = mc_library_list_albums(lib, &albums);
+  for (int i = 0; st == MC_OK && i < albums->count && !uid[0]; i++) {
+    const char *title = albums->items[i].title;
+    if (!title || strlen(title) != title_len || strncmp(title, spec, title_len)) continue;
+    mc_track_list *tracks = NULL;
+    if ((st = mc_library_list_album_tracks(lib, albums->items[i].uid, &tracks)) != MC_OK) break;
+    for (int t = 0; t < tracks->count && !uid[0]; t++)
+      if (tracks->items[t].track_no == number) memcpy(uid, tracks->items[t].uid, MC_UID_STRLEN);
+    mc_track_list_free(tracks);
+  }
+  mc_album_list_free(albums);
+  if (st != MC_OK) return st;
+  *position_ms = (min * 60 + sec) * 1000;
+  return uid[0] ? MC_OK : MC_ERR_NOT_FOUND;
+}
