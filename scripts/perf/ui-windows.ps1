@@ -118,18 +118,18 @@ try {
     $env:KITHSONG_PERF_RUN = $report
     $env:KITHSONG_PERF_PASSES = "$Passes"
     $env:KITHSONG_THEME = 'light'
-    $start = Get-Date
+    $began = Get-Date
     $procId = [PerfRun]::Start($app, "--window-size ${Width}x$Height", [bool]$Visible)
     try {
       while (Get-Process -Id $procId -ErrorAction SilentlyContinue) {
-        if (((Get-Date) - $start).TotalSeconds -gt $TimeoutSeconds) { throw "$Label run $run took over $TimeoutSeconds s." }
+        if (((Get-Date) - $began).TotalSeconds -gt $TimeoutSeconds) { throw "$Label run $run took over $TimeoutSeconds s." }
         Start-Sleep -Milliseconds 250
       }
     } finally {
       Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
     }
     if (-not (Test-Path $report)) { throw "$Label run $run ended without a report." }
-    Write-Host ("{0} run {1}: {2:N0} s" -f $Label, $run, ((Get-Date) - $start).TotalSeconds)
+    Write-Host ("{0} run {1}: {2:N0} s" -f $Label, $run, ((Get-Date) - $began).TotalSeconds)
     # The library database can stay locked for a moment after exit.
     for ($i = 0; $i -lt 10 -and (Test-Path $local); $i++) {
       try { Remove-Item -Recurse -Force $local -ErrorAction Stop } catch { Start-Sleep -Milliseconds 500 }

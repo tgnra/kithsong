@@ -14,7 +14,8 @@ figure's share and by more than its floor, both below. CI runners are shared mac
 GPU, so the floors keep noise from failing the job; a real regression is far bigger.
 
 Checked without a base too, as nothing should ever do them:
-  - memory still growing over repeated scroll passes (a leak), past LEAK_MB_PER_PASS;
+  - memory still growing over repeated scroll passes (a leak): past base's growth by more than
+    LEAK_MB_PER_PASS, or past LEAK_MB_PER_PASS_ALONE when there is no base;
   - a sync run that failed its own checks ([result] ok 0) or lost or broke files.
 
 Prints a Markdown summary (for $GITHUB_STEP_SUMMARY) and exits 1 on any failure unless
@@ -37,8 +38,12 @@ LIMITS = {
     "sync_ms": (0.20, 500.0),  # a sync phase's wall time
     "memory_mb": (0.10, 8.0),
 }
-# Growth of private memory per scroll pass, from the second to the last: the first fills caches.
+# Growth of private memory per scroll pass over the last two passes. The first passes fill
+# caches, and over a big library memory can climb for a few passes before it levels off, the
+# same in both builds; a leak keeps climbing at its rate. So with a base, head fails when it
+# grows faster than base by more than LEAK_MB_PER_PASS; alone, past LEAK_MB_PER_PASS_ALONE.
 LEAK_MB_PER_PASS = 1.0
+LEAK_MB_PER_PASS_ALONE = 4.0
 
 
 def parse(path):
@@ -98,12 +103,13 @@ def figures(report):
 
 
 def leak(report):
-    """MB of private memory gained per scroll pass from pass_2 on, or None without 3 passes."""
+    """MB of private memory gained per scroll pass over the last two passes (never counting
+    pass_1's), or None without 3 passes."""
     mem = report.get("memory", {})
     passes = sorted((int(k[5:]), v[3]) for k, v in mem.items() if re.fullmatch(r"pass_\d+", k) and len(v) >= 4)
     if len(passes) < 3:
         return None
-    (n0, m0), (n1, m1) = passes[1], passes[-1]
+    (n0, m0), (n1, m1) = passes[max(1, len(passes) - 3)], passes[-1]
     return (m1 - m0) / (n1 - n0)
 
 
@@ -191,10 +197,16 @@ def main():
     base_leaks = [x for x in (leak(r) for _, r in runs["base"]) if x is not None]
     if head_leaks:
         hl = statistics.median(head_leaks)
-        bl = f"{statistics.median(base_leaks):+.2f}" if base_leaks else "n/a"
-        lines.append(f"Private memory per scroll pass after the first: head {hl:+.2f} MB, base {bl} MB "
-                     f"(limit {LEAK_MB_PER_PASS:+.2f}).")
-        if hl > LEAK_MB_PER_PASS:
+        if base_leaks:
+            bl = statistics.median(base_leaks)
+            limit = max(bl, 0.0) + LEAK_MB_PER_PASS
+            lines.append(f"Private memory per scroll pass, over the last two: head {hl:+.2f} MB, base {bl:+.2f} MB "
+                         f"(limit {limit:+.2f}: base's plus {LEAK_MB_PER_PASS:.2f}).")
+        else:
+            limit = LEAK_MB_PER_PASS_ALONE
+            lines.append(f"Private memory per scroll pass, over the last two: head {hl:+.2f} MB "
+                         f"(limit {limit:+.2f}, as there's no base).")
+        if hl > limit:
             failures.append(f"memory grows {hl:.2f} MB a scroll pass over the same views: a leak?")
         lines.append("")
 
