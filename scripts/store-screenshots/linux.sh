@@ -130,9 +130,12 @@ for theme in light dark; do
         home="$scratch/$shot-$theme"
         mkdir -p "$home/config/kithsong" "$home/data" "$home/cache"
         printf '{"device_name": "%s", "firewall_dont_ask": true}\n' "$device_name" >"$home/config/kithsong/settings.json"
-        # GNOME's font: with no desktop settings to read, GTK would take fontconfig's Sans.
+        # GNOME's font: with no desktop settings to read, GTK would take fontconfig's Sans. And
+        # its text scale, 96 dpi in 1024ths: unset, it reads as -1, and libadwaita's widgets
+        # sized in sp (AdwClamp: the now-playing strip, the import page, the review) shrink to
+        # their least.
         mkdir -p "$home/config/gtk-4.0"
-        printf '[Settings]\ngtk-font-name=Cantarell 11\n' >"$home/config/gtk-4.0/settings.ini"
+        printf '[Settings]\ngtk-font-name=Cantarell 11\ngtk-xft-dpi=98304\n' >"$home/config/gtk-4.0/settings.ini"
         XDG_CONFIG_HOME="$home/config" XDG_DATA_HOME="$home/data" XDG_CACHE_HOME="$home/cache" \
             KITHSONG_THEME="$theme" GDK_BACKEND=wayland GSETTINGS_BACKEND=memory NO_AT_BRIDGE=1 \
             "$scratch/app/bin/kithsong" --demo-library --window-size "${width}x${height}" \
