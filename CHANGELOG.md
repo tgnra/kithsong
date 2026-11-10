@@ -3,6 +3,19 @@
 What changed in each Kithsong release, newest first. Each release's full list of commits is on
 its GitHub release page.
 
+## 0.9.3 (2026-11-10)
+
+### Windows
+
+- Stopping a cast tells the Cast device to stop, where the message could be lost and the device
+  kept showing Kithsong.
+
+### Windows and Linux
+
+- New command-line options: `--demo-library` opens a library of six made-up albums, kept apart
+  from your own; `--window-size WxH` sets the window's size; `--page` opens a page, such as
+  `album:<title>` or `search:<text>`.
+
 ## 0.9.2 (2026-11-09)
 
 ### Android
