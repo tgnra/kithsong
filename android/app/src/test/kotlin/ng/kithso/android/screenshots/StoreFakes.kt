@@ -131,7 +131,9 @@ object StoreImport {
 object StoreSync {
     private const val SELF = "self"
     private const val DESK = "desk"
-    private val now = System.currentTimeMillis()
+    /** The shots' "now", 9 November 2026 at 18:40 UTC: their times are the same on every run (LocalNow). */
+    const val NOW = 1_794_249_600_000L
+    private const val now = NOW
 
     private fun device(
         uid: String,

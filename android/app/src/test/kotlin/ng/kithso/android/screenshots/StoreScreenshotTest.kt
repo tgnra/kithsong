@@ -3,10 +3,12 @@ package ng.kithso.android.screenshots
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.annotation.StringRes
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollToKeyAction
@@ -39,6 +41,7 @@ import ng.kithso.android.data.CoreLibrarySource
 import ng.kithso.android.importer.ImportProgress
 import ng.kithso.android.sync.SyncStatus
 import ng.kithso.android.ui.App
+import ng.kithso.android.ui.LocalNow
 import ng.kithso.android.ui.art.FileArt
 import ng.kithso.android.ui.art.artImageLoader
 import ng.kithso.android.ui.theme.KithsongTheme
@@ -53,6 +56,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.awt.image.BufferedImage
 import java.io.File
+import java.util.TimeZone
 import javax.imageio.ImageIO
 
 /**
@@ -98,12 +102,19 @@ abstract class StoreScreenshots(
     // What another device calls this one.
     private val deviceName = if (tablet) "Tablet" else "Phone"
 
+    // The zone the shots' dates and times are written in, wherever they're run.
+    private val zone = TimeZone.getDefault()
+
     @OptIn(DelicateCoilApi::class)
     @Before fun images() {
         SingletonImageLoader.setUnsafe(artImageLoader(context, FileArt()))
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
     }
 
-    @After fun stop() = idle.cancel()
+    @After fun stop() {
+        idle.cancel()
+        TimeZone.setDefault(zone)
+    }
 
     // The light shots play Copperline's first track, the dark ones Nightjar Season's.
     private fun light() = StorePlayback(StoreLibrary.tracks.getValue(StoreLibrary.COPPERLINE), 0, 21_000)
@@ -130,16 +141,18 @@ abstract class StoreScreenshots(
         compose.mainClock.advanceTimeBy(1_000)
     }
 
-    // The import's card on the main list, its Review, then the album waiting for a decision.
-    @Test fun importLight() = shoot("import-light", light(), import = StoreImport.progress) {
+    // The import's card on the main list, its Review, then the album waiting for a decision. The
+    // phone's page is too short for its header, Search again and a candidate with the mini player
+    // under them: it has nothing playing, and starts at the album's name, which goes under the
+    // status bar. The tablets' show all of it as it opens.
+    @Test fun importLight() = shoot("import-light", if (tablet) light() else StorePlayback.NOTHING, import = StoreImport.progress) {
         tap(hasText(string(R.string.import_review_open)) and hasClickAction())
         settle()
         tap(hasText(StoreImport.details.name) and hasClickAction())
         settle()
-        // On one column, down past searching again to the candidates.
-        if (!wide) {
-            scrollTo("matches")
-            scrollBy(-100f)
+        if (!tablet) {
+            val title = compose.onAllNodes(hasText(StoreImport.details.name)).onFirst().fetchSemanticsNode().boundsInRoot.top
+            scrollBy(title - statusBarPx - 8f)
         }
     }
 
@@ -148,6 +161,13 @@ abstract class StoreScreenshots(
     @Config(qualifiers = "+night")
     @Test fun syncDark() = shoot("sync-dark", dark(), sync = StoreSync.syncing(deviceName)) {
         if (tablet) tap(hasText("Desk") and hasClickAction()) else menu(R.string.sync)
+        // On the 10" held sideways the sidebar's Recents and Devices don't all fit, and scroll (see
+        // Sidebar): to its end, so the group shows whole.
+        if (wide) {
+            settle()
+            compose.onAllNodes(hasScrollToKeyAction() and hasAnyDescendant(hasText(string(R.string.section_recents))))
+                .onFirst().performScrollToKey("member:watch")
+        }
     }
 
     // This device's page: the session, its files, and its selection within a budget.
@@ -247,7 +267,9 @@ abstract class StoreScreenshots(
         val newLibrary = NewLibrary(KithsongApp(), settings, idle)
         compose.setContent {
             KithsongTheme {
-                App(StoreLibrary, playback, syncer, importer, settings, dir, newLibrary, stress = false, demo = true)
+                CompositionLocalProvider(LocalNow provides { StoreSync.NOW }) {
+                    App(StoreLibrary, playback, syncer, importer, settings, dir, newLibrary, stress = false, demo = true)
+                }
             }
         }
         systemBars()

@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -410,9 +411,15 @@ private fun confirmText(confirm: ConfirmState): String? = when (confirm) {
     ConfirmState.ProfileChanged -> stringResource(R.string.sync_paused_profile_changed)
 }
 
+/**
+ * The time "synced 40 minutes ago" counts from: the clock, except in the store screenshots,
+ * which give a fixed one so their text is the same on every run.
+ */
+internal val LocalNow = staticCompositionLocalOf<() -> Long> { System::currentTimeMillis }
+
 @Composable
 fun memberText(device: SyncDevice, syncing: Boolean): String {
-    val now = System.currentTimeMillis()
+    val now = LocalNow.current()
     val last = when {
         device.lastSyncMs <= 0 -> null
         now - device.lastSyncMs < DateUtils.MINUTE_IN_MILLIS -> stringResource(R.string.synced_just_now)

@@ -108,12 +108,12 @@ object StoreLibrary : LibrarySource {
 
 /**
  * A player stopped in time: [track] of [queue] playing at [positionMs], which never moves, so
- * every shot comes out the same.
+ * every shot comes out the same. With an empty [queue], nothing's playing ([NOTHING]).
  */
 class StorePlayback(private val queue: List<Track>, private val index: Int, position: Long) : Playback {
-    override var track by mutableStateOf<Track?>(queue[index])
+    override var track by mutableStateOf<Track?>(queue.getOrNull(index))
         private set
-    override val isPlaying = true
+    override val isPlaying = queue.isNotEmpty()
     override var positionMs by mutableLongStateOf(position)
         private set
     override val hasNext get() = index < queue.lastIndex
@@ -133,4 +133,9 @@ class StorePlayback(private val queue: List<Track>, private val index: Int, posi
     override fun setShuffle(on: Boolean) = Unit
     override fun stop() = Unit
     override fun clear() = Unit
+
+    companion object {
+        /** Nothing playing: no mini player under a page. */
+        val NOTHING get() = StorePlayback(emptyList(), -1, 0)
+    }
 }
