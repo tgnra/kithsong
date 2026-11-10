@@ -51,6 +51,20 @@ if(NOT KITHSONG_BUILD_NUMBER MATCHES "^[0-9]+$" OR KITHSONG_BUILD_NUMBER GREATER
   message(FATAL_ERROR "KITHSONG_BUILD_NUMBER must be a whole number from 0 to 65535, not '${KITHSONG_BUILD_NUMBER}'")
 endif()
 
+# Visual Studio's debugger reads only CodeView, from a .pdb, and clang writes DWARF for MinGW
+# targets. This writes both: the DWARF stays in each exe for GDB and LLDB, and lld writes a
+# .pdb beside it. Only the windows-*-vs presets turn it on: the .pdbs about double the size of a
+# debug build folder, and even without -g the link would add a debug directory to the exe, so
+# the exe that ships stays as it was.
+option(KITHSONG_CODEVIEW "Windows: CodeView debug info and a .pdb beside each exe, for Visual Studio" OFF)
+if(KITHSONG_CODEVIEW)
+  if(NOT (MINGW AND CMAKE_C_COMPILER_ID MATCHES "Clang"))
+    message(FATAL_ERROR "KITHSONG_CODEVIEW needs llvm-mingw (clang and lld targeting MinGW).")
+  endif()
+  add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-gcodeview;-gdwarf>")
+  add_link_options("LINKER:--pdb=")
+endif()
+
 if(KITHSONG_BUILD_TESTS)
   enable_testing()
 endif()

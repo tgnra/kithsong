@@ -16,13 +16,19 @@
       "hidden": true,
       "inherits": "base",
       "generator": "Ninja",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": { "hostOS": [ "Windows" ] }
+      }
     },
     {
       "name": "windows-x64",
       "displayName": "Windows x64 (llvm-mingw)",
       "inherits": "windows",
-      "toolchainFile": "${sourceDir}/cmake/toolchain-windows-x64.cmake"
+      "toolchainFile": "${sourceDir}/cmake/toolchain-windows-x64.cmake",
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": { "intelliSenseMode": "windows-clang-x64" }
+      }
     },
     {
       "name": "windows-x64-release",
@@ -31,10 +37,19 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
     },
     {
+      "name": "windows-x64-vs",
+      "displayName": "Windows x64 (llvm-mingw, with .pdb for Visual Studio)",
+      "inherits": "windows-x64",
+      "cacheVariables": { "KITHSONG_CODEVIEW": "ON" }
+    },
+    {
       "name": "windows-arm64",
       "displayName": "Windows on Arm (llvm-mingw)",
       "inherits": "windows",
-      "toolchainFile": "${sourceDir}/cmake/toolchain-windows-arm64.cmake"
+      "toolchainFile": "${sourceDir}/cmake/toolchain-windows-arm64.cmake",
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": { "intelliSenseMode": "windows-clang-arm64" }
+      }
     },
     {
       "name": "windows-arm64-release",
@@ -43,11 +58,20 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
     },
     {
+      "name": "windows-arm64-vs",
+      "displayName": "Windows on Arm (llvm-mingw, with .pdb for Visual Studio)",
+      "inherits": "windows-arm64",
+      "cacheVariables": { "KITHSONG_CODEVIEW": "ON" }
+    },
+    {
       "name": "linux-gtk",
       "displayName": "Linux (GTK4)",
       "inherits": "base",
       "generator": "Ninja",
-      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": { "hostOS": [ "Linux" ] }
+      }
     },
     {
       "name": "linux-gtk-release",
@@ -59,14 +83,96 @@
   "buildPresets": [
     { "name": "windows-x64", "configurePreset": "windows-x64", "jobs": 8 },
     { "name": "windows-x64-release", "configurePreset": "windows-x64-release", "jobs": 8 },
+    { "name": "windows-x64-vs", "configurePreset": "windows-x64-vs", "jobs": 8 },
     { "name": "windows-arm64", "configurePreset": "windows-arm64", "jobs": 8 },
     { "name": "windows-arm64-release", "configurePreset": "windows-arm64-release", "jobs": 8 },
+    { "name": "windows-arm64-vs", "configurePreset": "windows-arm64-vs", "jobs": 8 },
     { "name": "linux-gtk", "configurePreset": "linux-gtk" },
     { "name": "linux-gtk-release", "configurePreset": "linux-gtk-release" }
   ],
   "testPresets": [
-    { "name": "windows-x64", "configurePreset": "windows-x64", "output": { "outputOnFailure": true } },
-    { "name": "windows-arm64", "configurePreset": "windows-arm64", "output": { "outputOnFailure": true } },
-    { "name": "linux-gtk", "configurePreset": "linux-gtk", "output": { "outputOnFailure": true } }
+    { "name": "test", "hidden": true, "output": { "outputOnFailure": true } },
+    { "name": "windows-x64", "inherits": "test", "configurePreset": "windows-x64" },
+    { "name": "windows-x64-release", "inherits": "test", "configurePreset": "windows-x64-release" },
+    { "name": "windows-x64-vs", "inherits": "test", "configurePreset": "windows-x64-vs" },
+    { "name": "windows-arm64", "inherits": "test", "configurePreset": "windows-arm64" },
+    { "name": "windows-arm64-release", "inherits": "test", "configurePreset": "windows-arm64-release" },
+    { "name": "windows-arm64-vs", "inherits": "test", "configurePreset": "windows-arm64-vs" },
+    { "name": "linux-gtk", "inherits": "test", "configurePreset": "linux-gtk" },
+    { "name": "linux-gtk-release", "inherits": "test", "configurePreset": "linux-gtk-release" }
+  ],
+  "workflowPresets": [
+    {
+      "name": "windows-x64",
+      "displayName": "Windows x64: configure, build, test",
+      "steps": [
+        { "type": "configure", "name": "windows-x64" },
+        { "type": "build", "name": "windows-x64" },
+        { "type": "test", "name": "windows-x64" }
+      ]
+    },
+    {
+      "name": "windows-x64-release",
+      "displayName": "Windows x64 release: configure, build, test",
+      "steps": [
+        { "type": "configure", "name": "windows-x64-release" },
+        { "type": "build", "name": "windows-x64-release" },
+        { "type": "test", "name": "windows-x64-release" }
+      ]
+    },
+    {
+      "name": "windows-x64-vs",
+      "displayName": "Windows x64 with .pdb: configure, build, test",
+      "steps": [
+        { "type": "configure", "name": "windows-x64-vs" },
+        { "type": "build", "name": "windows-x64-vs" },
+        { "type": "test", "name": "windows-x64-vs" }
+      ]
+    },
+    {
+      "name": "windows-arm64",
+      "displayName": "Windows on Arm: configure, build, test (on an Arm PC)",
+      "steps": [
+        { "type": "configure", "name": "windows-arm64" },
+        { "type": "build", "name": "windows-arm64" },
+        { "type": "test", "name": "windows-arm64" }
+      ]
+    },
+    {
+      "name": "windows-arm64-release",
+      "displayName": "Windows on Arm release: configure, build, test (on an Arm PC)",
+      "steps": [
+        { "type": "configure", "name": "windows-arm64-release" },
+        { "type": "build", "name": "windows-arm64-release" },
+        { "type": "test", "name": "windows-arm64-release" }
+      ]
+    },
+    {
+      "name": "windows-arm64-vs",
+      "displayName": "Windows on Arm with .pdb: configure, build, test (on an Arm PC)",
+      "steps": [
+        { "type": "configure", "name": "windows-arm64-vs" },
+        { "type": "build", "name": "windows-arm64-vs" },
+        { "type": "test", "name": "windows-arm64-vs" }
+      ]
+    },
+    {
+      "name": "linux-gtk",
+      "displayName": "Linux: configure, build, test",
+      "steps": [
+        { "type": "configure", "name": "linux-gtk" },
+        { "type": "build", "name": "linux-gtk" },
+        { "type": "test", "name": "linux-gtk" }
+      ]
+    },
+    {
+      "name": "linux-gtk-release",
+      "displayName": "Linux release: configure, build, test",
+      "steps": [
+        { "type": "configure", "name": "linux-gtk-release" },
+        { "type": "build", "name": "linux-gtk-release" },
+        { "type": "test", "name": "linux-gtk-release" }
+      ]
+    }
   ]
 }
