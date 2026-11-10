@@ -1,0 +1,265 @@
+# Performance regression tests, by hand only (Actions > Performance > Run workflow): scrolling,
+# memory and sync with big libraries, on this branch against a base (master by default) built
+# and run on the same runner. Nothing here runs on a push or a tag.
+#
+# CI runners are shared virtual machines with no GPU, so their absolute figures say little and
+# vary between runs. What they can show is a difference: each job builds both, runs them in
+# turn (base 1, head 1, base 2, head 2...) so any slowdown of the machine hits both alike, and
+# fails only where head is worse by a clear margin (scripts/perf/compare.py has the limits). The
+# job summary has the table; the reports and logs are uploaded as an artifact.
+#
+# Per platform (windows: the release preset's build; linux: a Release build in headless sway):
+#   UI    The app opens a stress test library (kithcore/stress.h; 100k tracks by default) and
+#         runs its scroll test over albums, artists and the biggest album's tracks, PASSES times
+#         over (scripts/perf/ui-*). Frame times, view switches and memory after each pass:
+#         private memory still growing after the first pass, over the same scrolling, is a leak,
+#         and fails without a base too.
+#   Sync  core/tests/manual_sync_stress: two devices over loopback, one with SYNC_TRACKS
+#         tracks of real files, a full sync, a sync with nothing to do and an incremental one,
+#         each checked for every row and file arriving intact. A failed check fails the job.
+#
+# A base from before this workflow existed has no memory readings or sync tool: its UI figures
+# still compare, the rest shows as new. Set base to "none" to test head alone.
+#
+# Cost: about 30 to 60 minutes per platform, mostly building twice. The runners are free for a
+# public repository; this only runs when asked.
+name: Performance
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: 'Branch, tag or commit to compare against, or "none"'
+        default: master
+      platforms:
+        description: 'Which: all, windows or linux'
+        default: all
+      library:
+        description: 'Stress library for the UI runs: 10k or 100k tracks'
+        default: 100k
+      sync_tracks:
+        description: 'Tracks in the sync runs (32 kB files)'
+        default: '10000'
+      runs:
+        description: 'UI runs per build'
+        default: '3'
+      passes:
+        description: 'Scroll test passes per UI run'
+        default: '5'
+      sync_runs:
+        description: 'Sync runs per build'
+        default: '2'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASE: ${{ inputs.base }}
+  LIBRARY_SIZE: ${{ inputs.library }}
+  SYNC_TRACKS: ${{ inputs.sync_tracks }}
+  RUNS: ${{ inputs.runs }}
+  PASSES: ${{ inputs.passes }}
+  SYNC_RUNS: ${{ inputs.sync_runs }}
+
+jobs:
+  windows:
+    if: inputs.platforms == 'all' || inputs.platforms == 'windows'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      # As release.yml's windows job, x64 only.
+      - name: Install llvm-mingw and Ninja
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = "$env:RUNNER_TEMP\tools"
+          $llvmMingw = scripts/install-llvm-mingw.ps1 -Dir $tools
+          Invoke-WebRequest https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-win.zip -OutFile "$env:RUNNER_TEMP\ninja.zip"
+          if ((Get-FileHash "$env:RUNNER_TEMP\ninja.zip" -Algorithm SHA256).Hash -ne '07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65') { throw 'Checksum mismatch: Ninja' }
+          Expand-Archive "$env:RUNNER_TEMP\ninja.zip" "$tools\ninja"
+          "LLVM_MINGW=$llvmMingw" >> $env:GITHUB_ENV
+          "$tools\ninja" >> $env:GITHUB_PATH
+      # The same key as release.yml's, so either can start from the other's.
+      - name: Cache fetched dependencies
+        uses: actions/cache@v6
+        with:
+          path: build/windows-x64-release/_deps
+          key: deps-windows-x64-${{ github.repository }}-${{ hashFiles('third_party/CMakeLists.txt', 'cmake/llvm-mingw.pin') }}
+      - name: Build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --preset windows-x64-release
+          if ($LASTEXITCODE) { throw 'configure failed' }
+          cmake --build --preset windows-x64-release --target kithsong manual_stress manual_sync_stress
+          if ($LASTEXITCODE) { throw 'build failed' }
+      # The base in a worktree of its own, beside the checkout. Its sync tool may not exist yet.
+      - name: Build the base
+        if: env.BASE != 'none'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git fetch --no-tags --depth=1 origin $env:BASE
+          if ($LASTEXITCODE) { throw "couldn't fetch $env:BASE" }
+          git worktree add --detach "$env:RUNNER_TEMP\base" FETCH_HEAD
+          if ($LASTEXITCODE) { throw 'worktree failed' }
+          "Base: $env:BASE at $(git rev-parse --short FETCH_HEAD)" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          Push-Location "$env:RUNNER_TEMP\base"
+          cmake --preset windows-x64-release
+          if ($LASTEXITCODE) { throw 'configure failed' }
+          cmake --build --preset windows-x64-release --target kithsong manual_stress
+          if ($LASTEXITCODE) { throw 'build failed' }
+          cmake --build --preset windows-x64-release --target manual_sync_stress
+          if ($LASTEXITCODE) { Write-Warning "The base has no sync stress tool: sync runs head alone." }
+          Pop-Location
+      # The base's generator where there is one, so the base reads a library of its own day.
+      - name: Generate the stress library
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gen = "$env:RUNNER_TEMP\base\build\windows-x64-release\core\tests\manual_stress.exe"
+          if (-not (Test-Path $gen)) { $gen = 'build\windows-x64-release\core\tests\manual_stress.exe' }
+          & $gen "$env:RUNNER_TEMP\library" $env:LIBRARY_SIZE
+          if ($LASTEXITCODE) { throw 'generating failed' }
+      # -Visible: nobody's at the runner, and DWM paces frames on its desktop as on a real one.
+      # Windows PowerShell, as the script is run and tested locally.
+      - name: UI runs
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = "$env:RUNNER_TEMP\base\build\windows-x64-release\desktop\windows\kithsong.exe"
+          for ($i = 1; $i -le [int]$env:RUNS; $i++) {
+            if ($env:BASE -ne 'none') {
+              scripts\perf\ui-windows.ps1 -Exe $base -Label base -Start $i -Runs 1 -Passes $env:PASSES -Library "$env:RUNNER_TEMP\library" -Out out\ui -Visible
+            }
+            scripts\perf\ui-windows.ps1 -Exe build\windows-x64-release\desktop\windows\kithsong.exe -Label head -Start $i -Runs 1 -Passes $env:PASSES -Library "$env:RUNNER_TEMP\library" -Out out\ui -Visible
+          }
+      - name: Sync runs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force out\sync | Out-Null
+          $tools = @{ head = 'build\windows-x64-release\core\tests\manual_sync_stress.exe' }
+          $base = "$env:RUNNER_TEMP\base\build\windows-x64-release\core\tests\manual_sync_stress.exe"
+          if ($env:BASE -ne 'none' -and (Test-Path $base)) { $tools.base = $base }
+          $failed = $false
+          for ($i = 1; $i -le [int]$env:SYNC_RUNS; $i++) {
+            foreach ($label in 'base', 'head') {
+              if (-not $tools.ContainsKey($label)) { continue }
+              $start = Get-Date
+              & $tools[$label] "$env:RUNNER_TEMP\sync" $env:SYNC_TRACKS 32 > "out\sync\$label-$i.txt" 2> "out\sync\$label-$i.log"
+              $code = $LASTEXITCODE
+              Write-Host ("sync {0} run {1}: exit {2}, {3:N0} s" -f $label, $i, $code, ((Get-Date) - $start).TotalSeconds)
+              if ($code -and $label -eq 'head') { $failed = $true; Get-Content "out\sync\$label-$i.log" -Tail 30 }
+            }
+          }
+          Remove-Item -Recurse -Force "$env:RUNNER_TEMP\sync" -ErrorAction SilentlyContinue
+          if ($failed) { "PERF_FAILED=1" >> $env:GITHUB_ENV }
+      - name: Compare
+        if: always()
+        shell: pwsh
+        run: |
+          python scripts/perf/compare.py out/ui --title 'Windows: scrolling and memory' >> $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE) { "PERF_FAILED=1" >> $env:GITHUB_ENV }
+          python scripts/perf/compare.py out/sync --title 'Windows: sync' >> $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE) { "PERF_FAILED=1" >> $env:GITHUB_ENV }
+          exit 0
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: perf-windows
+          path: out/
+      - name: Verdict
+        if: env.PERF_FAILED == '1'
+        shell: pwsh
+        run: |
+          Write-Host '::error::A regression, a leak or a failed sync: see the job summary.'
+          exit 1
+
+  linux:
+    if: inputs.platforms == 'all' || inputs.platforms == 'linux'
+    # As the store screenshots' linux job: the tarball's GTK and libadwaita, and headless sway.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libadwaita-1-dev libgtk-4-dev ninja-build \
+            sway fonts-cantarell adwaita-icon-theme dbus-bin librsvg2-common
+      # Installed outside the checkout, as a binary inside one runs as a source run.
+      - name: Build
+        run: |
+          cmake -S . -B build/perf -G Ninja -DCMAKE_BUILD_TYPE=Release -DKITHSONG_BUILD_TESTS=ON
+          cmake --build build/perf --target kithsong manual_stress manual_sync_stress
+          cmake --install build/perf --prefix "$RUNNER_TEMP/head" --component kithsong
+      - name: Build the base
+        if: env.BASE != 'none'
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE"
+          git worktree add --detach "$RUNNER_TEMP/base-src" FETCH_HEAD
+          echo "Base: $BASE at $(git rev-parse --short FETCH_HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+          cd "$RUNNER_TEMP/base-src"
+          cmake -S . -B build/perf -G Ninja -DCMAKE_BUILD_TYPE=Release -DKITHSONG_BUILD_TESTS=ON
+          cmake --build build/perf --target kithsong manual_stress
+          cmake --install build/perf --prefix "$RUNNER_TEMP/base" --component kithsong
+          cmake --build build/perf --target manual_sync_stress ||
+            echo "::warning::The base has no sync stress tool: sync runs head alone."
+      - name: Generate the stress library
+        run: |
+          gen="$RUNNER_TEMP/base-src/build/perf/core/tests/manual_stress"
+          [[ -x "$gen" ]] || gen=build/perf/core/tests/manual_stress
+          "$gen" "$RUNNER_TEMP/library" "$LIBRARY_SIZE"
+      - name: UI runs
+        run: |
+          for i in $(seq "$RUNS"); do
+            if [[ "$BASE" != none ]]; then
+              RUNS=1 RUN_START=$i bash scripts/perf/ui-linux.sh "$RUNNER_TEMP/base" "$RUNNER_TEMP/library" out/ui base
+            fi
+            RUNS=1 RUN_START=$i bash scripts/perf/ui-linux.sh "$RUNNER_TEMP/head" "$RUNNER_TEMP/library" out/ui head
+          done
+      - name: Sync runs
+        run: |
+          mkdir -p out/sync
+          declare -A tools=([head]=build/perf/core/tests/manual_sync_stress)
+          base="$RUNNER_TEMP/base-src/build/perf/core/tests/manual_sync_stress"
+          [[ "$BASE" != none && -x "$base" ]] && tools[base]="$base"
+          failed=0
+          for i in $(seq "$SYNC_RUNS"); do
+            for label in base head; do
+              [[ -n "${tools[$label]:-}" ]] || continue
+              start=$SECONDS
+              code=0
+              "${tools[$label]}" "$RUNNER_TEMP/sync" "$SYNC_TRACKS" 32 >"out/sync/$label-$i.txt" 2>"out/sync/$label-$i.log" || code=$?
+              echo "sync $label run $i: exit $code, $((SECONDS - start)) s"
+              if [[ $code != 0 && $label == head ]]; then
+                failed=1
+                tail -n 30 "out/sync/$label-$i.log"
+              fi
+            done
+          done
+          rm -rf "$RUNNER_TEMP/sync"
+          [[ $failed == 0 ]] || echo "PERF_FAILED=1" >>"$GITHUB_ENV"
+      - name: Compare
+        if: always()
+        run: |
+          python3 scripts/perf/compare.py out/ui --title 'Linux: scrolling and memory' >>"$GITHUB_STEP_SUMMARY" ||
+            echo "PERF_FAILED=1" >>"$GITHUB_ENV"
+          python3 scripts/perf/compare.py out/sync --title 'Linux: sync' >>"$GITHUB_STEP_SUMMARY" ||
+            echo "PERF_FAILED=1" >>"$GITHUB_ENV"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: perf-linux
+          path: out/
+      - name: Verdict
+        if: env.PERF_FAILED == '1'
+        run: |
+          echo '::error::A regression, a leak or a failed sync: see the job summary.'
+          exit 1
