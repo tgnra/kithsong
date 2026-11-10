@@ -160,4 +160,9 @@ void playback_cast_connect(const char *device_id);
 /* Stops casting; playback comes back here, paused. */
 void playback_cast_disconnect(void);
 
+/* --demo-playing (main.c), for screenshots: shows track uid of the library in the
+ * now-playing strip, paused at position_ms, and marks it in the track list, as if it had been
+ * played and paused there. The player isn't touched: nothing plays, and Play starts afresh. */
+void playback_demo_show(const char *uid, int position_ms);
+
 #endif

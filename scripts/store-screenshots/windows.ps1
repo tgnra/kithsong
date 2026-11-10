@@ -4,6 +4,13 @@
 #   scripts\store-screenshots\windows.ps1 [-Exe <kithsong.exe>] [-Out <folder>]
 #       [-Width 1600] [-Height 1000] [-Shots home,album,...] [-Visible]
 #
+# Shots: home, albums, album, artist and search, the library's pages; import, the import page
+# part-way through a made-up import; review, the same with the review of the album that needs
+# a decision open (the dialog drawn over the window where it shows); and sync, a made-up phone's
+# page part-way through a sync with a selection as Opus. Each has a track paused part-way, as
+# the store listing does: Copperline's first at 0:21 in light, Nightjar Season's at 0:08 in
+# dark (--demo-playing). See kithcore/demo.h.
+#
 # The exe defaults to the release preset's build (cmake --preset windows-x64-release). It's
 # copied out of the checkout first, as a build inside one runs as a source run, with its own
 # settings folder and temp library. Each shot is a fresh run: LOCALAPPDATA points at a scratch
@@ -21,7 +28,7 @@ param(
   [string] $Out = 'out\windows',
   [int] $Width = 1600,
   [int] $Height = 1000,
-  [string[]] $Shots = @('home', 'albums', 'album', 'artist', 'search'),
+  [string[]] $Shots = @('home', 'albums', 'album', 'artist', 'search', 'import', 'review', 'sync'),
   [string] $DeviceName = 'Living Room PC',
   [switch] $Visible
 )
@@ -38,6 +45,14 @@ $pages = @{
   album  = 'album:Copperline'
   artist = 'artist:Ivy Sunderholt'
   search = 'search:night'
+  import = 'import'
+  review = 'import-review'
+  sync   = 'sync'
+}
+# The track paused in the now-playing strip, by theme (--demo-playing).
+$playing = @{
+  light = 'Copperline#1@0:21'
+  dark  = 'Nightjar Season#1@0:08'
 }
 
 Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
@@ -71,6 +86,7 @@ public static class Shot {
   [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr wnd, IntPtr dc, uint flags);
   [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr wnd, uint msg, IntPtr wp, IntPtr lp);
   [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr wnd, IntPtr after, int x, int y, int w, int h, uint flags);
+  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr wnd, uint cmd);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr wnd, int attr, out RECT r, int size);
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   static extern bool CreateProcessW(string app, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit, int flags,
@@ -125,6 +141,38 @@ public static class Shot {
     if (visible) EnumWindows(fn, IntPtr.Zero); else EnumDesktopWindows(desktop, fn, IntPtr.Zero);
     GC.KeepAlive(fn);
     return found;
+  }
+
+  // A dialog the main window owns (the import review), or zero.
+  public static IntPtr FindOwned(int pid, IntPtr owner, bool visible) {
+    IntPtr found = IntPtr.Zero;
+    EnumProc fn = (w, lp) => {
+      var cls = new StringBuilder(32);
+      int pidOf;
+      GetWindowThreadProcessId(w, out pidOf);
+      if (pidOf == pid && IsWindowVisible(w) && GetWindow(w, 4 /* GW_OWNER */) == owner &&
+          GetClassNameW(w, cls, 32) > 0 && cls.ToString() == "#32770") {
+        found = w;
+        return false;
+      }
+      return true;
+    };
+    if (visible) EnumWindows(fn, IntPtr.Zero); else EnumDesktopWindows(desktop, fn, IntPtr.Zero);
+    GC.KeepAlive(fn);
+    return found;
+  }
+
+  static RECT Frame(IntPtr wnd) {
+    RECT r;
+    if (DwmGetWindowAttribute(wnd, 9 /* DWMWA_EXTENDED_FRAME_BOUNDS */, out r, 16) != 0) GetWindowRect(wnd, out r);
+    return r;
+  }
+
+  // The dialog drawn over the window's capture where it shows, as far as it's inside.
+  public static void DrawOver(Bitmap main, IntPtr mainWnd, IntPtr dlg) {
+    RECT m = Frame(mainWnd), d = Frame(dlg);
+    using (var over = Capture(dlg))
+    using (var g = Graphics.FromImage(main)) g.DrawImage(over, d.Left - m.Left, d.Top - m.Top, over.Width, over.Height);
   }
 
   public static void SendToBack(IntPtr wnd) {
@@ -199,7 +247,7 @@ try {
         [IO.File]::WriteAllText((Join-Path $config 'settings.json'), $settings)
         $env:LOCALAPPDATA = $local
         $env:KITHSONG_THEME = $theme
-        $procId = [Shot]::Start($app, "--demo-library --window-size ${Width}x$Height --page `"$($pages[$shot])`"", [bool]$Visible)
+        $procId = [Shot]::Start($app, "--demo-library --window-size ${Width}x$Height --page `"$($pages[$shot])`" --demo-playing `"$($playing[$theme])`"", [bool]$Visible)
         $blank = $true
         try {
           $wnd = [IntPtr]::Zero
@@ -216,9 +264,18 @@ try {
             Start-Sleep -Seconds 2
             $last = $null
             $bmp = $null
+            $dlgSeen = $false
             for ($i = 0; $i -lt 15; $i++) {
               if ($bmp) { $bmp.Dispose() }
               $bmp = [Shot]::Capture($wnd)
+              if ($shot -eq 'review') {
+                # Not settled until the dialog is up.
+                $dlg = [Shot]::FindOwned($procId, $wnd, [bool]$Visible)
+                if ($dlg -eq [IntPtr]::Zero) { $last = $null; $dlgSeen = $false; Start-Sleep -Seconds 1; continue }
+                # Its controls come into the capture over a few seconds (demo_review_redraw).
+                if (-not $dlgSeen) { $dlgSeen = $true; Start-Sleep -Seconds 5; $bmp.Dispose(); $bmp = [Shot]::Capture($wnd) }
+                [Shot]::DrawOver($bmp, $wnd, $dlg)
+              }
               $hash = [Shot]::Hash($bmp)
               if ($hash -eq $last -and -not [Shot]::Blank($bmp)) { break }
               $last = $hash

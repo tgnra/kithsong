@@ -70,6 +70,7 @@ typedef struct view {
   BOOL can_assign; /* the rows have missing tracks, and files Use as Track can make them */
   BOOL choose_file_open; /* Choose File's menu is down */
   BOOL review_loading; /* load_review is selecting the chosen match; it fills the rows itself */
+  BOOL review_demo;    /* opened by import_view_open_review, for a screenshot */
   /* A file made a missing track (assign) that the import thread hasn't taken up yet, which
    * may be a while if it's matching another item: the rows show it already, and the review
    * takes no other decision until the item is being written (the file indices it would use
@@ -460,6 +461,26 @@ BOOL import_view_start(const char *const *paths, int count) {
   update_status();
   SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, TRUE, 0); /* and the layout switches to the list */
   return TRUE;
+}
+
+/* --page import (main.c): the demo import (kithcore/demo.h), started as import_view_start()
+ * starts a real one. Only ever run with the demo library. */
+BOOL import_view_start_demo(void) {
+  if (g_view.imp) return FALSE;
+  close_session();
+  g_view.generation++;
+  g_view.idle = FALSE;
+  if (mc_demo_import_start(on_import_event, (void *)(uintptr_t)g_view.generation, &g_view.imp) != MC_OK) {
+    g_view.imp = NULL;
+    return FALSE;
+  }
+  update_status();
+  SendMessageW(g_view.parent, WM_APP_IMPORT_SESSION, TRUE, 0);
+  return TRUE;
+}
+
+BOOL import_view_item_shown(int idx) {
+  return g_view.imp && g_view.states && idx >= 0 && idx < g_view.item_count;
 }
 
 void import_view_browse(void) {
@@ -1184,6 +1205,38 @@ static void review_done(HWND dlg, mc_status st) {
   }
 }
 
+enum { DEMO_REVIEW_REDRAW = 1 };
+
+/* For the screenshot (import_view_open_review): the dialog over the middle of the window it
+ * belongs to, not the screen's (DS_CENTER), so it's inside the window's capture. */
+static void demo_review_place(HWND dlg) {
+  RECT owner, rc;
+  GetWindowRect(g_view.parent, &owner);
+  GetWindowRect(dlg, &rc);
+  int w = rc.right - rc.left, h = rc.bottom - rc.top;
+  SetWindowPos(dlg, NULL, owner.left + (owner.right - owner.left - w) / 2, owner.top + (owner.bottom - owner.top - h) / 2,
+               0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+  SetTimer(dlg, DEMO_REVIEW_REDRAW, 500, NULL);
+}
+
+/* On the screenshots' desktop of their own (CreateDesktop), what the dialog paints stops
+ * reaching the screen partway: the capture has its first controls and none of the rest. Drawn
+ * whole into a bitmap (WM_PRINT) and copied onto the dialog, now and then, it all does, with
+ * the dialog modeless (import_view_open_review); neither alone is enough. */
+static void demo_review_redraw(HWND dlg) {
+  RECT rc;
+  GetWindowRect(dlg, &rc);
+  int w = rc.right - rc.left, h = rc.bottom - rc.top;
+  HDC dc = GetWindowDC(dlg), mem = CreateCompatibleDC(dc); /* a dialog's own DC leaves out its controls */
+  HBITMAP bmp = CreateCompatibleBitmap(dc, w, h);
+  HGDIOBJ old = SelectObject(mem, bmp);
+  if (PrintWindow(dlg, mem, 0)) BitBlt(dc, 0, 0, w, h, mem, 0, 0, SRCCOPY);
+  SelectObject(mem, old);
+  DeleteObject(bmp);
+  DeleteDC(mem);
+  ReleaseDC(dlg, dc);
+}
+
 static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
   switch (msg) {
     case WM_INITDIALOG:
@@ -1200,7 +1253,14 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       load_review(dlg);
       theme_apply_window(dlg, FALSE);
       theme_apply_controls(dlg);
+      if (g_view.review_demo) demo_review_place(dlg);
       return TRUE;
+    case WM_TIMER:
+      if (wp == DEMO_REVIEW_REDRAW) {
+        demo_review_redraw(dlg);
+        return TRUE;
+      }
+      break;
     case WM_CTLCOLORDLG:
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
@@ -1316,6 +1376,16 @@ static INT_PTR CALLBACK review_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
       break;
   }
   return FALSE;
+}
+
+/* Modeless, unlike open_review(): see demo_review_redraw(). Nothing closes it but the window
+ * closing; it's only ever up for a screenshot. */
+void import_view_open_review(int idx) {
+  if (idx < 0 || idx >= g_view.item_count) return;
+  g_view.review_demo = TRUE;
+  HWND dlg = CreateDialogParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_REVIEW), g_view.parent, review_proc,
+                                (LPARAM)idx);
+  if (dlg) ShowWindow(dlg, SW_SHOWNOACTIVATE);
 }
 
 static void open_review(int idx) {

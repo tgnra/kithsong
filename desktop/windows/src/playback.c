@@ -374,6 +374,22 @@ void playback_tracks_changed(void) {
   media_controls_set_track(it->title, it->artist, it->album, it->cover_dir);
 }
 
+void playback_demo_show(const char *uid, int position_ms) {
+  mc_track_list *list = NULL;
+  if (s.lib && uid && mc_library_get_track(s.lib, uid, &list) == MC_OK && list->count) {
+    const mc_track_info *t = &list->items[0];
+    wchar_t *title = wstr_dup_from_utf8(t->title ? t->title : ""), *artist = t->artist ? wstr_dup_from_utf8(t->artist) : NULL;
+    wchar_t *cover = t->cover_dir ? wstr_dup_from_utf8(t->cover_dir) : NULL;
+    now_playing_show(title, artist, t->duration_ms, cover);
+    now_playing_set_position(position_ms);
+    track_list_set_playing(t->uid);
+    free(title);
+    free(artist);
+    free(cover);
+  }
+  mc_track_list_free(list);
+}
+
 void playback_clear(void) {
   if (!s.player) return;
   mc_player_end_play(s.player);

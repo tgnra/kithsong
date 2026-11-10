@@ -68,14 +68,16 @@
  * failed).
  *
  * Command line: kithsong.exe [--config-dir <dir> | --config-dir=<dir>] [--demo-library]
- * [--window-size WxH] [--page <page>] [--] [paths...]
+ * [--window-size WxH] [--page <page>] [--demo-playing <spec>] [--] [paths...]
  * --config-dir keeps settings.json and sync.db somewhere other than %LOCALAPPDATA%\kithsong,
  * so two instances can sync on one PC; the paths are imported. --demo-library opens the demo
  * library (kithcore/demo.h) in <config dir>\demo-library, making it first, and refuses a
  * config folder whose settings name another library. --window-size sets the window's size as
  * it shows (the frame DWM draws, so a capture of it is that size), --page what it opens on:
- * home, albums, artists, album:<title>, artist:<name> or search:<text>. These three are for
- * screenshots (scripts/store-screenshots). Run from a checkout, the app
+ * home, albums, artists, album:<title>, artist:<name> or search:<text>, and with the demo
+ * library import, import-review or sync, which show a made-up import or sync part-way through
+ * (kithcore/demo.h). --demo-playing <album>#<track>@<m:ss> shows that track paused there. These
+ * are for screenshots (scripts/store-screenshots), and the demo states run only with them. Run from a checkout, the app
  * has folders of its own (kithcore/source_run.h). Launching it again with the
  * same config folder brings the open window forward and hands it the paths instead, as
  * GApplication does on Linux (claim_instance). --add-firewall-rule or
@@ -187,6 +189,7 @@ enum {
   TIMER_ANALYSIS,                 /* repeating: what the audio analysis is up to */
   TIMER_CAST_PULSE,               /* repeating, while connecting: the cast button pulses */
   TIMER_START_PAGE,               /* repeating until it's open: --page's page */
+  TIMER_DEMO_REVIEW,              /* one-shot: --page import-review's review dialog */
   REFRESH_DEVICES_MS = 200,
   START_PAGE_MS = 250,
   START_PAGE_TRIES = 40, /* ten seconds for the grid to have the album */
@@ -255,6 +258,8 @@ static int g_window_w, g_window_h;
 /* --page's page, kept for TIMER_START_PAGE: UTF-8, or NULL. */
 static char *g_start_page;
 static int g_start_page_tries;
+/* --demo-playing's value, kept until the start page is open: UTF-8, or NULL. */
+static char *g_demo_playing;
 
 /* The window property holding its config folder's instance key (see claim_instance). */
 #define INSTANCE_PROP L"Kithsong.Instance"
@@ -2331,7 +2336,19 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
           KillTimer(wnd, TIMER_START_PAGE);
           free(g_start_page);
           g_start_page = NULL;
+          /* --demo-playing: over whatever the page put in the track list. */
+          char uid[MC_UID_STRLEN];
+          int position = 0;
+          if (g_demo_playing && g_app.lib && mc_demo_playing_track(g_app.lib, g_demo_playing, uid, &position) == MC_OK)
+            playback_demo_show(uid, position);
+          free(g_demo_playing);
+          g_demo_playing = NULL;
         }
+        return 0;
+      }
+      if (wp == TIMER_DEMO_REVIEW) {
+        KillTimer(wnd, TIMER_DEMO_REVIEW);
+        import_view_open_review(MC_DEMO_IMPORT_REVIEW);
         return 0;
       }
       if (wp == TIMER_SAVE_VOLUME) {
@@ -2461,6 +2478,7 @@ typedef struct app_args {
   BOOL demo_library;           /* --demo-library */
   int window_w, window_h;      /* --window-size, or 0 */
   const wchar_t *page;         /* --page, or NULL */
+  const wchar_t *demo_playing; /* --demo-playing, or NULL */
 } app_args;
 
 /* Fills args from the command line. Returns -1 to carry on, or the exit code (after showing
@@ -2514,6 +2532,13 @@ static int parse_args(app_args *args) {
         args->page = page;
         continue;
       }
+      const wchar_t *playing = !wcscmp(a, L"--demo-playing") && i + 1 < argc ? args->argv[++i]
+                               : !wcsncmp(a, L"--demo-playing=", 15)        ? a + 15
+                                                                             : NULL;
+      if (playing && *playing) {
+        args->demo_playing = playing;
+        continue;
+      }
       /* unknown, or no folder */
       MessageBoxW(NULL, mc_wstr(MC_STR_WINDOWS_USAGE), mc_wstr(MC_STR_APP_NAME), MB_OK | MB_ICONWARNING);
       return 2;
@@ -2538,7 +2563,26 @@ static void free_args(app_args *args) {
  * the album yet; TRUE once it's open, or can't be (an unknown page, a title not there). */
 static BOOL open_start_page(const char *page) {
   if (!g_app.lib) return TRUE;
-  if (!strcmp(page, "home")) show_page(PAGE_HOME);
+  if (!strcmp(page, "import") || !strcmp(page, "import-review")) {
+    /* The demo import: its items come with its first events. */
+    if (g_app.page != PAGE_IMPORT) {
+      show_page(PAGE_IMPORT);
+      import_view_start_demo();
+    }
+    if (!strcmp(page, "import")) return TRUE;
+    if (!import_view_item_shown(MC_DEMO_IMPORT_REVIEW)) return FALSE;
+    /* Modal, so not from this timer, which would fire again inside it. */
+    SetTimer(g_app.wnd, TIMER_DEMO_REVIEW, 500, NULL);
+  } else if (!strcmp(page, "sync")) {
+    /* The demo group's phone (use_demo_library made the group), once sync is up. */
+    mc_sync *sync = sync_bridge_get();
+    if (!sync) return FALSE;
+    refresh_devices();
+    sidebar_select_device(MC_DEMO_PHONE_UID);
+    if (!sidebar_selected_device()) return FALSE;
+    show_page(PAGE_DEVICE);
+    mc_demo_sync_show(sync);
+  } else if (!strcmp(page, "home")) show_page(PAGE_HOME);
   else if (!strcmp(page, "albums")) show_page(PAGE_ALBUMS);
   else if (!strcmp(page, "artists")) show_page(PAGE_ARTISTS);
   else if (!strncmp(page, "search:", 7)) {
@@ -2576,7 +2620,7 @@ static BOOL open_start_page(const char *page) {
 /* --demo-library: the demo library in <config dir>\demo-library, made if it isn't there, as
  * the settings' library. FALSE (having said why) if they name another library already, so a
  * real config folder never loses its library to it, or if it can't be made. */
-static BOOL use_demo_library(void) {
+static BOOL use_demo_library(const wchar_t *page) {
   size_t n = strlen(g_app.config_dir) + sizeof "\\" MC_DEMO_DIR_NAME;
   char *dir = malloc(n);
   if (!dir) return FALSE;
@@ -2595,6 +2639,8 @@ static BOOL use_demo_library(void) {
     } else {
       ok = TRUE;
       if (!current && mc_settings_set_library_dir(g_app.settings, dir) == MC_OK) mc_settings_save(g_app.settings);
+      /* --page sync: the demo group, before sync opens sync.db. Its page says if it failed. */
+      if (page && !wcscmp(page, L"sync")) mc_demo_sync_group(dir, g_app.config_dir, mc_settings_device_name(g_app.settings));
     }
   }
   free(dir);
@@ -3246,7 +3292,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
   mc_plugins_load(g_app.settings, NULL, 0);
   /* From a checkout there's no asking: a library in the temp folder, unless a test wants the
    * first run itself. If that fails, the first run asks, with no Music folder to offer. */
-  if (args.demo_library && !use_demo_library()) {
+  if (args.demo_library && !use_demo_library(args.page)) {
     mc_plugins_unload();
     mc_settings_free(g_app.settings);
     free(g_app.config_dir);
@@ -3312,7 +3358,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     mc_perf_mark("sync_started");
     const wchar_t *perf_run = _wgetenv(L"KITHSONG_PERF_RUN");
     if (perf_run && *perf_run) SetTimer(wnd, TIMER_PERF_RUN, 2000, NULL); /* once it has settled */
-    if (args.page && (g_start_page = utf8_from_wide(args.page))) SetTimer(wnd, TIMER_START_PAGE, START_PAGE_MS, NULL);
+    if (args.page) g_start_page = utf8_from_wide(args.page);
+    if (args.demo_playing) g_demo_playing = utf8_from_wide(args.demo_playing);
+    if (g_start_page || g_demo_playing) SetTimer(wnd, TIMER_START_PAGE, START_PAGE_MS, NULL);
   }
   free_args(&args);
 

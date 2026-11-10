@@ -52,6 +52,13 @@ void import_view_layout(int x, int y, int w, int h, UINT dpi);
 /* Starts importing the given UTF-8 paths. Returns FALSE if an import is still running. */
 BOOL import_view_start(const char *const *paths, int count);
 void import_view_browse(void);
+/* For screenshots (--page import, import-review): starts the demo import (kithcore/demo.h)
+ * instead, if no session is open. import_view_item_shown() says whether item idx is in the
+ * list yet, and import_view_open_review() opens its review dialog (modeless, over the middle
+ * of the window). */
+BOOL import_view_start_demo(void);
+BOOL import_view_item_shown(int idx);
+void import_view_open_review(int idx);
 /* Handles a WM_DROPFILES; returns TRUE if anything was imported. */
 BOOL import_view_drop(HDROP drop);
 /* Asks to stop a running import, then ends the session. Returns FALSE if the user wants to
