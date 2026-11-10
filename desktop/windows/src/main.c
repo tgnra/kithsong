@@ -2638,6 +2638,7 @@ static BOOL use_demo_library(const wchar_t *page) {
       message_dialog(NULL, mc_wstr(MC_STR_APP_NAME), text, MB_ICONERROR);
     } else {
       ok = TRUE;
+      firewall_demo_clear();
       if (!current && mc_settings_set_library_dir(g_app.settings, dir) == MC_OK) mc_settings_save(g_app.settings);
       /* --page sync: the demo group, before sync opens sync.db. Its page says if it failed. */
       if (page && !wcscmp(page, L"sync")) mc_demo_sync_group(dir, g_app.config_dir, mc_settings_device_name(g_app.settings));

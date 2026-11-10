@@ -461,8 +461,18 @@ static BOOL forced_status(firewall_status *st) {
 }
 #endif
 
+static volatile LONG g_demo_clear; /* firewall_demo_clear() */
+
+void firewall_demo_clear(void) {
+  InterlockedExchange(&g_demo_clear, 1);
+}
+
 /* The one reading of the firewall, for the prompt (*missing) and the banner (*st). */
 static void read_firewall(unsigned port, BOOL *missing, firewall_status *st) {
+  if (InterlockedCompareExchange(&g_demo_clear, 0, 0)) {
+    st->state = FIREWALL_CLEAR; /* *missing stays FALSE: no prompt */
+    return;
+  }
 #ifndef NDEBUG
   if (forced_status(st)) return; /* *missing stays FALSE: no prompt over the banner */
 #endif

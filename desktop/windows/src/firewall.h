@@ -114,5 +114,8 @@ void firewall_recheck(void);
  * follows, so the banner goes by itself. */
 void firewall_allow(void);
 void firewall_open(firewall_page page);
+/* --demo-library: the firewall reads as letting everything through from now on, so the
+ * screenshots show no banner whatever network the machine taking them is on. */
+void firewall_demo_clear(void);
 
 #endif
