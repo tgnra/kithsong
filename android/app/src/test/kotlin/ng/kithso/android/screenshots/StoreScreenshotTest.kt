@@ -236,18 +236,26 @@ abstract class StoreScreenshots(
         compose.onAllNodes(hasScrollToKeyAction())[lists - 1].performScrollToKey(key)
     }
 
+    /** Every shot there is, in the listing's order. */
+    private val order = if (tablet) {
+        listOf("album-light", "player-light", "albums-light", "album-dark", "player-dark", "albums-dark", "search-light")
+    } else {
+        listOf("albums-light", "album-light", "player-light", "albums-dark", "player-dark", "album-dark", "search-light")
+    } + listOf("import-light", "sync-dark", "device-light")
+
     /**
-     * The listing's file name: its place in the listing's order, then [name]. Play takes up to
-     * eight per kind of device, so the listing has to leave some of these out.
+     * What the listing leaves out, as Tania chose (2026-11-10): Play takes up to eight per kind
+     * of device. These aren't drawn; the rest are numbered 1 to 8 in [order].
      */
-    private fun numbered(name: String): String {
-        val order = if (tablet) {
-            listOf("album-light", "player-light", "albums-light", "album-dark", "player-dark", "albums-dark", "search-light")
-        } else {
-            listOf("albums-light", "album-light", "player-light", "albums-dark", "player-dark", "album-dark", "search-light")
-        } + listOf("import-light", "sync-dark", "device-light")
-        return "${order.indexOf(name) + 1}-$name"
+    private val leftOut = when (folder) {
+        "phone" -> setOf("player-light", "search-light")
+        "tablet-10in" -> setOf("player-light", "album-dark")
+        "tablet-7in" -> setOf("album-light", "player-dark")
+        else -> emptySet()
     }
+
+    /** The listing's file name: its place among the shots kept, then [name]. */
+    private fun numbered(name: String): String = "${order.filterNot { it in leftOut }.indexOf(name) + 1}-$name"
 
     /**
      * App with [playback] playing, [import] under way and [sync] as sync has it, then [prepare]
@@ -260,6 +268,7 @@ abstract class StoreScreenshots(
         sync: SyncStatus = StoreSync.alone(deviceName),
         prepare: () -> Unit = {},
     ) {
+        if (name in leftOut) return
         val importer = StoreImporter(context, core, idle, import)
         val syncer = StoreSyncer(context, core, dir, idle, sync)
         // Its export and restart are never asked for here; what it starts in the background
