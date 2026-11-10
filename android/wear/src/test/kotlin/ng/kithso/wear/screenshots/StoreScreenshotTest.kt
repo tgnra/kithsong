@@ -13,11 +13,15 @@ import androidx.wear.compose.material3.TimeText
 import com.github.takahirom.roborazzi.captureRoboImage
 import kotlinx.coroutines.Dispatchers
 import ng.kithso.core.AlbumInfo
+import ng.kithso.core.ConfirmState
 import ng.kithso.core.TrackInfo
+import ng.kithso.wear.FileProgress
+import ng.kithso.wear.SyncState
 import ng.kithso.wear.ui.AlbumScreen
 import ng.kithso.wear.ui.AlbumsScreen
 import ng.kithso.wear.ui.HomeScreen
 import ng.kithso.wear.ui.PlayerScreen
+import ng.kithso.wear.ui.SyncScreen
 import ng.kithso.wear.ui.coverDispatcher
 import ng.kithso.wear.ui.coverFileOf
 import org.junit.Rule
@@ -44,7 +48,7 @@ import javax.imageio.ImageIO
  * saved without alpha, as Play wants. The clock always says 12:45.
  *
  * Runs only with -PkithsongScreenshots; the PNGs go to build/outputs/store-screenshots/wear,
- * named as in the listing.
+ * named as in the listing; 6-sync is new, not in the listing yet.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -130,6 +134,21 @@ class StoreScreenshotTest {
 
     @Test fun home() = shoot("5-home") {
         HomeScreen(null, onNowPlaying = {}, onAlbums = {}, onPlaylists = {}, onAlbumGroups = {}, onSync = {}, onSettings = {})
+    }
+
+    // Sync part way: files coming in from the group, as the watch's Sync screen shows them.
+    @Test fun sync() = shoot("6-sync") {
+        SyncScreen(
+            SyncState.Paired(
+                devices = listOf("Desk", "Phone"),
+                confirm = ConfirmState.Confirmed,
+                synced = 38,
+                wanted = 62,
+                hasStatus = true,
+                progress = FileProgress(24, 62, "1.4 MB/s · about 3 min left"),
+            ),
+            onDismissRefusal = {},
+        )
     }
 
     private object FixedTime : TimeSource {
