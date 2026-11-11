@@ -55,6 +55,10 @@ typedef struct mc_cast mc_cast;
 #define MC_CAST_ADDR_LEN 46
 /* How long a cast may stay paused before it ends: three minutes, as on Android. */
 #define MC_CAST_PAUSED_MS (3 * 60 * 1000)
+/* The TCP port the device fetches the music from, on this computer, while casting: fixed, so
+ * a firewall can allow it, as MC_SYNC_DEFAULT_PORT is for sync. If it's taken, the system
+ * picks one (see mc_cast_status.music_port). */
+#define MC_CAST_MUSIC_PORT 47824
 
 typedef enum mc_cast_event {
   MC_CAST_EVENT_DEVICES, /* the device list changed: read it with mc_cast_devices() */
@@ -91,7 +95,11 @@ typedef enum mc_cast_end {
   MC_CAST_END_LOST,      /* the connection was lost and couldn't be got back */
   MC_CAST_END_REMOTE,    /* stopped from elsewhere: the TV, Google Home, another phone */
   MC_CAST_END_DISPLACED, /* another app cast to the device; its receiver is left running */
-  MC_CAST_END_PLAYER     /* the player was freed */
+  MC_CAST_END_PLAYER,    /* the player was freed */
+  /* The device couldn't fetch the music: it said a track failed without ever connecting to
+   * this computer for it, which is almost always a firewall blocking music_port. Playback is
+   * back here, paused, on that track, rather than going on to fail at every one. */
+  MC_CAST_END_UNREACHABLE
 } mc_cast_end;
 
 typedef struct mc_cast_status {
@@ -103,6 +111,12 @@ typedef struct mc_cast_status {
   int volume;        /* the device's, 0 to 100, as it last said (or as last set); 0 when idle */
   int muted;
   mc_cast_end ended; /* why the last cast ended; NONE again on connecting */
+  /* Where the device fetches the music from: this computer's numeric address on the device's
+   * network, and the TCP port, MC_CAST_MUSIC_PORT unless that was taken. Set once the cast
+   * has connected, and kept after it ends (for telling of MC_CAST_END_UNREACHABLE); "" and 0
+   * while connecting, and before any cast got that far. */
+  char music_address[MC_CAST_ADDR_LEN];
+  uint16_t music_port;
 } mc_cast_status;
 
 /* A handle for Cast: nothing runs until discovery starts or a device is connected. cb may

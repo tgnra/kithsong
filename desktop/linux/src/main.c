@@ -44,6 +44,7 @@
 #include "app.h"
 #include "art_backdrop.h"
 #include "brand_backdrop.h"
+#include "cast_unreachable.h"
 #include "artist_view.h"
 #include "cover.h"
 #include "delete_dialog.h"
@@ -748,6 +749,13 @@ static void playback_cast_failed(void *user, const char *text) {
   adw_toast_set_title(toast, text);
   adw_toast_set_timeout(toast, 8); /* a sentence to read */
   adw_toast_overlay_add_toast(a->toasts, toast);
+}
+
+/* A cast the device couldn't fetch the music for: a firewall, most likely. Says so, and what
+ * to allow, in a dialog: a toast would be gone before the commands could be read. */
+static void playback_cast_unreachable(void *user, const char *name, const char *address, unsigned port) {
+  app *a = user;
+  cast_unreachable_show(GTK_WIDGET(a->win), name, address, port);
 }
 
 static void on_previous(GSimpleAction *action, GVariant *param, gpointer user) {
@@ -2194,6 +2202,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   playback_on_recents_changed(playback_recents_changed);
   playback_on_radio_failed(playback_radio_failed);
   playback_on_cast_failed(playback_cast_failed);
+  playback_on_cast_unreachable(playback_cast_unreachable);
   playback_set_library(a->lib, a->settings_dir);
   delete_dialog_init(before_delete);
   remove_here_init(before_remove_here);

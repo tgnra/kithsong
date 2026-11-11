@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kithcore/cast.h"
 #include "net/socket.h"
 #include "playback/decoder.h"
 #include "util/platform.h"
@@ -198,6 +199,7 @@ struct cast_server {
   served *items;
   int nitems;
   worker workers[WORKERS];
+  unsigned long accepted; /* connections taken, for cast_server_reached() */
   int stopping;
 };
 
@@ -471,6 +473,7 @@ static void accept_loop(void *arg) {
     }
     if (!s) break; /* stopped */
     mc_mutex_lock(&server->lock);
+    server->accepted++;
     worker *free_slot = NULL;
     for (int i = 0; i < WORKERS; i++) {
       worker *w = &server->workers[i];
@@ -510,7 +513,8 @@ mc_status cast_server_start(const char *address, cast_server **out) {
     return st;
   }
   for (int i = 0; i < TOKEN_BYTES; i++) snprintf(server->token + 2 * i, 3, "%02x", raw[i]);
-  st = mc_listener_open_on(address, 0, &server->listener);
+  st = mc_listener_open_on(address, MC_CAST_MUSIC_PORT, &server->listener);
+  if (st == MC_ERR_NET) st = mc_listener_open_on(address, 0, &server->listener); /* taken: any port will do */
   if (st != MC_OK) {
     free(server);
     return st;
@@ -598,6 +602,17 @@ void cast_server_keep(cast_server *server, const char *const *names, int n) {
   }
   server->nitems = kept;
   mc_mutex_unlock(&server->lock);
+}
+
+uint16_t cast_server_port(const cast_server *server) {
+  return mc_listener_port(server->listener);
+}
+
+int cast_server_reached(cast_server *server) {
+  mc_mutex_lock(&server->lock);
+  int reached = server->accepted > 0;
+  mc_mutex_unlock(&server->lock);
+  return reached;
 }
 
 void cast_server_stop(cast_server *server) {

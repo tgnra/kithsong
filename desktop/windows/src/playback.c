@@ -709,7 +709,7 @@ BOOL playback_cast_update(mc_cast_end *ended, char *name) {
   s.cast_session = FALSE; /* it's over: say why once */
   mc_cast_end why = s.cast_failed ? MC_CAST_END_FAILED : s.cast_status.ended;
   s.cast_failed = FALSE;
-  if (why != MC_CAST_END_FAILED && why != MC_CAST_END_LOST) return FALSE;
+  if (why != MC_CAST_END_FAILED && why != MC_CAST_END_LOST && why != MC_CAST_END_UNREACHABLE) return FALSE;
   *ended = why;
   copy_name(name, s.cast_name);
   return TRUE;

@@ -601,6 +601,32 @@ static void report(session *s, report_kind kind, unsigned id) {
   mc_mutex_unlock(&s->use);
 }
 
+/* Puts where the music server listens in the status, for telling of a firewall in the way. */
+static void set_music(session *s) {
+  mc_cast *c = s->cast;
+  mc_mutex_lock(&c->lock);
+  if (c->session == s) {
+    copy_str(c->status.music_address, sizeof c->status.music_address, s->local_addr);
+    c->status.music_port = cast_server_port(s->server);
+  }
+  mc_mutex_unlock(&c->lock);
+}
+
+/* The device says the track id failed. If it never once connected to the music server, it
+ * can't reach this computer (a firewall, most likely), and every track after would fail the
+ * same: the cast ends and says so, playback back here on that track, rather than going
+ * through the queue failing. A device that has connected had the file, so it's this track
+ * that's bad, and the player goes on to the next. */
+static void track_failed(session *s, unsigned id) {
+  s->dev_done = 1;
+  if (!cast_server_reached(s->server)) {
+    report(s, REPORT_DROPPED, 0);
+    end_session(s, MC_CAST_END_UNREACHABLE, 0);
+    return;
+  }
+  report(s, REPORT_FAILED, id);
+}
+
 /* --- What the device says --- */
 
 /* Learns which device item is which of ours, from the status's queue. */
@@ -702,8 +728,7 @@ static void media_status(session *s, const cast_media_status *m) {
     report(s, REPORT_FINISHED, on);
     break;
   case CAST_IDLE_ERROR:
-    s->dev_done = 1;
-    report(s, REPORT_FAILED, on);
+    track_failed(s, on);
     break;
   case CAST_IDLE_CANCELLED:
   case CAST_IDLE_INTERRUPTED: /* stopped from elsewhere */
@@ -736,10 +761,7 @@ static void handle(session *s, const cast_message *msg, const cast_reply *reply)
       media_status(s, &reply->media);
       break;
     case CAST_T_LOAD_FAILED:
-      if (s->dev_current && !s->dev_done) {
-        s->dev_done = 1;
-        report(s, REPORT_FAILED, s->dev_current);
-      }
+      if (s->dev_current && !s->dev_done) track_failed(s, s->dev_current);
       break;
     case CAST_T_QUEUE_ITEM_IDS:
       s->items_known = 1;
@@ -929,6 +951,7 @@ static int reconnect(session *s) {
       cast_server_stop(s->server);
       s->server = server;
       copy_str(s->local_addr, sizeof s->local_addr, local);
+      set_music(s);
       lost = 1;
     }
     int stale;
@@ -952,9 +975,14 @@ static void finish(session *s, mc_cast_end why) {
   mc_mutex_lock(&c->lock);
   int ours = c->session == s;
   if (ours) {
+    char address[MC_CAST_ADDR_LEN];
+    uint16_t port = c->status.music_port;
+    copy_str(address, sizeof address, c->status.music_address);
     memset(&c->status, 0, sizeof c->status);
     c->status.state = MC_CAST_IDLE;
     c->status.ended = why;
+    copy_str(c->status.music_address, sizeof c->status.music_address, address); /* kept, as cast.h says */
+    c->status.music_port = port;
   }
   s->finished = 1;
   mc_mutex_unlock(&c->lock);
@@ -1019,6 +1047,7 @@ static void session_main(void *arg) {
   int began = 0;
   if (open_session(s, &media) == MC_OK && cast_tls_local_address(s->tls, s->local_addr, sizeof s->local_addr) == MC_OK &&
       cast_server_start(s->local_addr, &s->server) == MC_OK) {
+    set_music(s);
     mc_mutex_lock(&s->use);
     mc_status st = s->player ? mc_player_remote_begin(s->player, &remote_ops, s) : MC_ERR_INVALID_ARG;
     mc_mutex_unlock(&s->use);

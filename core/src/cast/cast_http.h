@@ -1,9 +1,9 @@
 /* The music server a Cast device fetches what it plays from, as Android's CastServer.kt does:
  * it runs only while a cast is connected, on this computer's address on the network the
- * device was reached on, at a port the system picks. Every URL starts with a token, random
- * for each server, and serves only what has been put up (the tracks the device has been
- * given and their covers), so nothing else on this computer can be fetched, by the device or
- * anyone else on the network. Tracks are served with their type and length, and with byte
+ * device was reached on, at MC_CAST_MUSIC_PORT (or a port the system picks, if that's
+ * taken). Every URL starts with a token, random for each server, and serves only what has
+ * been put up (the tracks the device has been given and their covers), so nothing else on
+ * this computer can be fetched, by the device or anyone else on the network. Tracks are served with their type and length, and with byte
  * ranges (206), which the device uses to seek. Each connection is answered on a thread of
  * its own (a few at once), a request at a time, and closed.
  *
@@ -60,6 +60,11 @@ typedef struct cast_server cast_server;
 mc_status cast_server_start(const char *address, cast_server **out);
 /* "http://<address>:<port>/<token>/": what every URL starts with. */
 const char *cast_server_base(const cast_server *server);
+/* The port it listens on. */
+uint16_t cast_server_port(const cast_server *server);
+/* Whether anything has connected to it yet. A device that says a track failed without
+ * having connected couldn't reach it at all: a firewall, most likely. */
+int cast_server_reached(cast_server *server);
 /* Puts up a track file as name (letters, digits and dots), with its type, converted to WAV if
  * as_wav. Replaces what name had. */
 mc_status cast_server_add_file(cast_server *server, const char *name, const char *path,

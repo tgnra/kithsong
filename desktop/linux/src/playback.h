@@ -128,6 +128,11 @@ void playback_cast_set_volume(int volume);
 /* failed is called, with playback_init()'s user, when a cast couldn't connect or lost its
  * connection, with a sentence saying so: "Couldn't connect to Living Room TV." */
 void playback_on_cast_failed(void (*failed)(void *user, const char *text));
+/* unreachable is called, with playback_init()'s user, when a cast ended because the device
+ * couldn't fetch the music from this computer (MC_CAST_END_UNREACHABLE): with the device's
+ * name ("" for none) and where the music server listened, the address and port to allow. */
+void playback_on_cast_unreachable(void (*unreachable)(void *user, const char *name, const char *address,
+                                                      unsigned port));
 
 /* Adds it to the front of the queue (Play next) or the end (Play last), and the now-playing strip
  * says so, or that it has nothing with a file on this device. Nothing starts playing. Anything but

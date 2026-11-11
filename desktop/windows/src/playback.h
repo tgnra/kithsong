@@ -145,8 +145,9 @@ BOOL playback_has_next(void);
 #define WM_APP_CAST (WM_APP + 13)
 
 /* Reads the cast's status again, after WM_APP_CAST. TRUE if a cast just ended in a way the user
- * should hear about (MC_CAST_END_FAILED or MC_CAST_END_LOST), with *ended saying which and name
- * (MC_CAST_NAME_LEN bytes, UTF-8) the device's name, "" for one without. */
+ * should hear about (MC_CAST_END_FAILED, MC_CAST_END_LOST or MC_CAST_END_UNREACHABLE), with
+ * *ended saying which and name (MC_CAST_NAME_LEN bytes, UTF-8) the device's name, "" for one
+ * without. */
 BOOL playback_cast_update(mc_cast_end *ended, char *name);
 /* The status as playback_cast_update() last read it (or a connect or volume change since). */
 const mc_cast_status *playback_cast_status(void);

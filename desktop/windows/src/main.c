@@ -1084,7 +1084,12 @@ static void update_cast_button(void) {
  * now-playing strip, as other passing troubles are. */
 static void say_cast_ended(mc_cast_end ended, const char *name) {
   wchar_t text[256];
-  mc_wformat(text, 256, mc_str(ended == MC_CAST_END_LOST ? MC_STR_CAST_LOST : MC_STR_CAST_FAILED),
+  /* Unreachable is rare here, as the firewall rule sync asks for covers this exe on any port,
+   * but not on a public network, which the rule leaves out. */
+  enum mc_str_id what = ended == MC_CAST_END_LOST          ? MC_STR_CAST_LOST
+                        : ended == MC_CAST_END_UNREACHABLE ? MC_STR_CAST_UNREACHABLE
+                                                           : MC_STR_CAST_FAILED;
+  mc_wformat(text, 256, mc_str(what),
              MC_S(name[0] ? name : mc_str(MC_STR_CAST_DEVICE_UNNAMED)));
   now_playing_notice(text);
 }

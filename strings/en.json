@@ -1019,10 +1019,15 @@
     "cast_stop": { "text": "Stop casting", "note": "In the list the cast button opens while casting: stops playing on the Google Cast device, and playback comes back here, paused." },
     "cast_device_unnamed": { "text": "Cast device", "note": "Stands in for {0} in the cast_ strings when the Google Cast device has no name." },
     "cast_failed": { "text": "Couldn't connect to {0}.", "note": "Shown after picking a Google Cast device, when it can't be reached or won't start playing. {0} is the device's name, e.g. \"Living Room TV\"." },
-    "cast_lost": { "text": "Lost the connection to {0}.", "note": "Shown when casting ends because the Google Cast device stopped answering and couldn't be reached again; playback is back here, paused. {0} is the device's name." }
+    "cast_lost": { "text": "Lost the connection to {0}.", "note": "Shown when casting ends because the Google Cast device stopped answering and couldn't be reached again; playback is back here, paused. {0} is the device's name." },
+    "cast_unreachable": { "text": "{0} couldn't fetch the music from this computer. A firewall may be blocking it.", "note": "Shown when casting ends because the Google Cast device couldn't connect back to this computer to fetch the tracks (the music is served from here); playback is back here, paused. {0} is the device's name." }
   },
 
   "linux": {
+    "cast_unreachable_title": { "text": "{0} can't reach this computer", "note": "Heading of the dialog shown when casting ends because the Google Cast device couldn't connect back to this computer to fetch the music. {0} is the device's name, e.g. \"Living Room TV\"." },
+    "cast_unreachable_text": { "text": "Casting plays the music from this computer, so {0} has to connect to it, and it couldn't. A firewall is probably blocking it: allow incoming TCP connections on port {1:d} from your local network, then cast again.", "note": "Under cast_unreachable_title. {0} is the device's name, {1} a port number, e.g. 47824." },
+    "cast_unreachable_commands": { "text": "If you use firewalld or ufw, its command here allows it. Run it in a terminal:", "note": "In the cast_unreachable dialog, above shell commands that open the port. firewalld and ufw are the names of Linux firewalls: leave them as they are." },
+    "copy_command": { "text": "Copy command", "note": "Tooltip and name for accessibility of a button beside a shell command, which copies it to the clipboard." },
     "stats_this_computer": { "text": "On this computer", "note": "Heading in Library stats: the music with a file on this computer." },
     "smart_mode_not_all": { "text": "Not all of the following", "note": "Smart list editor: picker entry above a group's conditions, of which at least one must be false." },
     "smart_move_name": { "text": "Move", "note": "Tooltip and name for accessibility of a smart list condition's or group's menu of Move up, Move down and Move to." },

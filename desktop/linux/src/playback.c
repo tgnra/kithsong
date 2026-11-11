@@ -64,6 +64,7 @@ static struct {
   gint64 held_until; /* monotonic, or 0 */
   guint settle;      /* the timeout that shows the device's word again */
   void (*failed)(void *user, const char *text);
+  void (*unreachable)(void *user, const char *name, const char *address, unsigned port);
 } c;
 
 static void cast_init(void);
@@ -645,6 +646,8 @@ static void cast_changed(guint events) {
     release_volume();
     if (st.ended == MC_CAST_END_FAILED) cast_failed(MC_STR_CAST_FAILED);
     else if (st.ended == MC_CAST_END_LOST) cast_failed(MC_STR_CAST_LOST);
+    else if (st.ended == MC_CAST_END_UNREACHABLE && c.unreachable)
+      c.unreachable(s.user, c.name, st.music_address, st.music_port);
   }
   if ((events & (EV(MC_CAST_EVENT_STATE) | EV(MC_CAST_EVENT_VOLUME))) && !volume_held()) {
     mpris_volume_changed();
@@ -689,6 +692,11 @@ static void cast_free(void) {
 
 void playback_on_cast_failed(void (*failed)(void *user, const char *text)) {
   c.failed = failed;
+}
+
+void playback_on_cast_unreachable(void (*unreachable)(void *user, const char *name, const char *address,
+                                                      unsigned port)) {
+  c.unreachable = unreachable;
 }
 
 mc_cast *playback_cast(void) {

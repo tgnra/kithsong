@@ -88,11 +88,20 @@ A cast ends when:
 
 The device fetches by URL, so a small HTTP server (`cast_http.c`) runs while a cast is
 connected, on the computer's address on the network the device was reached on (the local end
-of the TLS connection), at a port the system picks. Every URL is `/<token>/<name>`, with a
-random token per server, and only the current and next items and their covers are up, so
-nothing else on the computer can be fetched. Tracks have their type and length, and byte
+of the TLS connection), at port 47824 (`MC_CAST_MUSIC_PORT`), fixed so a firewall can allow
+it, as sync's 47823 is; if that's taken, at a port the system picks. Every URL is
+`/<token>/<name>`, with a random token per server, and only the current and next items and
+their covers are up, so nothing else on the computer can be fetched. Tracks have their type and length, and byte
 ranges (206, 416), which the device uses to seek; answers allow cross-origin fetching, as the
 receiver is a web page.
+
+A device that can't connect to the server (a firewall on the computer, most often, which on
+Linux nothing configures for the app) only says, for each track, that it failed. So a track
+failing before anything has ever connected to this cast's server
+(`cast_server_reached()`) ends the cast with `MC_CAST_END_UNREACHABLE`, playback back on the
+computer on that track, instead of the player going on to fail at each of the next few and
+stopping. The status keeps `music_address` and `music_port` for saying what to allow. Once
+the device has connected, a failure is that track's, and the player goes on to the next.
 
 | File | Served as |
 |---|---|
@@ -128,13 +137,17 @@ all along (it slows to a query every 20 s), so the cast button can wait for a de
   connected the device's volume.
 - While casting, the app's own volume (its control, keys and the desktop's media controls)
   is the device's, as Android's volume keys are; the computer's is kept for afterwards.
-- After a cast ends with `MC_CAST_END_FAILED` or `MC_CAST_END_LOST`, say so:
-  `MC_STR_CAST_FAILED`, `MC_STR_CAST_LOST`.
+- After a cast ends with `MC_CAST_END_FAILED`, `MC_CAST_END_LOST` or
+  `MC_CAST_END_UNREACHABLE`, say so: `MC_STR_CAST_FAILED`, `MC_STR_CAST_LOST`,
+  `MC_STR_CAST_UNREACHABLE`.
 
 Linux: `desktop/linux/src/cast_button.c`, with the handle and the volume in `playback.c`.
+Unreachable is a dialog (`cast_unreachable.c`) rather than a toast: it names the port to
+allow, with commands for firewalld (in the zone of the interface the device is on) and ufw
+(from that interface's network) to copy.
 
 Windows: `desktop/windows/src/cast_popup.c` and the button in `main.c`, with the handle and the
-volume in `playback.c`. The failed and lost messages show in the now-playing strip, as other
-passing troubles do. The keyboard's volume keys reach the device only while the window has the
+volume in `playback.c`. The failed, lost and unreachable messages show in the now-playing
+strip, as other passing troubles do. The keyboard's volume keys reach the device only while the window has the
 focus. The firewall rule that sync asks for (`firewall.c`, and the MSIX manifest) covers this
 exe on any port, so it covers the music server too.

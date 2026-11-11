@@ -6,7 +6,9 @@
  * the device going on to the queued track moves the player on and the queue is put right;
  * seeking; the connection dropping and being got back; disconnecting stops the receiver and
  * hands back. Then another app casting over it, which
- * ends the cast and leaves the receiver alone; a cast left paused, which ends and stops
+ * ends the cast and leaves the receiver alone; a track the device fetched but couldn't play,
+ * which is skipped; one that failed without the device ever reaching the music server (a
+ * firewall), which ends the cast as unreachable; a cast left paused, which ends and stops
  * (with the timeout cut short); and freeing the player. No audio device is needed. */
 #include <stdint.h>
 #include <stdio.h>
@@ -54,7 +56,7 @@ typedef struct fake {
   const char *state;     /* "PLAYING", "PAUSED", "IDLE" */
   double level;
   int push;              /* 1: send a status nobody asked for; 2: go on to the next item; 3: someone else's
-                          * media; 4: drop the connection */
+                          * media; 4: drop the connection; 5: the current item failed */
   /* The connection's thread only. */
   mc_socket *sock;
   mbedtls_ssl_context ssl;
@@ -220,6 +222,16 @@ static void serve(fake *f) {
     if (push == 1) media_status(f, 0, 0, NULL);
     if (push == 2) media_status_as(f, 0, 0, NULL, 1); /* the item id alone says it moved on */
     if (push == 3) media_status(f, 0, 0, "http://elsewhere/video.mp4");
+    if (push == 5) { /* as a receiver says it when it couldn't fetch or play the item */
+      char json[1024];
+      mc_mutex_lock(&f->lock);
+      snprintf(json, sizeof json,
+               "{\"type\":\"MEDIA_STATUS\",\"requestId\":0,\"status\":[{\"mediaSessionId\":1,\"playerState\":\"IDLE\","
+               "\"idleReason\":\"ERROR\",\"currentItemId\":%d,\"media\":{\"contentId\":\"%s\"}}]}",
+               f->items[f->current], f->urls[f->current]);
+      mc_mutex_unlock(&f->lock);
+      fake_send(f, "web-1", CAST_NS_MEDIA, json);
+    }
     int n = mbedtls_ssl_read(&f->ssl, f->buf + f->len, sizeof f->buf - f->len);
     if (n == MBEDTLS_ERR_SSL_TIMEOUT || n == MBEDTLS_ERR_SSL_WANT_READ) continue;
     if (n <= 0) break;
@@ -585,6 +597,53 @@ int main(int argc, char **argv) {
   mc_mutex_unlock(&f.lock);
   mc_player_status_get(player, &pst);
   CHECK(pst.state != MC_PLAYER_PLAYING);
+
+  /* A track the device fetched but couldn't play: the player goes on to the next, still
+   * casting. */
+  CHECK(mc_player_set_queue(player, paths, 3, 0, NULL) == MC_OK);
+  mark = log_mark(&f);
+  CHECK(mc_cast_connect(cast, "fake-id", player) == MC_OK);
+  CHECK(wait_cast(cast, MC_CAST_CASTING, 5000));
+  mc_player_resume(player);
+  CHECK(wait_player(player, MC_PLAYER_PLAYING, 0));
+  CHECK(received(&f, mark, "media:QUEUE_LOAD"));
+  mc_sleep_ms(100); /* its answer */
+  mc_mutex_lock(&f.lock);
+  snprintf(url0, sizeof url0, "%s", f.urls[0]);
+  mc_mutex_unlock(&f.lock);
+  CHECK(http_get(url0, status, sizeof status, &length)); /* the device fetching it */
+  mc_cast_status_get(cast, &st);
+  CHECK(!strcmp(st.music_address, "127.0.0.1") && st.music_port);
+  char port_part[16];
+  snprintf(port_part, sizeof port_part, ":%u/", (unsigned)st.music_port);
+  CHECK(strstr(url0, port_part) != NULL);
+  push(&f, 5);
+  CHECK(wait_player(player, MC_PLAYER_PLAYING, 1));
+  CHECK(mc_cast_is_casting(cast));
+  mc_cast_disconnect(cast);
+  CHECK(wait_cast(cast, MC_CAST_IDLE, 5000));
+
+  /* A track failing without the device ever having connected to the music server (a
+   * firewall): the cast ends and says so, playback back here on that track, rather than
+   * going on to fail at each of the others. */
+  CHECK(mc_player_set_queue(player, paths, 3, 0, NULL) == MC_OK);
+  mark = log_mark(&f);
+  CHECK(mc_cast_connect(cast, "fake-id", player) == MC_OK);
+  CHECK(wait_cast(cast, MC_CAST_CASTING, 5000));
+  mc_player_resume(player);
+  CHECK(wait_player(player, MC_PLAYER_PLAYING, 0));
+  CHECK(received(&f, mark, "media:QUEUE_LOAD"));
+  mc_sleep_ms(100);
+  mark = log_mark(&f);
+  push(&f, 5);
+  CHECK(wait_cast(cast, MC_CAST_IDLE, 5000));
+  mc_cast_status_get(cast, &st);
+  CHECK(st.ended == MC_CAST_END_UNREACHABLE);
+  CHECK(!strcmp(st.music_address, "127.0.0.1") && st.music_port != 0); /* kept, to tell of */
+  CHECK(wait_player(player, MC_PLAYER_PAUSED, 0));
+  mc_mutex_lock(&f.lock);
+  for (int i = mark; i < f.nlog; i++) CHECK(strcmp(f.log[i], "media:QUEUE_LOAD") != 0);
+  mc_mutex_unlock(&f.lock);
 
   /* Left paused, the cast ends by itself, and playback stops. */
   mc_cast_test_paused_ms = 300;

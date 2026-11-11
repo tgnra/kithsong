@@ -3,6 +3,19 @@
 What changed in each Kithsong release, newest first. Each release's full list of commits is on
 its GitHub release page.
 
+## Unreleased
+
+### Windows and Linux
+
+- Google Cast: the device fetches the music from port 47824, the same each time, so a firewall
+  can allow it. Where a firewall was in the way, the app skipped through a few tracks and then
+  paused; now the cast ends at the first track and says the device can't reach this computer.
+
+### Linux
+
+- Google Cast: when a firewall stops the device fetching the music, a dialog says which port to
+  allow, with commands for firewalld and ufw to copy.
+
 ## 0.9.3 (2026-11-10)
 
 ### Windows
