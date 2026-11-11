@@ -3,7 +3,7 @@
 What changed in each Kithsong release, newest first. Each release's full list of commits is on
 its GitHub release page.
 
-## Unreleased
+## 0.9.4 (2026-11-11)
 
 ### Windows and Linux
 
