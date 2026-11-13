@@ -2880,7 +2880,7 @@ static mc_library *open_library(const char *dir) {
   mc_status st = mc_library_open(dir, &lib);
   if (st != MC_OK) {
     wchar_t text[1024];
-    mc_wformat(text, 1024, mc_str(MC_STR_WINDOWS_LIBRARY_OPEN_FAILED_IN),
+    mc_wformat(text, 1024, mc_str(MC_STR_LIBRARY_OPEN_FAILED_IN),
                MC_S(dir ? dir : mc_str(MC_STR_UNKNOWN_VALUE)), MC_S(mc_status_str(st)));
     message_dialog(g_app.wnd, mc_wstr(MC_STR_APP_NAME), text, MB_ICONERROR);
     return NULL;

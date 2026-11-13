@@ -400,10 +400,8 @@ static void move_close_library(void *user) {
   app_reload_library(a);
 }
 
-/* After the move, or the first run: the library opens where it is now. */
-static void move_reopen_library(void *user, const char *dir) {
-  app *a = user;
-  if (mc_library_open(dir, &a->lib) != MC_OK) a->lib = NULL; /* the empty page says so */
+/* a->lib (NULL if it didn't open, which the empty page says) is handed round and shown. */
+static void use_library(app *a) {
   import_view_set_library(a->import, a->lib);
   playback_set_library(a->lib, a->settings_dir);
   set_empty_description(a);
@@ -413,14 +411,43 @@ static void move_reopen_library(void *user, const char *dir) {
   gtk_window_present(a->win);
 }
 
-/* The first run's answer: dir becomes the library (on failure the empty page says so), or
- * with NULL the user closed the dialog, which quits. */
+/* After the move: the library opens where it is now. */
+static void move_reopen_library(void *user, const char *dir) {
+  app *a = user;
+  if (mc_library_open(dir, &a->lib) != MC_OK) a->lib = NULL;
+  use_library(a);
+}
+
+static void on_first_run_done(void *user, const char *dir);
+
+static void on_first_run_retry(AdwDialog *alert, gpointer user) {
+  (void)alert;
+  app *a = user;
+  first_run_present(GTK_WIDGET(a->win), on_first_run_done, a);
+}
+
+/* The first run's answer: dir becomes the library, or with NULL the user closed the dialog,
+ * which quits. A folder that won't open (one a Flatpak can't reach, say) isn't saved: an
+ * alert says why and the first run asks again, rather than starting on a library that isn't
+ * there at every start after. */
 static void on_first_run_done(void *user, const char *dir) {
   app *a = user;
   if (!dir) {
     gtk_window_close(a->win);
     return;
   }
+  mc_library *lib = NULL;
+  mc_status opened = mc_library_open(dir, &lib);
+  if (opened != MC_OK) {
+    char *text = mc_format_alloc(mc_str(MC_STR_LIBRARY_OPEN_FAILED_IN), MC_S(dir), MC_S(mc_status_str(opened)));
+    AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_LIBRARY_OPEN_FAILED), text);
+    mc_free(text);
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+    g_signal_connect(alert, "closed", G_CALLBACK(on_first_run_retry), a);
+    adw_dialog_present(alert, GTK_WIDGET(a->win));
+    return;
+  }
+  a->lib = lib;
   a->first_run = FALSE;
   mc_settings *settings = NULL;
   mc_status st = mc_settings_load(a->settings_dir, &settings);
@@ -429,7 +456,7 @@ static void on_first_run_done(void *user, const char *dir) {
     st = mc_settings_save(settings);
   }
   mc_settings_free(settings);
-  move_reopen_library(a, dir);
+  use_library(a);
   if (st != MC_OK) {
     AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_APP_NAME), mc_str(MC_STR_SETTINGS_FIRST_SAVE_FAILED));
     adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));

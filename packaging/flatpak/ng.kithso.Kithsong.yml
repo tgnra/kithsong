@@ -20,8 +20,10 @@ finish-args:
   # LAN sync and mDNS discovery, MusicBrainz and cover art.
   - --share=network
   # The first run suggests a library in the Music folder, and the tagger writes into it. Folders
-  # elsewhere come in through the file chooser portal.
+  # elsewhere come in through the file chooser portal. ~/Music too, as without user-dirs.dirs
+  # (no xdg-user-dirs) xdg-music exposes nothing, while the first run still suggests ~/Music.
   - --filesystem=xdg-music
+  - --filesystem=~/Music
   # desktop/linux/src/mpris.c
   - --own-name=org.mpris.MediaPlayer2.kithsong
 modules:

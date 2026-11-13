@@ -485,6 +485,88 @@ static mc_status load_meta_uid(mc_library *lib, const char *key, char out[MC_UID
   return write_meta(lib, key, out);
 }
 
+/* --- Journal --- */
+
+static int exec_rc(sqlite3 *db, const char *sql) {
+  return sqlite3_exec(db, sql, NULL, NULL, NULL);
+}
+
+/* A read, which is where a WAL that can't work first fails: SQLite maps and locks the -shm
+ * file to read a database in WAL mode. */
+static int probe_read(sqlite3 *db) {
+  return exec_rc(db, "SELECT count(*) FROM sqlite_master");
+}
+
+/* 1 if the connection's database is in rollback (DELETE) mode. */
+static int in_delete_mode(sqlite3 *db) {
+  sqlite3_stmt *stmt;
+  int del = 0;
+  if (sqlite3_prepare_v2(db, "PRAGMA journal_mode", -1, &stmt, NULL) != SQLITE_OK) return 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    const char *mode = (const char *)sqlite3_column_text(stmt, 0);
+    del = mode && !strcmp(mode, "delete");
+  }
+  sqlite3_finalize(stmt);
+  return del;
+}
+
+/* 1 if the database file has no pages yet: a new library. */
+static int is_new_db(sqlite3 *db) {
+  sqlite3_stmt *stmt;
+  int pages = -1;
+  if (sqlite3_prepare_v2(db, "PRAGMA page_count", -1, &stmt, NULL) != SQLITE_OK) return 0;
+  if (sqlite3_step(stmt) == SQLITE_ROW) pages = sqlite3_column_int(stmt, 0);
+  sqlite3_finalize(stmt);
+  return pages == 0;
+}
+
+static int open_rw(const char *db_path, sqlite3 **db) {
+  int rc = mc_db_open(db_path, db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX);
+  if (rc == SQLITE_OK) sqlite3_busy_timeout(*db, 5000);
+  return rc;
+}
+
+/* Opens db_path into *db, in WAL mode where its folder allows it. WAL needs the -shm file
+ * mapped and locked between processes, which some file systems can't do: the document portal's
+ * FUSE mount (a folder a Flatpak was given through the file chooser, under /run/user/<uid>/doc)
+ * fails every read with SQLITE_IOERR_LOCK, and network shares can fail the same way. The
+ * connection is no use after that, so the database is opened again and goes to a rollback
+ * journal (DELETE), under the exclusive lock first, so that one already in WAL is read with
+ * its index in memory instead of in the -shm file.
+ *
+ * A library already in DELETE mode stays in it: only this fallback leaves one so (copies are
+ * whole files, and VACUUM INTO copies aren't opened as libraries), and switching it back to
+ * WAL while another connection has it open would break that connection on such a file system.
+ * One moved from such a folder to a local disk keeps the rollback journal, which works, only
+ * with readers waiting while a write commits. */
+static int open_db(const char *db_path, sqlite3 **db) {
+  *db = NULL;
+  int rc = open_rw(db_path, db);
+  if (rc != SQLITE_OK) return rc;
+  rc = probe_read(*db);
+  if (rc == SQLITE_OK) {
+    if (!in_delete_mode(*db) || is_new_db(*db)) {
+      rc = exec_rc(*db, "PRAGMA journal_mode = WAL");
+      if (rc == SQLITE_OK) rc = probe_read(*db);
+    }
+    if (rc == SQLITE_OK) return SQLITE_OK;
+  }
+  if ((rc & 0xff) != SQLITE_IOERR) return rc;
+
+  fprintf(stderr, "kithcore: library open: WAL failed in %s (%s), using a rollback journal\n",
+          db_path, sqlite3_errmsg(*db));
+  sqlite3_close_v2(*db);
+  *db = NULL;
+  if ((rc = open_rw(db_path, db)) != SQLITE_OK) return rc;
+  /* Leaving exclusive mode lets go of the lock at the next read. */
+  if ((rc = exec_rc(*db, "PRAGMA locking_mode = EXCLUSIVE;"
+                         "PRAGMA journal_mode = DELETE;"
+                         "PRAGMA locking_mode = NORMAL;")) != SQLITE_OK)
+    return rc;
+  if ((rc = probe_read(*db)) != SQLITE_OK) return rc;
+  return in_delete_mode(*db) ? SQLITE_OK : SQLITE_IOERR;
+}
+
 /* --- Public API --- */
 
 /* restore: whether a pairing abandoned in an earlier run is undone here (sync/libmerge.h);
@@ -514,16 +596,16 @@ static mc_status library_open(const char *dir, int background, int restore, mc_l
 
   if ((st = mc_mkdirs(lib->dir)) != MC_OK) goto fail;
   st = MC_ERR_DB;
-  int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX;
-  int rc = mc_db_open(db_path, &lib->db, flags);
+  int rc = open_db(db_path, &lib->db);
   free(db_path);
   db_path = NULL;
   if (rc != SQLITE_OK) goto fail;
 
-  sqlite3_busy_timeout(lib->db, 5000);
-  if ((st = exec(lib, "PRAGMA journal_mode = WAL;"
-                      "PRAGMA synchronous = NORMAL;"
-                      "PRAGMA foreign_keys = ON;"
+  /* NORMAL is safe in WAL mode; with a rollback journal it can corrupt on power loss. */
+  if ((st = exec(lib, in_delete_mode(lib->db) ? "PRAGMA synchronous = FULL;" : "PRAGMA synchronous = NORMAL;")) !=
+      MC_OK)
+    goto fail;
+  if ((st = exec(lib, "PRAGMA foreign_keys = ON;"
                       "PRAGMA trusted_schema = OFF;")) != MC_OK)
     goto fail;
   if ((st = mc_changelog_register(lib->db, &lib->log)) != MC_OK) goto fail;
