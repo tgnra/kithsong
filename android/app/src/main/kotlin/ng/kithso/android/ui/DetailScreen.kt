@@ -1,0 +1,743 @@
+package ng.kithso.android.ui
+
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.add
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import ng.kithso.android.R
+import ng.kithso.android.data.Album
+import ng.kithso.android.data.AlbumGroup
+import ng.kithso.android.data.Artist
+import ng.kithso.android.data.CollectionRef
+import ng.kithso.android.data.LibrarySource
+import ng.kithso.android.data.Playlist
+import ng.kithso.android.data.Track
+import ng.kithso.android.data.TrackList
+import ng.kithso.android.playback.shuffleAlbums
+import ng.kithso.android.ui.art.AlbumArt
+import ng.kithso.android.ui.theme.ArtBackdrop
+import ng.kithso.android.ui.theme.rememberArtColors
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+
+/**
+ * An album, artist, playlist or album group's page, over a background coloured from its art.
+ * An album opened from a group knows its group, so playing it goes on into the albums after it.
+ * [onBack] also runs once the artist or list has gone.
+ *
+ * A manual playlist or album group has an Edit mode for removing and reordering. Each change
+ * is made as it happens, and the list as changed here ([edited], [editedAlbums]) is shown
+ * until the library has been read again.
+ */
+@Composable
+fun DetailScreen(
+    ref: CollectionRef,
+    source: LibrarySource,
+    actions: PlaylistActions,
+    bottomPadding: Dp,
+    onPlay: (List<Track>, Int) -> Unit,
+    onPlayAll: (List<Track>, shuffle: Boolean) -> Unit,
+    onOpen: (CollectionRef) -> Unit,
+    onBack: () -> Unit,
+) {
+    val editor = actions.editor
+    // Bumped by a reshuffle, to list it again in its new order.
+    var shuffles by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
+    // An edit reads the list again, even when the library looks no different (after a move).
+    val edits by (editor?.edits ?: remember { MutableStateFlow(0) }).collectAsState()
+    var edited by remember { mutableStateOf<List<Track>?>(null) }
+    var editedAlbums by remember { mutableStateOf<List<Album>?>(null) }
+    val loaded by produceState<TrackList?>(null, ref, edits, shuffles) {
+        val list = source.trackList(ref)
+        // An edit took the playlist's last track on this phone, or deleted it: it's gone.
+        if (list == null && value != null) onBack()
+        value = list
+        edited = null
+        editedAlbums = null
+    }
+    val editable by produceState(false, ref, edits) {
+        value = ref.kind == CollectionRef.Kind.Playlist && editor?.isEditable(ref.uid) == true
+    }
+    // A manual album group's albums can be taken out of it, from their menus, and reordered.
+    val editableGroup by produceState(false, ref, edits) {
+        value = ref.kind == CollectionRef.Kind.AlbumGroup && editor?.isEditableGroup(ref.uid) == true
+    }
+    val albumMenu: (Album) -> Unit = {
+        val inGroup = ref.uid.takeIf { ref.kind == CollectionRef.Kind.AlbumGroup }
+        actions.albumMenu(it, groupUid = ref.uid.takeIf { editableGroup }, inGroup = inGroup)
+    }
+    // A smart list's menu, for Edit rules…, Rename… and Delete.
+    val smart by produceState(false, ref) {
+        value = (ref.kind == CollectionRef.Kind.Playlist || ref.kind == CollectionRef.Kind.AlbumGroup) &&
+            actions.smart?.isSmart(ref.uid) == true
+    }
+    var editing by rememberSaveable { mutableStateOf(false) }
+
+    // The art is the library's: it's known before the list is read, so the background starts
+    // in its colours. A playlist's or album group's picture is looked up after the library is
+    // read, so it may come later.
+    val library by source.library.collectAsState()
+    val picture = remember(library, ref) { library?.artOf(ref) }
+    // Merged into another artist, here or by a sync, or its last track gone: nothing to show.
+    val artistGone = remember(library, ref) {
+        ref.kind == CollectionRef.Kind.Artist && library?.artists?.none { it.uid == ref.uid } == true
+    }
+    LaunchedEffect(artistGone) { if (artistGone) onBack() }
+    val list = loaded?.let { if (picture != null) it.copy(art = picture) else it }
+    val tracks = edited ?: list?.tracks.orEmpty()
+    val albums = editedAlbums ?: list?.albums.orEmpty()
+    val isEditing = editing && (editable || editableGroup)
+
+    val listState = rememberLazyListState()
+    ScrollFrames(listState, "tracks")
+    val scrollStep = scrollStepPx()
+    val listLoaded = loaded != null
+    LaunchedEffect(listState, listLoaded) {
+        if (listLoaded) ScrollTest.step.collect { step ->
+            if (step == ScrollTest.Step.Tracks) {
+                runScrollScript(listState, scrollStep, "tracks")
+                ScrollTest.step.value = ScrollTest.Step.Done
+            }
+        }
+    }
+    val reorder = remember(listState) { ReorderState(listState) }
+    // Where the dragged track or album was before this drag.
+    var dragFrom by remember { mutableIntStateOf(-1) }
+    reorder.isMovable = { it is String && (it.startsWith(ENTRY_KEY) || it.startsWith(ALBUM_KEY)) }
+    reorder.onMove = { from, to ->
+        if (from is String && from.startsWith(ALBUM_KEY)) {
+            val i = albums.indexOfFirst { ALBUM_KEY + it.uid == from }
+            val j = albums.indexOfFirst { ALBUM_KEY + it.uid == to }
+            if (i >= 0 && j >= 0) {
+                if (dragFrom < 0) dragFrom = i
+                editedAlbums = albums.toMutableList().apply { add(j, removeAt(i)) }
+            }
+        } else {
+            val i = tracks.indexOfFirst { entryKey(it) == from }
+            val j = tracks.indexOfFirst { entryKey(it) == to }
+            if (i >= 0 && j >= 0) {
+                if (dragFrom < 0) dragFrom = i
+                edited = tracks.toMutableList().apply { add(j, removeAt(i)) }
+            }
+        }
+    }
+    reorder.onDrop = { key ->
+        if (key is String && key.startsWith(ALBUM_KEY)) {
+            val i = albums.indexOfFirst { ALBUM_KEY + it.uid == key }
+            val album = albums.getOrNull(i)?.uid
+            if (album != null && dragFrom >= 0 && i != dragFrom) editor?.moveInAlbumGroup(ref.uid, album, albums.getOrNull(i - 1)?.uid)
+        } else {
+            val i = tracks.indexOfFirst { entryKey(it) == key }
+            val entry = tracks.getOrNull(i)?.entryUid
+            if (entry != null && dragFrom >= 0 && i != dragFrom) editor?.moveEntry(ref.uid, entry, tracks.getOrNull(i - 1)?.entryUid)
+        }
+        dragFrom = -1
+    }
+    // Moves a track by one place, for accessibility services.
+    val moveBy: (Int, Int) -> Unit = { i, by ->
+        val entry = tracks.getOrNull(i)?.entryUid
+        if (entry != null && i + by in tracks.indices) {
+            val moved = tracks.toMutableList().apply { add(i + by, removeAt(i)) }
+            edited = moved
+            editor?.moveEntry(ref.uid, entry, moved.getOrNull(i + by - 1)?.entryUid)
+        }
+    }
+    // Likewise an album in a group.
+    val moveAlbumBy: (Int, Int) -> Unit = { i, by ->
+        val album = albums.getOrNull(i)?.uid
+        if (album != null && i + by in albums.indices) {
+            val moved = albums.toMutableList().apply { add(i + by, removeAt(i)) }
+            editedAlbums = moved
+            editor?.moveInAlbumGroup(ref.uid, album, moved.getOrNull(i + by - 1)?.uid)
+        }
+    }
+
+    Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val group = ref.kind == CollectionRef.Kind.AlbumGroup
+            ArtBackdrop(rememberArtColors(picture ?: list?.art), Modifier.matchParentSize())
+            val density = LocalDensity.current
+            val statusBarPx = pageTop().getTop(density)
+            val sides = pageSides()
+            // In the tablet layout an album group's grid keeps its albums off the fold, as the
+            // album grid does; the phone's is as it always was.
+            val layoutDirection = LocalLayoutDirection.current
+            val inTablet = LocalPageChrome.current.inTablet
+            val leftPx = sides.getLeft(density, layoutDirection)
+            val gridFold = rememberGridFold(if (inTablet) rememberWindowShape().fold else null, leftPx.toFloat())
+            val gridWidth = maxWidth - with(density) { (leftPx + sides.getRight(density, layoutDirection)).toDp() }
+            val grid = if (inTablet) gridColumns(gridWidth, gridFold.span) else null
+            val columns = grid?.count ?: albumColumns(maxWidth)
+            // An artist's page jumps between its headings, and through its tracks by title.
+            val scrollEntries = if (ref.kind == CollectionRef.Kind.Artist && list != null) {
+                val titles = listOf(
+                    stringResource(R.string.section_albums),
+                    stringResource(R.string.section_singles),
+                    stringResource(R.string.tracks_title),
+                )
+                val other = stringResource(R.string.fast_scroll_other)
+                val hasActions = !isEditing && (tracks.isNotEmpty() || list.canReshuffle)
+                remember(list, albums, tracks, hasActions, titles, other) {
+                    artistScrollEntries(albums.size, list.singles.size, tracks, hasActions, titles, other)
+                }
+            } else {
+                emptyList()
+            }
+            LazyColumn(
+                state = listState,
+                contentPadding = pageSides()
+                    .add(WindowInsets(bottom = bottomPadding))
+                    .asPaddingValues(),
+                modifier = Modifier.fillMaxSize().then(gridFold.modifier),
+            ) {
+                item(key = "header", contentType = "header") {
+                    DetailHeader(
+                        ref.kind,
+                        list,
+                        onBack,
+                        editing = if (editable || editableGroup) isEditing else null,
+                        onEdit = { editing = it },
+                        // An album's menu, as its long press elsewhere opens, for Delete from library
+                        // and the rest; a smart list's likewise.
+                        onMenu = when {
+                            list == null -> null
+                            ref.kind == CollectionRef.Kind.Album -> ({
+                                actions.albumMenu(Album(ref.uid, list.title, list.artist, list.year, list.art), inGroup = ref.group)
+                            })
+                            ref.kind == CollectionRef.Kind.Artist -> ({
+                                actions.artistMenu(
+                                    library?.artists?.firstOrNull { it.uid == ref.uid } ?: Artist(ref.uid, list.title, list.albumCount, list.art),
+                                )
+                            })
+                            smart && ref.kind == CollectionRef.Kind.Playlist -> ({
+                                actions.playlistMenu(
+                                    library?.playlists?.firstOrNull { it.uid == ref.uid } ?: Playlist(ref.uid, list.title, tracks.size, list.art),
+                                )
+                            })
+                            smart -> ({
+                                actions.albumGroupMenu(
+                                    library?.albumGroups?.firstOrNull { it.uid == ref.uid } ?: AlbumGroup(ref.uid, list.title, list.albumCount, list.art),
+                                )
+                            })
+                            else -> null
+                        },
+                        menuDescription = stringResource(
+                            when {
+                                ref.kind == CollectionRef.Kind.Artist -> R.string.artist_menu
+                                !smart -> R.string.album_menu
+                                ref.kind == CollectionRef.Kind.Playlist -> R.string.smart_playlist_menu
+                                else -> R.string.smart_group_menu
+                            },
+                        ),
+                    )
+                }
+                if (list != null && !isEditing && (tracks.isNotEmpty() || list.canReshuffle)) item(key = "actions", contentType = "actions") {
+                    DetailActions(
+                        onPlay = if (tracks.isNotEmpty()) ({ shuffle -> onPlayAll(tracks, shuffle) }) else null,
+                        onShuffleAlbums = if (group && tracks.isNotEmpty()) ({ onPlayAll(shuffleAlbums(tracks), false) }) else null,
+                        onReshuffle = if (list.canReshuffle) ({
+                            scope.launch {
+                                source.reshuffle(ref)
+                                shuffles++
+                            }
+                        }) else null,
+                    )
+                }
+                if (group && isEditing) {
+                    itemsIndexed(albums, key = { _, album -> ALBUM_KEY + album.uid }, contentType = { _, _ -> "album" }) { i, album ->
+                        val key = ALBUM_KEY + album.uid
+                        val moveUp = stringResource(R.string.move_up)
+                        val moveDown = stringResource(R.string.move_down)
+                        EditAlbumRow(
+                            album,
+                            onRemove = {
+                                editedAlbums = albums.filterIndexed { j, _ -> j != i }
+                                editor?.removeFromAlbumGroup(ref.uid, album.uid)
+                            },
+                            handle = with(reorder) {
+                                Modifier.dragHandle(key).semantics {
+                                    customActions = buildList {
+                                        if (i > 0) add(CustomAccessibilityAction(moveUp) { moveAlbumBy(i, -1); true })
+                                        if (i < albums.lastIndex) add(CustomAccessibilityAction(moveDown) { moveAlbumBy(i, 1); true })
+                                    }
+                                }
+                            },
+                            lifted = key == reorder.dragged,
+                            modifier = if (key == reorder.dragged) with(reorder) { Modifier.dragged(key) } else Modifier.animateItem(),
+                        )
+                    }
+                    return@LazyColumn
+                }
+                if (group) {
+                    if (list != null && albums.isEmpty()) item(key = "empty", contentType = "empty") {
+                        EmptyListNote(smart, group = true)
+                    }
+                    items(albums.chunked(columns), key = { "albums:${it.first().uid}" }, contentType = { "albums" }) { row ->
+                        if (grid != null) AlbumGridRow(row, grid, { onOpen(it.copy(group = ref.uid)) }, albumMenu)
+                        else AlbumGridRow(row, columns, { onOpen(it.copy(group = ref.uid)) }, albumMenu)
+                    }
+                    return@LazyColumn
+                }
+                // An artist's albums, then their singles, which play among themselves, then all
+                // their tracks; the headings only when there's more than the tracks.
+                if (ref.kind == CollectionRef.Kind.Artist) {
+                    val singles = list?.singles.orEmpty()
+                    if (albums.isNotEmpty()) item(key = "albums", contentType = "albums") {
+                        Column {
+                            BrowseHeading(stringResource(R.string.section_albums))
+                            AlbumStrip(albums, list?.title.orEmpty(), onOpen, albumMenu)
+                        }
+                    }
+                    if (singles.isNotEmpty()) {
+                        item(key = "singles", contentType = "heading") { BrowseHeading(stringResource(R.string.section_singles)) }
+                        itemsIndexed(singles, key = { _, track -> SINGLE_KEY + track.uid }, contentType = { _, _ -> "track" }) { i, track ->
+                            TrackRow(
+                                track,
+                                showAlbum = true,
+                                onLongClick = { actions.trackMenu(track, removable = false, from = ref.copy(group = null)) },
+                                onClick = { onPlay(singles, i) },
+                            )
+                        }
+                    }
+                    if ((albums.isNotEmpty() || singles.isNotEmpty()) && tracks.isNotEmpty()) {
+                        item(key = "tracks", contentType = "heading") { BrowseHeading(stringResource(R.string.tracks_title)) }
+                    }
+                }
+                if (list != null && tracks.isEmpty() && (ref.kind == CollectionRef.Kind.Playlist)) item(key = "empty", contentType = "empty") {
+                    EmptyListNote(smart, group = false)
+                }
+                // A playlist can hold a track twice, so the uid alone isn't a unique key. Its
+                // entries are, and keep a dragged track's key as it moves.
+                itemsIndexed(tracks, key = { i, track -> entryKey(track) ?: "$i:${track.uid}" }, contentType = { _, _ -> "track" }) { i, track ->
+                    val key = entryKey(track)
+                    if (isEditing && key != null) {
+                        val moveUp = stringResource(R.string.move_up)
+                        val moveDown = stringResource(R.string.move_down)
+                        EditTrackRow(
+                            track,
+                            onRemove = {
+                                edited = tracks.filterIndexed { j, _ -> j != i }
+                                track.entryUid?.let { editor?.removeEntry(ref.uid, it) }
+                            },
+                            handle = with(reorder) {
+                                Modifier.dragHandle(key).semantics {
+                                    customActions = buildList {
+                                        if (i > 0) add(CustomAccessibilityAction(moveUp) { moveBy(i, -1); true })
+                                        if (i < tracks.lastIndex) add(CustomAccessibilityAction(moveDown) { moveBy(i, 1); true })
+                                    }
+                                }
+                            },
+                            lifted = key == reorder.dragged,
+                            modifier = if (key == reorder.dragged) with(reorder) { Modifier.dragged(key) } else Modifier.animateItem(),
+                        )
+                    } else {
+                        TrackRow(
+                            track,
+                            showAlbum = ref.kind != CollectionRef.Kind.Album,
+                            onLongClick = { actions.trackMenu(track, removable = editable, from = ref.copy(group = null)) },
+                            onClick = { onPlay(tracks, i) },
+                        )
+                    }
+                }
+            }
+            FastScroller(
+                listState,
+                scrollEntries,
+                scrollOffset = -statusBarPx,
+                kindOf = { index ->
+                    artistItemKind(
+                        index,
+                        actions = !isEditing && (tracks.isNotEmpty() || list?.canReshuffle == true),
+                        albums = albums.isNotEmpty(),
+                        singles = list?.singles?.size ?: 0,
+                    )
+                },
+                // Below the row with the back button and the menu.
+                modifier = Modifier
+                    .matchParentSize()
+                    .windowInsetsPadding(sides)
+                    .padding(top = with(density) { statusBarPx.toDp() } + DetailBarHeight + 8.dp, bottom = bottomPadding + 8.dp, end = 2.dp),
+            )
+        }
+    }
+}
+
+/** On the page of a playlist, or an album group if [group], with nothing in it: how to fill it. */
+@Composable
+private fun EmptyListNote(smart: Boolean, group: Boolean) {
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            stringResource(
+                when {
+                    smart -> R.string.smart_list_empty_title
+                    group -> R.string.album_group_empty_title
+                    else -> R.string.playlist_empty_title
+                },
+            ),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            stringResource(
+                when {
+                    smart -> R.string.smart_list_empty_text
+                    group -> R.string.album_group_empty_text_android
+                    else -> R.string.playlist_empty_text
+                },
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
+/**
+ * The fast scroll strip's entries for an artist's page, laid out as [DetailScreen] lays it out:
+ * the header, the play buttons if [actions], then the [albumCount] albums' strip, the
+ * [singleCount] singles and the [tracks] (in order of title), with headings ([titles]: albums,
+ * singles, tracks) only when there's more than the tracks. Letters for a long enough list of
+ * tracks; [other] is the label of tracks under [OTHER_LETTER].
+ */
+private fun artistScrollEntries(
+    albumCount: Int,
+    singleCount: Int,
+    tracks: List<Track>,
+    actions: Boolean,
+    titles: List<String>,
+    other: String,
+): List<FastScrollEntry> = buildList {
+    val (albumsTitle, singlesTitle, tracksTitle) = titles
+    var i = if (actions) 2 else 1
+    if (albumCount > 0) add(FastScrollEntry(albumsTitle, i++, heading = true))
+    if (singleCount > 0) {
+        add(FastScrollEntry(singlesTitle, i, heading = true))
+        i += 1 + singleCount
+    }
+    val headed = (albumCount > 0 || singleCount > 0) && tracks.isNotEmpty()
+    if (headed) add(FastScrollEntry(tracksTitle, i++, heading = true))
+    val start = i
+    if (tracks.size >= TRACK_LETTERS_FROM) {
+        letterEntries(this, tracks.map { it.title }, other, tracksTitle.takeIf { headed }) { start + it }
+    }
+}
+
+/**
+ * The content type of item [index] of an artist's page, laid out as [artistScrollEntries] says,
+ * for the fast scroll strip to tell how long the page is.
+ */
+private fun artistItemKind(index: Int, actions: Boolean, albums: Boolean, singles: Int): String {
+    var i = index
+    if (i-- == 0) return "header"
+    if (actions && i-- == 0) return "actions"
+    if (albums && i-- == 0) return "albums"
+    if (singles > 0) {
+        if (i-- == 0) return "heading"
+        if (i < singles) return "track"
+        i -= singles
+    }
+    return if (i == 0 && (albums || singles > 0)) "heading" else "track"
+}
+
+/** The height of the row with the page's back button and menu, under the status bar. */
+private val DetailBarHeight = 56.dp
+
+/** How many tracks an artist's page has before the fast scroll strip has their letters. */
+private const val TRACK_LETTERS_FROM = 12
+
+/**
+ * Play and Shuffle ([onPlay], with whether to shuffle), and Reshuffle, if given. With
+ * [onShuffleAlbums], an album group's, Shuffle albums comes between them and Shuffle is
+ * Shuffle tracks, as on the desktops.
+ */
+@Composable
+private fun DetailActions(onPlay: ((Boolean) -> Unit)?, onShuffleAlbums: (() -> Unit)?, onReshuffle: (() -> Unit)?) {
+    FlowRow(
+        Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (onPlay != null) {
+            Button(onClick = { onPlay(false) }) {
+                Icon(Icons.Play, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                Text(stringResource(R.string.play), modifier = Modifier.padding(start = ButtonDefaults.IconSpacing))
+            }
+            if (onShuffleAlbums != null) FilledTonalButton(onClick = onShuffleAlbums) {
+                Icon(Icons.Shuffle, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                Text(stringResource(R.string.shuffle_albums), modifier = Modifier.padding(start = ButtonDefaults.IconSpacing))
+            }
+            FilledTonalButton(onClick = { onPlay(true) }) {
+                Icon(Icons.Shuffle, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                Text(
+                    stringResource(if (onShuffleAlbums != null) R.string.shuffle_tracks else R.string.shuffle),
+                    modifier = Modifier.padding(start = ButtonDefaults.IconSpacing),
+                )
+            }
+        }
+        if (onReshuffle != null) OutlinedButton(onClick = onReshuffle) {
+            Icon(Icons.Shuffle, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+            Text(stringResource(R.string.reshuffle), modifier = Modifier.padding(start = ButtonDefaults.IconSpacing))
+        }
+    }
+}
+
+/**
+ * The back button, then the art, title and subtitle beside each other. In a short window
+ * (landscape, mostly) the back button goes beside them too, and the art is smaller, to leave
+ * room for the tracks. A playlist that can be edited has Edit, or Done while [editing], at
+ * the other end from the back button, as has a manual album group; [editing] is null for anything else.
+ * An album or a smart list has a menu button there instead ([onMenu], [menuDescription] for accessibility).
+ * In the tablet layout's pane the back button is a close button ([PageBack.Close]).
+ */
+@Composable
+private fun DetailHeader(
+    kind: CollectionRef.Kind,
+    list: TrackList?,
+    onBack: () -> Unit,
+    editing: Boolean?,
+    onEdit: (Boolean) -> Unit,
+    onMenu: (() -> Unit)? = null,
+    menuDescription: String = "",
+) {
+    val short = isShortWindow()
+    // In the tablet layout's pane beside the content, the page closes rather than going back.
+    val closes = LocalPageChrome.current.back == PageBack.Close
+    val back = @Composable {
+        IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp, top = 4.dp)) {
+            if (closes) Icon(Icons.Clear, contentDescription = stringResource(R.string.close))
+            else Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back))
+        }
+    }
+    val edit = @Composable {
+        if (editing != null) {
+            TextButton(onClick = { onEdit(!editing) }, modifier = Modifier.padding(end = 8.dp, top = 4.dp)) {
+                Text(stringResource(if (editing) R.string.done else R.string.edit_playlist))
+            }
+        } else if (onMenu != null) {
+            IconButton(onClick = onMenu, modifier = Modifier.padding(end = 4.dp, top = 4.dp)) {
+                Icon(Icons.MoreVert, contentDescription = menuDescription)
+            }
+        }
+    }
+    if (short) {
+        Row(Modifier.fillMaxWidth().windowInsetsPadding(pageTop())) {
+            back()
+            if (list != null) DetailTitle(kind, list, 96.dp, Modifier.weight(1f).padding(start = 4.dp, top = 12.dp))
+            edit()
+        }
+    } else {
+        Column(Modifier.fillMaxWidth().windowInsetsPadding(pageTop())) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                back()
+                Spacer(Modifier.weight(1f))
+                edit()
+            }
+            if (list != null) DetailTitle(kind, list, 128.dp, Modifier.padding(start = 16.dp))
+        }
+    }
+}
+
+@Composable
+private fun DetailTitle(kind: CollectionRef.Kind, list: TrackList, artSize: Dp, modifier: Modifier) {
+    // After a summary; one not known adds nothing, and with none known there's nothing to say.
+    val totalMs = remember(list) { list.tracks.sumOf { it.durationMs.coerceAtLeast(0) } }
+    val length = if (totalMs > 0) stringResource(R.string.separator_dot) + playingTime(totalMs) else ""
+    Row(modifier.padding(end = 16.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        AlbumArt(
+            list.art,
+            contentDescription = when (kind) {
+                CollectionRef.Kind.Album -> stringResource(R.string.cover_of, list.title)
+                else -> null
+            },
+            shape = if (kind == CollectionRef.Kind.Artist) CircleShape else RoundedCornerShape(16.dp),
+            modifier = Modifier.size(artSize),
+        )
+        Column(Modifier.padding(start = 16.dp).widthIn(min = 0.dp)) {
+            Text(
+                list.title,
+                style = MaterialTheme.typography.headlineSmall,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.semantics { heading() },
+            )
+            Text(
+                when (kind) {
+                    CollectionRef.Kind.Album -> {
+                        val byline = if (list.year > 0) stringResource(R.string.album_byline_year, list.artist, list.year) else list.artist
+                        (if (list.mix) byline + stringResource(R.string.separator_dot) + stringResource(R.string.edit_mix) else byline) + length
+                    }
+                    CollectionRef.Kind.Artist ->
+                        if (list.albumCount > 0) pluralStringResource(R.plurals.albums, list.albumCount, list.albumCount)
+                        else pluralStringResource(R.plurals.tracks, list.tracks.size, list.tracks.size)
+                    CollectionRef.Kind.Playlist -> pluralStringResource(R.plurals.tracks, list.tracks.size, list.tracks.size) + length
+                    CollectionRef.Kind.AlbumGroup -> pluralStringResource(R.plurals.albums, list.albumCount, list.albumCount) + length
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** A track; in the tablet layout it drags onto a playlist. */
+@Composable
+private fun TrackRow(track: Track, showAlbum: Boolean, onLongClick: () -> Unit, onClick: () -> Unit) {
+    ListItem(
+        leadingContent = if (showAlbum) {
+            { AlbumArt(track.art, contentDescription = null, shape = RoundedCornerShape(6.dp), modifier = Modifier.size(40.dp)) }
+        } else {
+            {
+                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        track.trackNo.toString(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        supportingContent = if (showAlbum) {
+            { Text(trackByline(track.artist, track.album), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        } else null,
+        trailingContent = { Text(formatTime(track.durationMs)) },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier
+            .listItemKeys(ListRowFocusShape, onLongClick)
+            .menuClickable(onLongClick, onClick, DragItem.Track(track.uid, track.title, track.artist)),
+    )
+}
+
+/**
+ * A playlist's track while editing: a button to remove it, and [handle] to drag it by. It's
+ * clear, for the background, except while [lifted] by a drag, so the rows it passes don't
+ * show through.
+ */
+@Composable
+private fun EditTrackRow(track: Track, onRemove: () -> Unit, handle: Modifier, lifted: Boolean, modifier: Modifier) {
+    ListItem(
+        leadingContent = {
+            IconButton(onClick = onRemove) {
+                Icon(
+                    Icons.RemoveCircle,
+                    contentDescription = stringResource(R.string.remove_from_playlist),
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        supportingContent = {
+            Text(trackByline(track.artist, track.album), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        },
+        trailingContent = {
+            Box(handle.size(48.dp), contentAlignment = Alignment.Center) {
+                Icon(Icons.DragHandle, contentDescription = stringResource(R.string.playlist_reorder))
+            }
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = if (lifted) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent,
+        ),
+        modifier = modifier,
+    )
+}
+
+/** An album group's album while editing, as [EditTrackRow] is a playlist's track. */
+@Composable
+private fun EditAlbumRow(album: Album, onRemove: () -> Unit, handle: Modifier, lifted: Boolean, modifier: Modifier) {
+    ListItem(
+        leadingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onRemove) {
+                    Icon(
+                        Icons.RemoveCircle,
+                        contentDescription = stringResource(R.string.remove_from_album_group),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                }
+                AlbumArt(album.art, contentDescription = null, shape = RoundedCornerShape(6.dp), modifier = Modifier.size(40.dp))
+            }
+        },
+        headlineContent = { Text(album.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        supportingContent = { Text(album.artist, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        trailingContent = {
+            Box(handle.size(48.dp), contentAlignment = Alignment.Center) {
+                Icon(Icons.DragHandle, contentDescription = stringResource(R.string.playlist_reorder))
+            }
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = if (lifted) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent,
+        ),
+        modifier = modifier,
+    )
+}
+
+private const val ENTRY_KEY = "entry:"
+private const val ALBUM_KEY = "album:"
+private const val SINGLE_KEY = "single:"
+
+// A playlist track's key in the list: its entry, which is unique and stays the same as it moves.
+private fun entryKey(track: Track): String? = track.entryUid?.let { ENTRY_KEY + it }

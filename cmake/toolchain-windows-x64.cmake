@@ -1,0 +1,3 @@
+set(KITHSONG_TRIPLE x86_64-w64-mingw32)
+set(KITHSONG_WINDOWS_CPU AMD64)
+include("${CMAKE_CURRENT_LIST_DIR}/llvm-mingw.cmake")

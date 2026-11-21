@@ -1,0 +1,336 @@
+#include "recents.h"
+
+#include <string.h>
+
+#include "album_grid.h"
+#include "artist_view.h"
+#include "drag.h"
+#include "edit_dialog.h"
+#include "home_view.h"
+#include "playback.h"
+#include "track_menu.h"
+
+enum { MAX_RECENTS = 3 };
+
+static struct {
+  app *a;
+  GtkWidget *heading, *list, *menu; /* menu: a row's, Edit..., Remove from Recents and Clear
+                                     * Recents */
+  char menu_uid[MC_UID_STRLEN];     /* the recent the menu is for */
+  mc_recent_kind menu_kind;         /* and what it is */
+  GSimpleAction *edit;              /* enabled for an album or artist, and hidden otherwise */
+  GMenu *queue;                     /* Play next and Play last */
+} r;
+
+/* The icon of the sidebar page it opens on. */
+static const char *kind_icon(mc_recent_kind kind) {
+  switch (kind) {
+    case MC_RECENT_PLAYLIST: return "view-list-symbolic";
+    case MC_RECENT_ARTIST: return "avatar-default-symbolic";
+    case MC_RECENT_ALBUM_GROUP: return "folder-symbolic";
+    default: return "media-optical-symbolic";
+  }
+}
+
+/* --- Drops (drag.h): a track onto a manual playlist's row, an album onto a manual group's --- */
+
+/* Whether row takes what's being dragged now. */
+static gboolean row_takes(GtkWidget *row, GtkDropTarget *target) {
+  const drag_item *item = drag_current();
+  if (!drag_from_us(target) || g_object_get_data(G_OBJECT(row), "smart")) return FALSE;
+  mc_recent_kind kind = (mc_recent_kind)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "kind"));
+  return item->kind == DRAG_TRACK ? kind == MC_RECENT_PLAYLIST : kind == MC_RECENT_ALBUM_GROUP;
+}
+
+static GdkDragAction on_drop_motion(GtkDropTarget *target, double x, double y, gpointer user) {
+  (void)x;
+  (void)y;
+  GtkWidget *row = user;
+  gboolean takes = row_takes(row, target);
+  if (takes) gtk_widget_add_css_class(row, "drop-into");
+  else gtk_widget_remove_css_class(row, "drop-into");
+  return takes ? GDK_ACTION_COPY : 0;
+}
+
+static void on_drop_leave(GtkDropTarget *target, gpointer user) {
+  (void)target;
+  gtk_widget_remove_css_class(user, "drop-into");
+}
+
+static void reload_later(gpointer data) {
+  (void)data;
+  app_reload_library(r.a);
+}
+
+/* Adds the track or album to the row's playlist or group, which puts it first in the
+ * recents, as any change to one does. */
+static gboolean on_drop(GtkDropTarget *target, const GValue *value, double x, double y, gpointer user) {
+  (void)value;
+  (void)x;
+  (void)y;
+  GtkWidget *row = user;
+  gtk_widget_remove_css_class(row, "drop-into");
+  const char *uid = g_object_get_data(G_OBJECT(row), "uid");
+  if (!r.a->lib || !uid || !row_takes(row, target)) return FALSE;
+  /* Copies: reloading rebuilds the rows. */
+  drag_item item = *drag_current();
+  char into[MC_UID_STRLEN];
+  g_strlcpy(into, uid, sizeof into);
+  gboolean track = item.kind == DRAG_TRACK;
+  mc_status st = track ? mc_playlist_append(r.a->lib, into, item.uid, NULL) : mc_album_group_add(r.a->lib, into, item.uid);
+  if (st != MC_OK) {
+    adw_toast_overlay_add_toast(r.a->toasts,
+                                adw_toast_new(mc_str(track ? MC_STR_PLAYLIST_ADD_FAILED : MC_STR_ALBUM_GROUP_ADD_FAILED)));
+    return FALSE;
+  }
+  mc_library_record_opened(r.a->lib, track ? MC_RECENT_PLAYLIST : MC_RECENT_ALBUM_GROUP, into);
+  g_idle_add_once(reload_later, NULL); /* not now: it rebuilds this row, which is still dropping */
+  return TRUE;
+}
+
+/* A row like the pages above it: the icon and the name, cut off if it's long, with the
+ * whole name and the album's artist (or what it is: "Playlist", "Artist", "Album group",
+ * "Smart playlist" or "Smart album group") in the tooltip. */
+static GtkWidget *recent_row(const mc_recent_info *info) {
+  const char *name = info->name && *info->name ? info->name : mc_str(MC_STR_UNTITLED);
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_widget_set_margin_start(box, 6);
+  gtk_widget_set_margin_end(box, 6);
+  gtk_widget_set_margin_top(box, 6);
+  gtk_widget_set_margin_bottom(box, 6);
+  gtk_box_append(GTK_BOX(box), gtk_image_new_from_icon_name(kind_icon(info->kind)));
+  GtkWidget *label = gtk_label_new(name);
+  gtk_label_set_xalign(GTK_LABEL(label), 0);
+  gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+  gtk_widget_set_hexpand(label, TRUE);
+  gtk_box_append(GTK_BOX(box), label);
+
+  const char *detail = info->kind == MC_RECENT_PLAYLIST && info->is_smart      ? mc_str(MC_STR_SMART_PLAYLIST)
+                       : info->kind == MC_RECENT_PLAYLIST                      ? mc_str(MC_STR_PLAYLIST)
+                       : info->kind == MC_RECENT_ARTIST                        ? mc_str(MC_STR_ARTIST)
+                       : info->kind == MC_RECENT_ALBUM_GROUP && info->is_smart ? mc_str(MC_STR_SMART_ALBUM_GROUP)
+                       : info->kind == MC_RECENT_ALBUM_GROUP                   ? mc_str(MC_STR_ALBUM_GROUP)
+                       : info->artist                        ? info->artist
+                                                             : mc_str(MC_STR_UNKNOWN_ARTIST);
+  char *tip = g_strdup_printf("%s\n%s", name, detail);
+  GtkWidget *row = gtk_list_box_row_new();
+  gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), box);
+  gtk_widget_set_tooltip_text(row, tip);
+  g_free(tip);
+  g_object_set_data_full(G_OBJECT(row), "uid", g_strdup(info->uid), g_free);
+  g_object_set_data_full(G_OBJECT(row), "name", g_strdup(name), g_free);
+  g_object_set_data(G_OBJECT(row), "kind", GINT_TO_POINTER(info->kind));
+  g_object_set_data(G_OBJECT(row), "smart", GINT_TO_POINTER(info->is_smart));
+  if (info->kind == MC_RECENT_ALBUM)
+    g_object_set_data_full(G_OBJECT(row), "artist",
+                           g_strdup(info->artist ? info->artist : mc_str(MC_STR_UNKNOWN_ARTIST)), g_free);
+  if (info->kind == MC_RECENT_PLAYLIST || info->kind == MC_RECENT_ALBUM_GROUP) {
+    GtkDropTarget *drop = drag_target_new(GDK_ACTION_COPY);
+    g_signal_connect(drop, "motion", G_CALLBACK(on_drop_motion), row);
+    g_signal_connect(drop, "leave", G_CALLBACK(on_drop_leave), row);
+    g_signal_connect(drop, "drop", G_CALLBACK(on_drop), row);
+    gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(drop));
+  }
+  return row;
+}
+
+static void on_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
+  (void)list;
+  const char *uid = g_object_get_data(G_OBJECT(row), "uid");
+  if (!uid) return;
+  char copy[MC_UID_STRLEN];
+  g_strlcpy(copy, uid, sizeof copy); /* the row goes if opening refreshes the section */
+  switch ((mc_recent_kind)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "kind"))) {
+    case MC_RECENT_ARTIST: app_open_artist(user, copy); break;
+    case MC_RECENT_ALBUM_GROUP: app_open_album_group(user, copy); break;
+    case MC_RECENT_PLAYLIST: app_open(user, TRUE, copy); break;
+    default: app_open_album_or_single(user, copy, g_object_get_data(G_OBJECT(row), "artist")); break;
+  }
+}
+
+/* --- The rows' menu --- */
+
+void recents_remove(app *a, const char *uid) {
+  if (!a->lib) return;
+  mc_status st = mc_library_remove_recent(a->lib, uid);
+  if (st == MC_OK || st == MC_ERR_NOT_FOUND) recents_refresh(a); /* gone already: sync took it */
+}
+
+void recents_clear(app *a) {
+  if (a->lib && mc_library_clear_recents(a->lib) == MC_OK) recents_refresh(a);
+}
+
+static void on_remove(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (r.menu_uid[0]) recents_remove(r.a, r.menu_uid);
+}
+
+static void on_edit(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (r.menu_uid[0]) edit_dialog_present(r.a, r.menu_kind == MC_RECENT_ARTIST ? EDIT_ARTIST : EDIT_ALBUM, r.menu_uid);
+}
+
+static void on_clear(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  recents_clear(r.a);
+}
+
+/* Play next and Play last for row. */
+static void update_queue(GtkListBoxRow *row) {
+  g_menu_remove_all(r.queue);
+  gboolean smart = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "smart"));
+  const char *name = g_object_get_data(G_OBJECT(row), "name");
+  switch (r.menu_kind) {
+    case MC_RECENT_ALBUM: track_menu_append_queue(r.queue, MC_UP_NEXT_ALBUM, r.menu_uid, name); break;
+    case MC_RECENT_ARTIST: track_menu_append_queue(r.queue, MC_UP_NEXT_ARTIST, r.menu_uid, name); break;
+    case MC_RECENT_PLAYLIST:
+      track_menu_append_queue(r.queue, smart ? MC_UP_NEXT_SMART_PLAYLIST : MC_UP_NEXT_PLAYLIST, r.menu_uid, name);
+      break;
+    case MC_RECENT_ALBUM_GROUP:
+      track_menu_append_queue(r.queue, smart ? MC_UP_NEXT_SMART_ALBUM_GROUP : MC_UP_NEXT_ALBUM_GROUP, r.menu_uid, name);
+      break;
+    default: break;
+  }
+}
+
+/* row's menu, at x, y in widget. */
+static void popup_menu(GtkListBoxRow *row, GtkWidget *widget, double x, double y) {
+  const char *uid = row ? g_object_get_data(G_OBJECT(row), "uid") : NULL;
+  graphene_point_t at;
+  if (!uid || !gtk_widget_compute_point(widget, gtk_widget_get_parent(r.menu),
+                                        &GRAPHENE_POINT_INIT((float)x, (float)y), &at))
+    return;
+  g_strlcpy(r.menu_uid, uid, sizeof r.menu_uid);
+  r.menu_kind = (mc_recent_kind)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "kind"));
+  g_simple_action_set_enabled(r.edit, r.menu_kind == MC_RECENT_ALBUM || r.menu_kind == MC_RECENT_ARTIST);
+  update_queue(row);
+  gtk_popover_set_pointing_to(GTK_POPOVER(r.menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(r.menu));
+}
+
+/* Right-click, or a long press on a touchscreen, on a row. */
+static void on_click(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  (void)user;
+  GtkListBoxRow *row = gtk_list_box_get_row_at_y(GTK_LIST_BOX(r.list), (int)y);
+  if (!row) return;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  popup_menu(row, r.list, x, y);
+}
+
+static void on_long_press(GtkGestureLongPress *press, double x, double y, gpointer user) {
+  (void)user;
+  GtkListBoxRow *row = gtk_list_box_get_row_at_y(GTK_LIST_BOX(r.list), (int)y);
+  if (!row) return;
+  gtk_gesture_set_state(GTK_GESTURE(press), GTK_EVENT_SEQUENCE_CLAIMED); /* not opening it too */
+  popup_menu(row, r.list, x, y);
+}
+
+/* The Menu key or Shift+F10: the focused row's menu, under it. */
+static gboolean on_menu_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  GtkRoot *root = gtk_widget_get_root(r.list);
+  for (GtkWidget *w = root ? gtk_root_get_focus(root) : NULL; w && w != r.list; w = gtk_widget_get_parent(w)) {
+    if (!GTK_IS_LIST_BOX_ROW(w)) continue;
+    popup_menu(GTK_LIST_BOX_ROW(w), w, 0, gtk_widget_get_height(w));
+    return TRUE;
+  }
+  return FALSE;
+}
+
+GtkWidget *recents_new(app *a) {
+  r.a = a;
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  r.heading = gtk_label_new(mc_str(MC_STR_SECTION_RECENTS));
+  gtk_widget_add_css_class(r.heading, "heading");
+  gtk_widget_add_css_class(r.heading, "dim-label");
+  gtk_label_set_xalign(GTK_LABEL(r.heading), 0);
+  gtk_widget_set_margin_start(r.heading, 18);
+  gtk_widget_set_margin_top(r.heading, 12);
+  gtk_box_append(GTK_BOX(box), r.heading);
+
+  /* Buttons rather than pages: nothing stays selected. */
+  r.list = gtk_list_box_new();
+  gtk_list_box_set_selection_mode(GTK_LIST_BOX(r.list), GTK_SELECTION_NONE);
+  gtk_widget_add_css_class(r.list, "navigation-sidebar");
+  g_signal_connect(r.list, "row-activated", G_CALLBACK(on_activated), a);
+  gtk_box_append(GTK_BOX(box), r.list);
+
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+  g_signal_connect(click, "released", G_CALLBACK(on_click), NULL);
+  gtk_widget_add_controller(r.list, GTK_EVENT_CONTROLLER(click));
+  GtkGesture *press = gtk_gesture_long_press_new();
+  gtk_gesture_single_set_touch_only(GTK_GESTURE_SINGLE(press), TRUE);
+  g_signal_connect(press, "pressed", G_CALLBACK(on_long_press), NULL);
+  gtk_widget_add_controller(r.list, GTK_EVENT_CONTROLLER(press));
+  GtkEventController *keys = gtk_shortcut_controller_new();
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Menu, 0), gtk_callback_action_new(on_menu_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_F10, GDK_SHIFT_MASK),
+                     gtk_callback_action_new(on_menu_key, NULL, NULL)));
+  gtk_widget_add_controller(r.list, keys);
+
+  GMenu *model = g_menu_new(), *section = g_menu_new();
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  r.queue = section; /* the menu keeps it */
+  g_object_unref(section);
+  section = g_menu_new();
+  GMenuItem *edit = g_menu_item_new(mc_str_mnemonic(MC_STR_EDIT_MENU), "recents.edit");
+  g_menu_item_set_attribute(edit, "hidden-when", "s", "action-disabled");
+  g_menu_append_item(section, edit);
+  g_object_unref(edit);
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_RECENT_REMOVE_MENU), "recents.remove");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_RECENTS_CLEAR_MENU), "recents.clear");
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  r.menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(model));
+  g_object_unref(model);
+  gtk_popover_set_has_arrow(GTK_POPOVER(r.menu), FALSE);
+  gtk_widget_set_halign(r.menu, GTK_ALIGN_START);
+  gtk_widget_set_parent(r.menu, box);
+  GSimpleActionGroup *actions = g_simple_action_group_new();
+  const GActionEntry entries[] = {{"remove", on_remove, NULL, NULL, NULL, {0}},
+                                  {"clear", on_clear, NULL, NULL, NULL, {0}}};
+  g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);
+  r.edit = g_simple_action_new("edit", NULL);
+  g_signal_connect(r.edit, "activate", G_CALLBACK(on_edit), NULL);
+  g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(r.edit));
+  g_object_unref(r.edit); /* the group keeps it */
+  gtk_widget_insert_action_group(box, "recents", G_ACTION_GROUP(actions));
+  g_object_unref(actions);
+  gtk_widget_set_visible(box, FALSE); /* until there are some */
+  return box;
+}
+
+void recents_refresh(app *a) {
+  home_view_refresh();
+  if (!r.list) return;
+  GtkWidget *child;
+  while ((child = gtk_widget_get_first_child(r.list))) gtk_list_box_remove(GTK_LIST_BOX(r.list), child);
+
+  mc_recent_list *list = NULL;
+  if (!a->lib || mc_library_list_recents(a->lib, 0, MC_LIST_PLAYABLE, &list) != MC_OK) list = NULL;
+  int n = 0;
+  for (int i = 0; list && i < list->count && n < MAX_RECENTS; i++) {
+    const mc_recent_info *info = &list->items[i];
+    gtk_list_box_append(GTK_LIST_BOX(r.list), recent_row(info));
+    n++;
+  }
+  mc_recent_list_free(list);
+  gtk_widget_set_visible(gtk_widget_get_parent(r.list), n > 0);
+}

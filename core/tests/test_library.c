@@ -1,0 +1,2080 @@
+#include <stdio.h>
+#include <string.h>
+
+#include "kithcore/kithcore.h"
+#include "library/library_internal.h"
+#include "test.h"
+#include "util/platform.h"
+#include "util/uid.h"
+
+static int changelog_count(sqlite3 *db, const char *where) {
+  char sql[256];
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM changelog WHERE %s", where);
+  sqlite3_stmt *stmt;
+  int n = -1;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+  if (sqlite3_step(stmt) == SQLITE_ROW) n = sqlite3_column_int(stmt, 0);
+  sqlite3_finalize(stmt);
+  return n;
+}
+
+static int exec(sqlite3 *db, const char *sql) {
+  return sqlite3_exec(db, sql, NULL, NULL, NULL);
+}
+
+static int query_int(sqlite3 *db, const char *sql) {
+  sqlite3_stmt *stmt;
+  int n = -1;
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+  if (sqlite3_step(stmt) == SQLITE_ROW) n = sqlite3_column_int(stmt, 0);
+  sqlite3_finalize(stmt);
+  return n;
+}
+
+static int has_column(sqlite3 *db, const char *table, const char *column) {
+  char sql[256];
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM pragma_table_info('%s') WHERE name = '%s'",
+           table, column);
+  return query_int(db, sql) == 1;
+}
+
+/* track_plays as v3 to v5 had it, to take a library back before v6. Its last_played_ms
+ * can't simply be dropped while the changelog triggers name it. */
+#define V5_TRACK_PLAYS \
+  "CREATE TABLE track_plays (" \
+  "  uid        TEXT PRIMARY KEY," \
+  "  track_uid  TEXT NOT NULL REFERENCES tracks (uid) ON DELETE CASCADE," \
+  "  node_uid   TEXT NOT NULL," \
+  "  play_count INTEGER NOT NULL DEFAULT 0," \
+  "  UNIQUE (track_uid, node_uid)" \
+  ") WITHOUT ROWID;"
+
+/* Takes a library back before v9: the file_rev columns go, with the triggers that name the
+ * tracks one. */
+#define V8_FILE_REV \
+  "DROP TRIGGER mc_log_ins_tracks_file_rev;" \
+  "DROP TRIGGER mc_log_upd_tracks_file_rev;" \
+  "ALTER TABLE tracks DROP COLUMN file_rev;" \
+  "ALTER TABLE files DROP COLUMN file_rev;"
+/* And from v10 back further: no files.source_sha256. */
+#define V10_SOURCE_SHA "ALTER TABLE files DROP COLUMN source_sha256;"
+/* Takes a library back before v13: no artist credits. */
+#define V12_CREDITS \
+  "DROP TRIGGER mc_log_ins_tracks_artist_credit;" \
+  "DROP TRIGGER mc_log_upd_tracks_artist_credit;" \
+  "DROP TRIGGER mc_log_ins_albums_artist_credit;" \
+  "DROP TRIGGER mc_log_upd_albums_artist_credit;" \
+  "DROP TABLE track_artists;" \
+  "DROP TABLE album_artists;" \
+  "ALTER TABLE tracks DROP COLUMN artist_credit;" \
+  "ALTER TABLE albums DROP COLUMN artist_credit;" \
+  "DELETE FROM meta WHERE key = 'artist_refresh';"
+
+/* Takes a library back before v17: no chosen covers. */
+#define V16_ART_CHOSEN \
+  "DROP TRIGGER mc_log_ins_albums_art_chosen;" \
+  "DROP TRIGGER mc_log_upd_albums_art_chosen;" \
+  "ALTER TABLE albums DROP COLUMN art_chosen;"
+
+/* Takes a library back before v15: no album flags or chosen covers. Every winding back needs
+ * it, since v15 to v17 are run again. */
+#define V14_FLAGS \
+  V16_ART_CHOSEN \
+  "DROP TRIGGER mc_log_ins_albums_no_scrobble;" \
+  "DROP TRIGGER mc_log_upd_albums_no_scrobble;" \
+  "DROP TRIGGER mc_log_ins_albums_mix;" \
+  "DROP TRIGGER mc_log_upd_albums_mix;" \
+  "ALTER TABLE albums DROP COLUMN no_scrobble;" \
+  "ALTER TABLE albums DROP COLUMN mix;"
+
+static void remove_db(const char *dir) {
+  const char *const names[] = {MC_LIBRARY_DB_NAME, MC_LIBRARY_DB_NAME "-wal",
+                               MC_LIBRARY_DB_NAME "-shm"};
+  char file[1100];
+  for (int i = 0; i < 3; i++) {
+    snprintf(file, sizeof file, "%s/%s", dir, names[i]);
+    remove(file);
+  }
+}
+
+/* Identity: library_uid, node uid rotation, adopting another library's uid. */
+static void test_identity(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_identity.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL, *other = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  CHECK(mc_library_open(path, &other) == MC_OK);
+  if (!lib || !other) {
+    mc_library_close(lib);
+    mc_library_close(other);
+    return;
+  }
+  sqlite3 *db = mc_library_db(lib);
+  char old_node[MC_UID_STRLEN], library_uid[MC_UID_STRLEN];
+  strcpy(old_node, mc_library_node_uid(lib));
+  strcpy(library_uid, mc_library_uid(lib));
+  CHECK(strlen(library_uid) == MC_UID_STRLEN - 1);
+  CHECK(strcmp(library_uid, old_node) != 0);
+  CHECK(strcmp(mc_library_uid(other), library_uid) == 0); /* the same for every connection */
+
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('a1', 'Low')") == SQLITE_OK);
+
+  /* Rotating gives new changes a new origin; earlier ones keep the old one. */
+  CHECK(mc_library_rotate_node_uid(lib) == MC_OK);
+  CHECK(strcmp(mc_library_node_uid(lib), old_node) != 0);
+  CHECK(strlen(mc_library_node_uid(lib)) == MC_UID_STRLEN - 1);
+  CHECK(exec(db, "UPDATE artists SET name = 'Lower' WHERE uid = 'a1'") == SQLITE_OK);
+  CHECK(changelog_count(db, "row_uid = 'a1' AND origin_uid = mc_node_uid()") == 1);
+  char where[128];
+  snprintf(where, sizeof where, "row_uid = 'a1' AND origin_uid = '%s'", old_node);
+  CHECK(changelog_count(db, where) == 1);
+
+  /* Another open connection picks up the new uid on its next write. */
+  CHECK(mc_library_begin_write(other) == MC_OK);
+  CHECK_STR(mc_library_node_uid(other), mc_library_node_uid(lib));
+  CHECK(exec(mc_library_db(other), "INSERT INTO artists (uid, name) VALUES ('a2', 'Duster')") ==
+        SQLITE_OK);
+  CHECK(mc_library_commit(other) == MC_OK);
+  CHECK(changelog_count(db, "row_uid = 'a2' AND origin_uid = mc_node_uid()") == 1);
+  mc_library_close(other);
+
+  /* A library with tracks can't take on another library's uid; an empty one can. */
+  char foreign[MC_UID_STRLEN];
+  CHECK(mc_uid_new(foreign) == MC_OK);
+  CHECK(mc_library_adopt_uid(lib, "not-a-uid") == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_adopt_uid(lib, "0192F1E4-7C3A-7B21-9D4E-1F2A3B4C5D6E") == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_adopt_uid(lib, foreign) == MC_OK); /* artists only, no tracks yet */
+  CHECK(strcmp(mc_library_uid(lib), foreign) == 0);
+  CHECK(exec(db, "INSERT INTO tracks (uid, title) VALUES ('t1', 'Starfire')") == SQLITE_OK);
+  CHECK(mc_library_adopt_uid(lib, library_uid) == MC_ERR_LIBRARY_MISMATCH);
+  CHECK(strcmp(mc_library_uid(lib), foreign) == 0);
+  CHECK(mc_library_adopt_uid(lib, foreign) == MC_OK); /* already this library's uid */
+
+  char node[MC_UID_STRLEN];
+  strcpy(node, mc_library_node_uid(lib));
+  mc_library_close(lib);
+
+  /* Both survive a reopen. */
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (lib) {
+    CHECK(strcmp(mc_library_uid(lib), foreign) == 0);
+    CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
+    mc_library_close(lib);
+  }
+}
+
+/* Migration v4 on a library made before it: peers goes, files gains sha256, and the library
+ * gets a library_uid. The old state is recreated by hand from a current database. */
+static void test_migration_v4(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v4.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
+  CHECK(has_column(db, "files", "sha256"));
+  CHECK(exec(db, "CREATE TABLE peers (uid TEXT PRIMARY KEY) WITHOUT ROWID;"
+                 "ALTER TABLE files DROP COLUMN sha256;"
+                 "DELETE FROM meta WHERE key = 'library_uid';"
+                 "DROP TABLE album_group_entries;"
+                 "DROP TABLE album_groups;"
+                 "DROP TABLE recents;"
+                 "DROP TABLE aliases;"
+                 "DROP TABLE merge_keys;"
+                 "DROP TABLE smart_lists;"
+                 "DROP TABLE track_plays;" V5_TRACK_PLAYS V8_FILE_REV V10_SOURCE_SHA V12_CREDITS
+                 V14_FLAGS "PRAGMA user_version = 3;") == SQLITE_OK);
+  char node[MC_UID_STRLEN];
+  strcpy(node, mc_library_node_uid(lib));
+  char library_uid[MC_UID_STRLEN];
+  strcpy(library_uid, mc_library_uid(lib));
+  CHECK(strlen(library_uid) == MC_UID_STRLEN - 1);
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name = 'peers'") == 0);
+  CHECK(has_column(db, "files", "sha256"));
+  CHECK(has_column(db, "files", "source_sha256"));
+  CHECK(strlen(mc_library_uid(lib)) == MC_UID_STRLEN - 1);
+  CHECK(query_int(db, "SELECT count(*) FROM meta WHERE key = 'library_uid'") == 1);
+  CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
+  mc_library_close(lib);
+}
+
+/* Migration v5: album groups. Their changes are logged like playlists', and deleting a group
+ * or an album takes its entries with it. */
+static void test_migration_v5(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v5.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "DROP TABLE album_group_entries;"
+                 "DROP TABLE album_groups;"
+                 "DROP TABLE recents;"
+                 "DROP TABLE aliases;"
+                 "DROP TABLE merge_keys;"
+                 "DROP TABLE smart_lists;"
+                 "DROP TABLE track_plays;" V5_TRACK_PLAYS V8_FILE_REV V10_SOURCE_SHA V12_CREDITS
+                 V14_FLAGS "PRAGMA user_version = 4;") == SQLITE_OK);
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  CHECK(has_column(db, "album_groups", "name"));
+  CHECK(has_column(db, "album_group_entries", "position"));
+
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('a1', 'Avalon'), ('a2', 'Siren');"
+                 "INSERT INTO album_groups (uid, name) VALUES ('g1', 'Roxy Music');"
+                 "INSERT INTO album_group_entries (uid, group_uid, album_uid, position)"
+                 "  VALUES ('e1', 'g1', 'a1', 'a0'), ('e2', 'g1', 'a2', 'a1');") == SQLITE_OK);
+  CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'album_groups'"
+                      " AND row_uid = 'g1' AND field = 'name'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'album_group_entries'"
+                      " AND row_uid = 'e1'") == 3);
+
+  /* Deleting an album removes it from its groups, and the removal is logged. */
+  CHECK(exec(db, "DELETE FROM albums WHERE uid = 'a1'") == SQLITE_OK);
+  CHECK(query_int(db, "SELECT count(*) FROM album_group_entries") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'album_group_entries'"
+                      " AND row_uid = 'e1' AND field = '_deleted'") == 1);
+  CHECK(exec(db, "DELETE FROM album_groups WHERE uid = 'g1'") == SQLITE_OK);
+  CHECK(query_int(db, "SELECT count(*) FROM album_group_entries") == 0);
+  mc_library_close(lib);
+}
+
+/* Migration v6: smart lists and last played, both logged. Plays from an existing v5 row
+ * carry on counting from where they were. */
+static void test_migration_v6(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v6.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "DROP TABLE recents;"
+                 "DROP TABLE aliases;"
+                 "DROP TABLE merge_keys;"
+                 "DROP TABLE smart_lists;"
+                 "DROP TABLE track_plays;" V5_TRACK_PLAYS V8_FILE_REV V10_SOURCE_SHA V12_CREDITS
+                 V14_FLAGS "PRAGMA user_version = 5;") == SQLITE_OK);
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  CHECK(has_column(db, "smart_lists", "rule"));
+  CHECK(has_column(db, "track_plays", "last_played_ms"));
+
+  CHECK(exec(db, "INSERT INTO tracks (uid, title) VALUES ('t1', 'Starfire'), ('t2', 'Lion');"
+                 "INSERT INTO track_plays (uid, track_uid, node_uid, play_count)"
+                 "  VALUES ('p1', 't1', mc_node_uid(), 4), ('p2', 't1', 'other-node', 9);") == SQLITE_OK);
+  CHECK(mc_library_record_play(lib, "t1") == MC_OK);
+  CHECK(mc_library_record_play(lib, "t2") == MC_OK);
+  CHECK(mc_library_record_play(lib, "t2") == MC_OK);
+  CHECK(mc_library_record_play(lib, "nope") == MC_ERR_NOT_FOUND);
+  /* Only this device's row moves; the other device's is left for it to write. */
+  CHECK(query_int(db, "SELECT play_count FROM track_plays WHERE uid = 'p1'") == 5);
+  CHECK(query_int(db, "SELECT play_count FROM track_plays WHERE uid = 'p2'") == 9);
+  CHECK(query_int(db, "SELECT last_played_ms IS NULL FROM track_plays WHERE uid = 'p2'") == 1);
+  CHECK(query_int(db, "SELECT play_count FROM track_plays WHERE track_uid = 't2'") == 2);
+  CHECK(query_int(db, "SELECT count(*) FROM track_plays WHERE last_played_ms > 0"
+                      " AND node_uid = mc_node_uid()") == 2);
+  CHECK(query_int(db, "SELECT count(*) FROM changelog WHERE entity = 'track_plays'"
+                      " AND row_uid = 'p1' AND field = 'last_played_ms'") == 1);
+  mc_library_close(lib);
+}
+
+/* Migration v10: the example smart lists. Every device makes the same rows (fixed uids) and
+ * none are logged, also when the triggers from the last open are there as it runs; they
+ * evaluate on an empty library, holding nothing; later edits are logged as usual. */
+static void test_migration_v10(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v10.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(query_int(db, "SELECT count(*) FROM smart_lists") == 5);
+  CHECK(changelog_count(db, "entity = 'smart_lists'") == 0);
+  mc_smart_list *lists = NULL;
+  CHECK(mc_library_list_smart(lib, 0, &lists) == MC_OK && lists && lists->count == 5);
+  int tracks = 0, random = 0;
+  for (int i = 0; lists && i < lists->count; i++) {
+    const mc_smart_info *s = &lists->items[i];
+    tracks += s->subject == MC_SMART_TRACKS;
+    random += s->random;
+    CHECK(strncmp(s->uid, "5e1ec7ed-", 9) == 0);
+    if (s->subject == MC_SMART_TRACKS) {
+      mc_track_list *t = NULL;
+      CHECK(mc_library_list_smart_tracks(lib, s->uid, &t) == MC_OK && t && t->count == 0);
+      mc_track_list_free(t);
+    } else {
+      mc_album_list *a = NULL;
+      CHECK(mc_library_list_smart_albums(lib, s->uid, &a) == MC_OK && a && a->count == 0);
+      mc_album_list_free(a);
+    }
+  }
+  CHECK(tracks == 3 && random == 2);
+  mc_smart_list_free(lists);
+  lists = NULL;
+  CHECK(mc_library_list_smart(lib, MC_LIST_PLAYABLE, &lists) == MC_OK && lists && lists->count == 0 &&
+        lists->hidden == 5);
+  mc_smart_list_free(lists);
+
+  /* Back to v9 with the triggers in place: the migration runs again without logging. */
+  lib->applying_remote = 1;
+  CHECK(exec(db, "DELETE FROM smart_lists;" V10_SOURCE_SHA V12_CREDITS V14_FLAGS "PRAGMA user_version = 9;") == SQLITE_OK);
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  CHECK(query_int(db, "SELECT count(*) FROM smart_lists") == 5);
+  CHECK(changelog_count(db, "entity = 'smart_lists'") == 0);
+  CHECK(mc_smart_reshuffle(lib, "5e1ec7ed-0000-4000-8000-000000000003") == MC_OK);
+  CHECK(changelog_count(db, "entity = 'smart_lists' AND row_uid = '5e1ec7ed-0000-4000-8000-000000000003'"
+                            " AND origin_uid = mc_node_uid()") == 1);
+  mc_library_close(lib);
+}
+
+/* Migration v12: no singles albums. A v11 library's "<artist> Singles" album stays as it is,
+ * an ordinary album now, and albums.kind is no longer logged. */
+static void test_migration_v12(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v12.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  /* As v11 left it: the index, and kind's triggers (whose bodies don't matter here). */
+  lib->applying_remote = 1;
+  CHECK(exec(db, V12_CREDITS "CREATE INDEX albums_singles ON albums (artist_uid) WHERE kind = 'singles';"
+                 "CREATE TRIGGER mc_log_ins_albums_kind AFTER INSERT ON albums BEGIN SELECT 1; END;"
+                 "CREATE TRIGGER mc_log_upd_albums_kind AFTER UPDATE OF kind ON albums BEGIN SELECT 1; END;"
+                 "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
+                 "INSERT INTO albums (uid, title, artist_uid, kind) VALUES ('al1', 'Low Singles', 'ar1', 'singles');"
+                 "INSERT INTO tracks (uid, album_uid, title) VALUES ('t1', 'al1', 'Canada'), ('t2', 'al1', 'Over');"
+                 V14_FLAGS "PRAGMA user_version = 11;") == SQLITE_OK);
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  CHECK(query_int(db, "SELECT count(*) FROM sqlite_master WHERE name IN ('albums_singles',"
+                      " 'mc_log_ins_albums_kind', 'mc_log_upd_albums_kind')") == 0);
+  CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al1' AND title = 'Low Singles'"
+                      " AND kind = 'singles'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM tracks WHERE album_uid = 'al1'") == 2);
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_albums(lib, &albums) == MC_OK && albums && albums->count == 1);
+  if (albums && albums->count == 1) CHECK_STR(albums->items[0].title, "Low Singles");
+  mc_album_list_free(albums);
+  /* A new album logs its fields, but no kind. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title, artist_uid) VALUES ('al2', 'Secret Name', 'ar1');"
+                 "UPDATE albums SET kind = 'singles' WHERE uid = 'al2';") == SQLITE_OK);
+  CHECK(changelog_count(db, "entity = 'albums' AND row_uid = 'al2' AND field = 'title'") == 1);
+  CHECK(changelog_count(db, "entity = 'albums' AND field = 'kind'") == 0);
+  mc_library_close(lib);
+}
+
+/* The first column of sql's first row, into out ("" if none). */
+static void query_text(sqlite3 *db, const char *sql, char *out, size_t cap) {
+  sqlite3_stmt *stmt;
+  out[0] = '\0';
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return;
+  if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_text(stmt, 0))
+    snprintf(out, cap, "%s", (const char *)sqlite3_column_text(stmt, 0));
+  sqlite3_finalize(stmt);
+}
+
+/* Migration v13: artist credits. A v12 library gets one credit row per track and album with
+ * an artist, under the uid every device derives, unlogged. Rows a newer peer logged before
+ * the upgrade (kept, not applied, as an unknown table and column) are applied once the
+ * migration has run. */
+static void test_migration_v13(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v13.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  char s[256];
+  /* No refresh after upgrading is scheduled any more. */
+  CHECK(query_int(db, "SELECT count(*) FROM meta WHERE key LIKE 'artist_refresh%'") == 0);
+
+  char t1_0[MC_UID_STRLEN], t1_1[MC_UID_STRLEN], t3_0[MC_UID_STRLEN], al1_0[MC_UID_STRLEN];
+  CHECK(mc_uid_derive("t1", 0, t1_0) == MC_OK && mc_uid_derive("t1", 1, t1_1) == MC_OK &&
+        mc_uid_derive("t3", 0, t3_0) == MC_OK && mc_uid_derive("al1", 0, al1_0) == MC_OK);
+  CHECK(strcmp(t1_0, t1_1) != 0 && strlen(t1_0) == MC_UID_STRLEN - 1 && t1_0[14] == '8');
+  char again[MC_UID_STRLEN];
+  CHECK(mc_uid_derive("t1", 1, again) == MC_OK && strcmp(again, t1_1) == 0);
+
+  /* As v12 had it, with what a v13 peer logged: Mimi featured on Starfire. */
+  char sql[4096];
+  snprintf(sql, sizeof sql,
+           V12_CREDITS
+           "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low'), ('ar2', 'Mimi');"
+           "INSERT INTO albums (uid, title, artist_uid) VALUES ('al1', 'Secret Name', 'ar1'),"
+           " ('al2', 'Nobody', NULL);"
+           "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES ('t1', 'al1', 'ar1', 'Starfire'),"
+           " ('t2', 'al1', NULL, 'Bright'), ('t3', NULL, 'ar2', 'Alone');"
+           /* What older versions left in meta: a refresh under way, a merge waiting. */
+           "INSERT INTO meta (key, value) VALUES ('artist_refresh', 'pending'),"
+           " ('artist_refresh_mb', 'done'), ('merge_source', 'library-before-merge-2026-11-01.db'),"
+           " ('merge_wait', 'run');"
+           "INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value) VALUES"
+           " (1000, 'peer0000-0000-7000-8000-000000000000', 'tracks', 't1', 'artist_credit', 'Low feat. Mimi'),"
+           " (1001, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'track_uid', 't1'),"
+           " (1002, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'artist_uid', 'ar1'),"
+           " (1003, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'position', 0),"
+           " (1004, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'joinphrase', ' feat. '),"
+           " (1005, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'track_uid', 't1'),"
+           " (1006, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'artist_uid', 'ar2'),"
+           " (1007, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'position', 1),"
+           " (1008, 'peer0000-0000-7000-8000-000000000000', 'track_artists', '%s', 'joinphrase', '');"
+           V14_FLAGS "PRAGMA user_version = 12;",
+           t1_0, t1_0, t1_0, t1_0, t1_1, t1_1, t1_1, t1_1);
+  lib->applying_remote = 1;
+  CHECK(exec(db, sql) == SQLITE_OK);
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  CHECK(has_column(db, "tracks", "artist_credit") && has_column(db, "albums", "artist_credit"));
+  /* Credits stay as they were, and what older versions left in meta for the refresh after
+   * upgrading and for merging libraries is gone. */
+  CHECK(query_int(db, "SELECT count(*) FROM meta WHERE key LIKE 'artist_refresh%'"
+                      " OR key LIKE 'merge_%' AND key NOT IN ('merge_seq', 'merge_name_seq')") == 0);
+  /* One row each where there's an artist, at position 0. */
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM track_artists WHERE uid = '%s' AND track_uid = 't3'"
+                            " AND artist_uid = 'ar2' AND position = 0 AND joinphrase = ''", t3_0);
+  CHECK(query_int(db, sql) == 1);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM album_artists WHERE uid = '%s' AND album_uid = 'al1'"
+                            " AND artist_uid = 'ar1' AND position = 0", al1_0);
+  CHECK(query_int(db, sql) == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM track_artists WHERE track_uid = 't2'") == 0);
+  CHECK(query_int(db, "SELECT count(*) FROM album_artists WHERE album_uid = 'al2'") == 0);
+  /* The peer's rows, applied: its row 0 is the backfilled one, now with its join. */
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM track_artists WHERE uid = '%s' AND joinphrase = ' feat. '", t1_0);
+  CHECK(query_int(db, sql) == 1);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM track_artists WHERE uid = '%s' AND artist_uid = 'ar2'"
+                            " AND position = 1", t1_1);
+  CHECK(query_int(db, sql) == 1);
+  query_text(db, "SELECT artist_credit FROM tracks WHERE uid = 't1'", s, sizeof s);
+  CHECK_STR(s, "Low feat. Mimi");
+  /* Nothing of it logged here: the changelog is the peer's rows. */
+  CHECK(changelog_count(db, "1") == 9);
+
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "ar2", &tracks) == MC_OK && tracks && tracks->count == 2);
+  if (tracks && tracks->count == 2) {
+    CHECK_STR(tracks->items[0].title, "Alone");
+    CHECK_STR(tracks->items[1].title, "Starfire");
+    CHECK_STR(tracks->items[1].artist, "Low feat. Mimi");
+    CHECK(strcmp(tracks->items[1].artist_uid, "ar1") == 0);
+  }
+  mc_track_list_free(tracks);
+  mc_credit_list *credit = NULL;
+  CHECK(mc_library_list_credit(lib, "t1", &credit) == MC_OK && credit && credit->count == 2);
+  if (credit && credit->count == 2) {
+    CHECK_STR(credit->items[0].name, "Low");
+    CHECK_STR(credit->items[0].join, " feat. ");
+    CHECK_STR(credit->items[1].name, "Mimi");
+    CHECK_STR(credit->items[1].join, "");
+  }
+  mc_credit_list_free(credit);
+  /* A track with no artist has its album's; an album its own; nothing else is found. */
+  credit = NULL;
+  CHECK(mc_library_list_credit(lib, "t2", &credit) == MC_OK && credit && credit->count == 1);
+  if (credit && credit->count == 1) CHECK(strcmp(credit->items[0].uid, "ar1") == 0);
+  mc_credit_list_free(credit);
+  credit = NULL;
+  CHECK(mc_library_list_credit(lib, "al2", &credit) == MC_OK && credit && credit->count == 0);
+  mc_credit_list_free(credit);
+  CHECK(mc_library_list_credit(lib, "nope", &credit) == MC_ERR_NOT_FOUND);
+  mc_library_close(lib);
+}
+
+/* v15's album flags: what a newer peer logged is applied on upgrading, and they're logged
+ * when set, not when a row is made. */
+static void test_migration_v15(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v15.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  lib->applying_remote = 1;
+  CHECK(exec(db, V14_FLAGS
+                 "INSERT INTO albums (uid, title) VALUES ('al1', 'Invisible Trigger'), ('al2', 'Changed Mind'),"
+                 " ('al3', 'Untouched');"
+                 "INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value) VALUES"
+                 " (1000, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al1', 'mix', 1),"
+                 " (1001, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al1', 'no_scrobble', 1),"
+                 " (1002, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al2', 'no_scrobble', 1),"
+                 " (1003, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al2', 'no_scrobble', 0),"
+                 " (1004, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al3', 'art_chosen', 'abc');"
+                 "PRAGMA user_version = 14;") == SQLITE_OK);
+  CHECK(!has_column(db, "albums", "mix"));
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  mc_album_flags f;
+  CHECK(mc_album_flags_get(lib, "al1", &f) == MC_OK && f.mix == 1 && f.no_scrobble == 1);
+  CHECK(mc_album_flags_get(lib, "al2", &f) == MC_OK && f.mix == 0 && f.no_scrobble == 0);
+  CHECK(mc_album_flags_get(lib, "al3", &f) == MC_OK && f.mix == 0 && f.no_scrobble == 0);
+  CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al3' AND art_chosen = 'abc'") == 1);
+  CHECK(changelog_count(db, "1") == 5); /* nothing of it logged here */
+
+  /* Set: only what changed is logged. */
+  f = (mc_album_flags){.no_scrobble = 1};
+  CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
+  CHECK(changelog_count(db, "1") == 6);
+  CHECK(changelog_count(db, "entity = 'albums' AND row_uid = 'al3' AND field = 'no_scrobble'") == 1);
+  CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
+  CHECK(changelog_count(db, "1") == 6);
+  f = (mc_album_flags){.no_scrobble = 7, .mix = 7}; /* any true value */
+  CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
+  CHECK(changelog_count(db, "1") == 7);
+  CHECK(mc_album_flags_get(lib, "al3", &f) == MC_OK && f.mix == 1 && f.no_scrobble == 1);
+  f = (mc_album_flags){0};
+  CHECK(mc_album_flags_set(lib, "al3", &f) == MC_OK);
+  CHECK(changelog_count(db, "1") == 9);
+  CHECK(mc_album_flags_get(lib, "al3", &f) == MC_OK && f.mix == 0 && f.no_scrobble == 0);
+
+  CHECK(mc_album_flags_get(lib, "nope", &f) == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_flags_set(lib, "nope", &f) == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_flags_get(NULL, "al1", &f) == MC_ERR_INVALID_ARG);
+  CHECK(mc_album_flags_set(lib, NULL, &f) == MC_ERR_INVALID_ARG);
+
+  /* A new row's 0 isn't anyone's choice, so it isn't logged. One that comes with a flag (a
+   * restored album) is. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al4', 'New');"
+                 "INSERT INTO albums (uid, title, mix) VALUES ('al5', 'Restored', 1);") == SQLITE_OK);
+  CHECK(changelog_count(db, "row_uid = 'al4' AND field IN ('no_scrobble', 'mix')") == 0);
+  CHECK(changelog_count(db, "row_uid = 'al4' AND field = 'title'") == 1);
+  CHECK(changelog_count(db, "row_uid = 'al5' AND field IN ('no_scrobble', 'mix')") == 1);
+  mc_library_close(lib);
+}
+
+/* v17's chosen covers, upgrading from exactly v16: from anything older, k_newly_known's entry
+ * for them runs even with too low a version, and nothing would notice. */
+static void test_migration_v17(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v17.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  lib->applying_remote = 1;
+  CHECK(exec(db, V16_ART_CHOSEN
+                 "INSERT INTO albums (uid, title) VALUES ('al1', 'Chosen Elsewhere'), ('al2', 'Changed Mind'),"
+                 " ('al3', 'Untouched');"
+                 "INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value) VALUES"
+                 " (1000, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al1', 'art_chosen', 'abc'),"
+                 " (1001, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al2', 'art_chosen', 'old'),"
+                 " (1002, 'peer0000-0000-7000-8000-000000000000', 'albums', 'al2', 'art_chosen', 'new');"
+                 "PRAGMA user_version = 16;") == SQLITE_OK);
+  CHECK(!has_column(db, "albums", "art_chosen"));
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al1' AND art_chosen = 'abc'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al2' AND art_chosen = 'new'") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM albums WHERE uid = 'al3' AND art_chosen IS NULL") == 1);
+  CHECK(changelog_count(db, "1") == 3); /* nothing of it logged here */
+  mc_library_close(lib);
+}
+
+/* v18: the play log. A peer that upgraded first has sent rows, logged here but not applied, as
+ * this version had no table for them: the migration applies them. */
+static void test_migration_v18(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_v18.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  lib->applying_remote = 1;
+  CHECK(exec(db, "DROP TABLE play_events;"
+                 "INSERT INTO tracks (uid, title) VALUES ('t1', 'Heard Elsewhere');"
+                 "INSERT INTO changelog (hlc, origin_uid, entity, row_uid, field, value) VALUES"
+                 " (1000, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e1', 'row',"
+                 "  '[\"t1\",\"peer\",5000,700,\"skipped\",\"radio\",null]'),"
+                 " (1001, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e2', 'row',"
+                 "  '[\"t1\",\"peer\",6000,800,\"finished\",\"album\",null]'),"
+                 " (1002, 'peer0000-0000-7000-8000-000000000000', 'play_events', 'e2', '_deleted', 1);"
+                 "PRAGMA user_version = 17;") == SQLITE_OK);
+  lib->applying_remote = 0;
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  CHECK(query_int(db, "SELECT count(*) FROM play_events WHERE uid = 'e1' AND track_uid = 't1' AND node_uid = 'peer'"
+                      " AND started_ms = 5000 AND listened_ms = 700 AND ended = 'skipped' AND context = 'radio'"
+                      " AND context_uid IS NULL") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM play_events") == 1); /* e2 was deleted */
+  CHECK(changelog_count(db, "1") == 3); /* nothing of it logged here */
+  mc_library_close(lib);
+}
+
+/* The play log's rows: written as this device's, read back by time. */
+static void test_play_log(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_play_log.d", scratch);
+  remove_db(path);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  const char *t1 = "a0000000-0000-7000-8000-000000000001", *t2 = "a0000000-0000-7000-8000-000000000002";
+  char sql[256];
+  CHECK(mc_library_begin_write(lib) == MC_OK);
+  snprintf(sql, sizeof sql, "INSERT INTO tracks (uid, title) VALUES ('%s', 'One'), ('%s', 'Two')", t1, t2);
+  CHECK(exec(db, sql) == SQLITE_OK);
+  CHECK(mc_library_commit(lib) == MC_OK);
+
+  /* Empty, and every context and end there is, out of order. */
+  mc_play_log *log = NULL;
+  CHECK(mc_library_list_play_events(lib, 0, INT64_MAX, &log) == MC_OK);
+  CHECK(log && log->count == 0);
+  mc_play_log_free(log);
+  static const struct {
+    int64_t started;
+    mc_play_end end;
+    mc_play_context context;
+    const char *uid;
+  } rows[] = {
+    {3000, MC_PLAY_END_SKIPPED, MC_PLAY_CONTEXT_ALBUM, "c0000000-0000-7000-8000-000000000001"},
+    {1000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_UNKNOWN, ""},
+    {2000, MC_PLAY_END_STOPPED, MC_PLAY_CONTEXT_MANUAL, ""},
+    {4000, MC_PLAY_END_REPLACED, MC_PLAY_CONTEXT_PLAYLIST, "c0000000-0000-7000-8000-000000000002"},
+    {5000, MC_PLAY_END_FAILED, MC_PLAY_CONTEXT_ALBUM_GROUP, "c0000000-0000-7000-8000-000000000003"},
+    {6000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_ARTIST, "c0000000-0000-7000-8000-000000000004"},
+    {7000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_SHUFFLE, "c0000000-0000-7000-8000-000000000001"},
+    {8000, MC_PLAY_END_FINISHED, MC_PLAY_CONTEXT_MANUAL, ""},
+  };
+  int n = (int)(sizeof rows / sizeof rows[0]);
+  for (int i = 0; i < n; i++) {
+    mc_play_event e = {.started_ms = rows[i].started, .listened_ms = 100 + i, .end = rows[i].end,
+                       .context = rows[i].context};
+    snprintf(e.track_uid, sizeof e.track_uid, "%s", i % 2 ? t2 : t1);
+    snprintf(e.context_uid, sizeof e.context_uid, "%s", rows[i].uid);
+    CHECK(mc_library_log_play(lib, &e) == MC_OK);
+  }
+  CHECK(mc_library_list_play_events(lib, 0, INT64_MAX, &log) == MC_OK);
+  CHECK(log && log->count == n);
+  for (int i = 0; log && i + 1 < log->count; i++) {
+    CHECK(log->items[i].event.started_ms < log->items[i + 1].event.started_ms);
+    CHECK(!strcmp(log->items[i].node_uid, mc_library_node_uid(lib)));
+    CHECK(strlen(log->items[i].uid) == MC_UID_STRLEN - 1);
+  }
+  if (log && log->count == n) {
+    CHECK(log->items[0].event.end == MC_PLAY_END_FINISHED && log->items[0].event.context == MC_PLAY_CONTEXT_UNKNOWN);
+    CHECK(!log->items[0].event.context_uid[0] && log->items[0].event.listened_ms == 101);
+    CHECK(!strcmp(log->items[0].event.track_uid, t2));
+    CHECK(log->items[2].event.end == MC_PLAY_END_SKIPPED && log->items[2].event.context == MC_PLAY_CONTEXT_ALBUM);
+    CHECK(!strcmp(log->items[2].event.context_uid, rows[0].uid));
+    CHECK(log->items[4].event.end == MC_PLAY_END_FAILED);
+    CHECK(log->items[7].event.context == MC_PLAY_CONTEXT_MANUAL);
+  }
+  mc_play_log_free(log);
+  CHECK(query_int(db, "SELECT count(*) FROM play_events WHERE context_uid IS NULL") == 3);
+
+  /* From is in, to is out. */
+  CHECK(mc_library_list_play_events(lib, 2000, 4000, &log) == MC_OK);
+  CHECK(log && log->count == 2 && log->items[0].event.started_ms == 2000);
+  mc_play_log_free(log);
+  CHECK(mc_library_list_play_events(lib, 9000, 10000, &log) == MC_OK);
+  CHECK(log && log->count == 0);
+  mc_play_log_free(log);
+
+  /* A row is one change, holding every column. */
+  CHECK(changelog_count(db, "entity = 'play_events'") == n);
+  CHECK(changelog_count(db, "entity = 'play_events' AND field = 'row' AND json_array_length(value) = 7") == n);
+
+  /* Values from a newer version read as unknown. */
+  CHECK(mc_library_begin_write(lib) == MC_OK);
+  CHECK(exec(db, "UPDATE play_events SET ended = 'beamed', context = 'telepathy' WHERE started_ms = 8000") == SQLITE_OK);
+  CHECK(mc_library_commit(lib) == MC_OK);
+  CHECK(changelog_count(db, "entity = 'play_events'") == n); /* rows don't change, so that's not logged */
+  CHECK(mc_library_list_play_events(lib, 8000, 8001, &log) == MC_OK);
+  CHECK(log && log->count == 1 && log->items[0].event.end == MC_PLAY_END_UNKNOWN);
+  CHECK(log && log->count == 1 && log->items[0].event.context == MC_PLAY_CONTEXT_UNKNOWN);
+  mc_play_log_free(log);
+
+  /* A track gone meanwhile, and what can't be a row. */
+  mc_play_event e = {.started_ms = 1, .end = MC_PLAY_END_FINISHED};
+  snprintf(e.track_uid, sizeof e.track_uid, "a0000000-0000-7000-8000-00000000ffff");
+  CHECK(mc_library_log_play(lib, &e) == MC_ERR_NOT_FOUND);
+  e.context = (mc_play_context)99;
+  CHECK(mc_library_log_play(lib, &e) == MC_ERR_INVALID_ARG);
+  e.context = MC_PLAY_CONTEXT_UNKNOWN;
+  e.end = (mc_play_end)99;
+  CHECK(mc_library_log_play(lib, &e) == MC_ERR_INVALID_ARG);
+  e.end = MC_PLAY_END_FINISHED;
+  e.track_uid[0] = '\0';
+  CHECK(mc_library_log_play(lib, &e) == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_log_play(NULL, &e) == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_list_play_events(NULL, 0, 1, &log) == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_list_play_events(lib, 0, 1, NULL) == MC_ERR_INVALID_ARG);
+
+  /* Rows go with their track, by cascade too (a peer's delete arrives that way). */
+  CHECK(mc_library_begin_write(lib) == MC_OK);
+  snprintf(sql, sizeof sql, "DELETE FROM tracks WHERE uid = '%s'", t2);
+  CHECK(exec(db, sql) == SQLITE_OK);
+  CHECK(mc_library_commit(lib) == MC_OK);
+  snprintf(sql, sizeof sql, "SELECT count(*) FROM play_events WHERE track_uid = '%s'", t2);
+  CHECK(query_int(db, sql) == 0);
+  CHECK(query_int(db, "SELECT count(*) FROM play_events") == 4);
+  mc_library_close(lib);
+}
+
+/* Featured artists: an album or track credited to several is each one's, on the artist list
+ * and on each one's page. */
+static void test_credited_artists(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_credits.d", scratch);
+  remove_db(path);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+
+  /* Duets is A & B's, d1 A & B's own, d2 the album's; d3 (no album) and d4 (a single) are
+   * C feat. B's. */
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('A', 'Anna'), ('B', 'Bo'), ('C', 'Cy');"
+                 "INSERT INTO albums (uid, title, artist_uid, artist_credit) VALUES"
+                 " ('al1', 'Duets', 'A', 'Anna & Bo'), ('al2', 'One Off', 'C', 'Cy feat. Bo');"
+                 "INSERT INTO album_artists (uid, album_uid, artist_uid, position, joinphrase) VALUES"
+                 " ('aa1', 'al1', 'A', 0, ' & '), ('aa2', 'al1', 'B', 1, ''),"
+                 " ('aa3', 'al2', 'C', 0, ' feat. '), ('aa4', 'al2', 'B', 1, '');"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, artist_credit, title, year) VALUES"
+                 " ('d1', 'al1', 'A', 'Anna & Bo', 'First', NULL), ('d2', 'al1', NULL, NULL, 'Second', NULL),"
+                 " ('d3', NULL, 'C', 'Cy feat. Bo', 'Third', 2001), ('d4', 'al2', 'C', 'Cy feat. Bo', 'Fourth', 2002);"
+                 "INSERT INTO track_artists (uid, track_uid, artist_uid, position, joinphrase) VALUES"
+                 " ('ta1', 'd1', 'A', 0, ' & '), ('ta2', 'd1', 'B', 1, ''),"
+                 " ('ta3', 'd3', 'C', 0, ' feat. '), ('ta4', 'd3', 'B', 1, ''),"
+                 " ('ta5', 'd4', 'C', 0, ' feat. '), ('ta6', 'd4', 'B', 1, '');") == SQLITE_OK);
+
+  mc_artist_list *artists = NULL;
+  CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 3);
+  if (artists && artists->count == 3) {
+    CHECK_STR(artists->items[1].name, "Bo");
+    CHECK(artists->items[1].album_count == 1); /* Duets; One Off is a single */
+    CHECK(artists->items[2].album_count == 0);
+  }
+  mc_artist_list_free(artists);
+
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_artist_albums(lib, "B", &albums) == MC_OK && albums && albums->count == 1);
+  if (albums && albums->count == 1) {
+    CHECK_STR(albums->items[0].title, "Duets");
+    CHECK_STR(albums->items[0].artist, "Anna & Bo");
+    CHECK(albums->items[0].track_count == 2 && albums->items[0].credited_count == 2);
+  }
+  mc_album_list_free(albums);
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_artist_singles(lib, "B", &tracks) == MC_OK && tracks && tracks->count == 2);
+  if (tracks && tracks->count == 2) {
+    CHECK_STR(tracks->items[0].title, "Third");
+    CHECK_STR(tracks->items[0].artist, "Cy feat. Bo");
+    CHECK_STR(tracks->items[1].title, "Fourth");
+  }
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "B", &tracks) == MC_OK && tracks && tracks->count == 4);
+  if (tracks && tracks->count == 4) CHECK_STR(tracks->items[2].artist, "Anna & Bo"); /* Second, the album's */
+  mc_track_list_free(tracks);
+  albums = NULL;
+  CHECK(mc_library_list_albums(lib, &albums) == MC_OK && albums && albums->count == 1);
+  if (albums && albums->count == 1) CHECK_STR(albums->items[0].artist, "Anna & Bo");
+  mc_album_list_free(albums);
+
+  /* Here: Bo by d3's file alone; then Duets by d2's, which is Bo's through the album. */
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES ('f3', 'd3', 'x/3.flac', 'flac')") ==
+        SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 2);
+  if (artists && artists->count == 2) {
+    CHECK_STR(artists->items[0].name, "Bo");
+    CHECK(artists->items[0].album_count == 0 && artists->items[0].track_count == 1);
+  }
+  mc_artist_list_free(artists);
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES ('f2', 'd2', 'x/2.flac', 'flac')") ==
+        SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 3);
+  if (artists && artists->count == 3) {
+    CHECK_STR(artists->items[1].name, "Bo");
+    CHECK(artists->items[1].album_count == 1 && artists->items[1].track_count == 2);
+  }
+  mc_artist_list_free(artists);
+
+  /* A peer of an older version moves d1 to Cy by artist_uid alone: d1 is Cy's, and Anna's no
+   * longer, though its row 0 still says Anna. Bo stays featured. */
+  CHECK(exec(db, "UPDATE tracks SET artist_uid = 'C' WHERE uid = 'd1'") == SQLITE_OK);
+  tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "A", &tracks) == MC_OK && tracks && tracks->count == 1);
+  if (tracks && tracks->count == 1) CHECK_STR(tracks->items[0].title, "Second");
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "C", &tracks) == MC_OK && tracks && tracks->count == 3);
+  mc_track_list_free(tracks);
+  mc_credit_list *credit = NULL;
+  CHECK(mc_library_list_credit(lib, "d1", &credit) == MC_OK && credit && credit->count == 2);
+  if (credit && credit->count == 2) CHECK(strcmp(credit->items[0].uid, "C") == 0);
+  mc_credit_list_free(credit);
+  /* Recents show an album's credit. */
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM, "al1") == MC_OK);
+  mc_recent_list *recents = NULL;
+  CHECK(mc_library_list_recents(lib, 0, 0, &recents) == MC_OK && recents && recents->count == 1);
+  if (recents && recents->count == 1) CHECK_STR(recents->items[0].artist, "Anna & Bo");
+  mc_recent_list_free(recents);
+  mc_library_close(lib);
+}
+
+/* An artist's picture is the cover of their first own album here with one, by year then
+ * title; singles, albums with nothing here and those they're only featured on don't count. */
+static void test_artist_cover(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_artist_cover.d", scratch);
+  remove_db(path);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+
+  /* A's: Old (1999) has no art, Gone (2001) no file here, One (2002) one track, a single;
+   * Later and Alpha are both 2005, so Alpha by title. B is only featured on Alpha. */
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('A', 'Anna'), ('B', 'Bo');"
+                 "INSERT INTO albums (uid, title, artist_uid, year, art_hash) VALUES"
+                 " ('al1', 'Old', 'A', 1999, NULL), ('al2', 'Gone', 'A', 2001, 'h'),"
+                 " ('al3', 'One', 'A', 2002, 'h'), ('al4', 'Later', 'A', 2005, 'h'),"
+                 " ('al5', 'Alpha', 'A', 2005, 'h');"
+                 "INSERT INTO album_artists (uid, album_uid, artist_uid, position, joinphrase) VALUES"
+                 " ('aa1', 'al5', 'A', 0, ' & '), ('aa2', 'al5', 'B', 1, '');"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES"
+                 " ('t1', 'al1', 'A', '1'), ('t2', 'al1', 'A', '2'), ('t3', 'al2', 'A', '3'),"
+                 " ('t4', 'al2', 'A', '4'), ('t5', 'al3', 'A', '5'), ('t6', 'al4', 'A', '6'),"
+                 " ('t7', 'al4', 'A', '7'), ('t8', 'al5', 'A', '8'), ('t9', 'al5', 'B', '9');"
+                 "INSERT INTO files (uid, track_uid, path, format) VALUES"
+                 " ('f1', 't1', 'Anna/Old/1.flac', 'flac'), ('f5', 't5', 'Anna/One/5.flac', 'flac'),"
+                 " ('f6', 't6', 'Anna/Later/6.flac', 'flac'), ('f9', 't9', 'Anna/Alpha/9.flac', 'flac');") ==
+        SQLITE_OK);
+
+  char want[1200];
+  snprintf(want, sizeof want, "%s%cAnna%cAlpha", mc_library_dir(lib), MC_PATH_SEP, MC_PATH_SEP);
+  mc_artist_list *artists = NULL;
+  CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 2);
+  if (artists && artists->count == 2) {
+    CHECK_STR(artists->items[0].cover_dir, want);
+    CHECK(artists->items[1].cover_dir == NULL);
+  }
+  mc_artist_list_free(artists);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 2);
+  if (artists && artists->count == 2) {
+    CHECK_STR(artists->items[0].cover_dir, want);
+    CHECK(artists->items[1].cover_dir == NULL);
+  }
+  mc_artist_list_free(artists);
+
+  /* Alpha's file goes: Later's cover is next. */
+  CHECK(exec(db, "DELETE FROM files WHERE uid = 'f9'") == SQLITE_OK);
+  snprintf(want, sizeof want, "%s%cAnna%cLater", mc_library_dir(lib), MC_PATH_SEP, MC_PATH_SEP);
+  artists = NULL;
+  CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 2);
+  if (artists && artists->count == 2) CHECK_STR(artists->items[0].cover_dir, want);
+  mc_artist_list_free(artists);
+  mc_library_close(lib);
+}
+
+/* What's been played: a track's rows on two devices count once, the newest of them says when
+ * it was last played, and a track that's in a playlist twice counts once. */
+static void test_played(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_played.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al1', 'Things'), ('al2', 'Unplayed');"
+                 "INSERT INTO tracks (uid, title, album_uid) VALUES ('t1', 'One', 'al1'), ('t2', 'Two', 'al1'),"
+                 " ('t3', 'Three', 'al1'), ('t4', 'Four', 'al2'), ('t5', 'Loose', NULL);"
+                 "INSERT INTO playlists (uid, name) VALUES ('p1', 'Mix'), ('p2', 'Unplayed');"
+                 "INSERT INTO playlist_entries (uid, playlist_uid, track_uid, position) VALUES"
+                 " ('e1', 'p1', 't1', 'a'), ('e2', 'p1', 't1', 'b'), ('e3', 'p1', 't5', 'c'), ('e4', 'p2', 't4', 'a');"
+                 "INSERT INTO track_plays (uid, track_uid, node_uid, play_count, last_played_ms) VALUES"
+                 " ('r1', 't1', 'n1', 2, 100), ('r2', 't1', 'n2', 3, 900), ('r3', 't2', 'n1', 1, 200),"
+                 " ('r4', 't3', 'n1', 4, NULL), ('r5', 't4', 'n1', 0, 950), ('r6', 't5', 'n1', 1, 500);") == SQLITE_OK);
+
+  mc_played_list *list = NULL;
+  CHECK(mc_library_list_played(lib, 500, &list) == MC_OK && list && list->count == 2);
+  for (int i = 0; list && i < list->count; i++) {
+    const mc_played_info *p = &list->items[i];
+    if (p->kind == MC_RECENT_ALBUM) {
+      CHECK(strcmp(p->uid, "al1") == 0);
+      CHECK(p->tracks_played == 3 && p->tracks_since == 1 && p->plays == 10 && p->last_played_ms == 900);
+    } else {
+      CHECK(p->kind == MC_RECENT_PLAYLIST);
+      CHECK(strcmp(p->uid, "p1") == 0);
+      CHECK(p->tracks_played == 2 && p->tracks_since == 2 && p->plays == 6 && p->last_played_ms == 900);
+    }
+  }
+  mc_played_list_free(list);
+  mc_library_close(lib);
+}
+
+/* Uids of the recents in order, joined with spaces, into out. */
+static void recent_uids(mc_library *lib, int limit, char *out, size_t n) {
+  out[0] = '\0';
+  mc_recent_list *list = NULL;
+  if (mc_library_list_recents(lib, limit, 0, &list) != MC_OK || !list) return;
+  for (int i = 0; i < list->count; i++) {
+    if (i) strncat(out, " ", n - strlen(out) - 1);
+    strncat(out, list->items[i].uid, n - strlen(out) - 1);
+  }
+  mc_recent_list_free(list);
+}
+
+/* Migration v7 and recents: one entry per item, newest open first, logged for sync, and
+ * items that are gone left out. */
+static void test_recents(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_recents.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "DROP TABLE recents; DROP TABLE aliases; DROP TABLE merge_keys;" V8_FILE_REV V10_SOURCE_SHA V12_CREDITS
+                 V14_FLAGS "PRAGMA user_version = 6;") == SQLITE_OK);
+  mc_library_close(lib);
+
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  db = mc_library_db(lib);
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  CHECK(has_column(db, "recents", "opened_ms"));
+  CHECK(has_column(db, "tracks", "file_rev")); /* v9 */
+  CHECK(has_column(db, "files", "file_rev"));
+
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
+                 "INSERT INTO albums (uid, title, artist_uid) VALUES ('al1', 'Things', 'ar1'),"
+                 " ('al2', 'Untitled', NULL);"
+                 "INSERT INTO playlists (uid, name) VALUES ('p1', 'Mix');"
+                 "INSERT INTO album_groups (uid, name) VALUES ('g1', 'Late');"
+                 "INSERT INTO smart_lists (uid, name, subject, rule) VALUES"
+                 " ('s1', 'Loved', 'tracks', '{}'), ('s2', 'New', 'albums', '{}');") == SQLITE_OK);
+
+  /* Each open is a millisecond or two apart, so the order is by time alone. */
+  const struct {
+    mc_recent_kind kind;
+    const char *uid;
+  } opens[] = {{MC_RECENT_ALBUM, "al1"},    {MC_RECENT_ARTIST, "ar1"},      {MC_RECENT_PLAYLIST, "p1"},
+               {MC_RECENT_PLAYLIST, "s1"},  {MC_RECENT_ALBUM_GROUP, "g1"},  {MC_RECENT_ALBUM_GROUP, "s2"},
+               {MC_RECENT_ALBUM, "al2"},    {MC_RECENT_ALBUM, "al1"}};
+  for (size_t i = 0; i < sizeof opens / sizeof opens[0]; i++) {
+    mc_sleep_ms(2);
+    CHECK(mc_library_record_opened(lib, opens[i].kind, opens[i].uid) == MC_OK);
+  }
+  char uids[256];
+  recent_uids(lib, 0, uids, sizeof uids);
+  CHECK(strcmp(uids, "al1 al2 s2 g1 s1 p1 ar1") == 0);
+  recent_uids(lib, 3, uids, sizeof uids);
+  CHECK(strcmp(uids, "al1 al2 s2") == 0);
+
+  mc_recent_list *list = NULL;
+  CHECK(mc_library_list_recents(lib, 0, 0, &list) == MC_OK && list && list->count == 7);
+  if (list && list->count == 7) {
+    CHECK(list->items[0].kind == MC_RECENT_ALBUM);
+    CHECK_STR(list->items[0].name, "Things");
+    CHECK_STR(list->items[0].artist, "Low");
+    CHECK(list->items[1].artist == NULL);
+    CHECK(list->items[2].kind == MC_RECENT_ALBUM_GROUP && list->items[2].is_smart);
+    CHECK_STR(list->items[2].name, "New");
+    CHECK(list->items[3].kind == MC_RECENT_ALBUM_GROUP && !list->items[3].is_smart);
+    CHECK(list->items[4].kind == MC_RECENT_PLAYLIST && list->items[4].is_smart);
+    CHECK(list->items[6].kind == MC_RECENT_ARTIST);
+    CHECK_STR(list->items[6].name, "Low");
+    CHECK(list->items[0].opened_ms > list->items[1].opened_ms);
+    CHECK(list->items[0].opened_ms >= (int64_t)mc_wall_ms() - 60000);
+  }
+  mc_recent_list_free(list);
+
+  /* Only items that exist, as the kind given. */
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM, "nope") == MC_ERR_NOT_FOUND);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ARTIST, "al1") == MC_ERR_NOT_FOUND);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_PLAYLIST, "s2") == MC_ERR_NOT_FOUND);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM_GROUP, "s1") == MC_ERR_NOT_FOUND);
+  CHECK(mc_library_record_opened(lib, (mc_recent_kind)9, "al1") == MC_ERR_INVALID_ARG);
+  CHECK(query_int(db, "SELECT count(*) FROM recents") == 7);
+
+  /* Reopening only moves the time, and only that is logged. */
+  CHECK(changelog_count(db, "entity = 'recents' AND row_uid = 'al1' AND field = 'kind'") == 1);
+  CHECK(changelog_count(db, "entity = 'recents' AND row_uid = 'al1' AND field = 'opened_ms'") == 2);
+
+  /* An item that's gone is left out, and one of an unknown kind (from a newer version) too. */
+  CHECK(exec(db, "DELETE FROM albums WHERE uid = 'al2';"
+                 "DELETE FROM smart_lists WHERE uid = 's1';"
+                 "INSERT INTO recents (uid, kind, opened_ms) VALUES ('x1', 'radio', 1)") == SQLITE_OK);
+  recent_uids(lib, 0, uids, sizeof uids);
+  CHECK(strcmp(uids, "al1 s2 g1 p1 ar1") == 0);
+
+  CHECK(mc_library_remove_recent(lib, "g1") == MC_OK);
+  CHECK(mc_library_remove_recent(lib, "g1") == MC_ERR_NOT_FOUND);
+  CHECK(changelog_count(db, "entity = 'recents' AND row_uid = 'g1' AND field = '_deleted'") == 1);
+  recent_uids(lib, 0, uids, sizeof uids);
+  CHECK(strcmp(uids, "al1 s2 p1 ar1") == 0);
+  /* Opening it again brings it back, first. */
+  mc_sleep_ms(2);
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM_GROUP, "g1") == MC_OK);
+  recent_uids(lib, 2, uids, sizeof uids);
+  CHECK(strcmp(uids, "g1 al1") == 0);
+
+  CHECK(mc_library_clear_recents(lib) == MC_OK);
+  CHECK(mc_library_clear_recents(lib) == MC_OK);
+  CHECK(query_int(db, "SELECT count(*) FROM recents") == 0);
+  recent_uids(lib, 0, uids, sizeof uids);
+  CHECK(strcmp(uids, "") == 0);
+  mc_library_close(lib);
+}
+
+/* A station in the recents, left by an older version that had radio: left out of the list,
+ * whatever the flags, and kept for peers still on such a version. */
+static void test_station_recents(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_station_recents.d", scratch);
+  remove_db(path);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al1', 'Things');"
+                 "INSERT INTO tracks (uid, album_uid, title) VALUES ('t1', 'al1', 'Sunflower');"
+                 "INSERT INTO files (uid, track_uid, path, format) VALUES ('f1', 't1', 'a/1.flac', 'flac');"
+                 "INSERT INTO recents (uid, kind, opened_ms) VALUES ('t1', 'station', 2), ('al1', 'album', 1);")
+        == SQLITE_OK);
+  for (unsigned flags = 0; flags <= MC_LIST_PLAYABLE; flags++) {
+    mc_recent_list *list = NULL;
+    CHECK(mc_library_list_recents(lib, 0, flags, &list) == MC_OK && list && list->count == 1);
+    if (list && list->count == 1) CHECK_STR(list->items[0].uid, "al1");
+    mc_recent_list_free(list);
+  }
+  CHECK(query_int(db, "SELECT count(*) FROM recents WHERE kind = 'station'") == 1);
+  /* A play log row of the old radio context reads as unknown. */
+  CHECK(exec(db, "INSERT INTO play_events (uid, track_uid, node_uid, started_ms, listened_ms, ended, context,"
+                 " context_uid) VALUES ('p1', 't1', 'peer', 1, 1, 'finished', 'radio', 't1')") == SQLITE_OK);
+  mc_play_log *log = NULL;
+  CHECK(mc_library_list_play_events(lib, 0, INT64_MAX, &log) == MC_OK && log && log->count == 1);
+  if (log && log->count == 1) CHECK(log->items[0].event.context == MC_PLAY_CONTEXT_UNKNOWN);
+  mc_play_log_free(log);
+  mc_library_close(lib);
+}
+
+/* Titles of a playlist's tracks in order, joined with spaces, into out. */
+static void playlist_titles(mc_library *lib, const char *playlist, char *out, size_t n) {
+  out[0] = '\0';
+  mc_track_list *tracks = NULL;
+  if (mc_library_list_playlist_tracks(lib, playlist, &tracks) != MC_OK || !tracks) return;
+  for (int i = 0; i < tracks->count; i++) {
+    if (i) strncat(out, " ", n - strlen(out) - 1);
+    strncat(out, tracks->items[i].title, n - strlen(out) - 1);
+  }
+  mc_track_list_free(tracks);
+}
+
+static void group_titles(mc_library *lib, const char *group, char *out, size_t n) {
+  out[0] = '\0';
+  mc_album_list *albums = NULL;
+  if (mc_library_list_album_group_albums(lib, group, &albums) != MC_OK || !albums) return;
+  for (int i = 0; i < albums->count; i++) {
+    if (i) strncat(out, " ", n - strlen(out) - 1);
+    strncat(out, albums->items[i].title, n - strlen(out) - 1);
+  }
+  mc_album_list_free(albums);
+}
+
+/* Playlists: entries keep the order they were put in, a track can be in twice, and every
+ * change is logged. */
+static void test_playlists(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_playlists.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
+                 "INSERT INTO albums (uid, title, artist_uid, art_hash) VALUES ('al1', 'Secret Name', 'ar1', 'h');"
+                 "INSERT INTO tracks (uid, album_uid, title) VALUES ('t1', 'al1', 'One'), ('t2', 'al1', 'Two'),"
+                 " ('t3', NULL, 'Three');"
+                 "INSERT INTO files (uid, track_uid, path, format) VALUES"
+                 " ('f1', 't1', 'Low/Secret Name/01 One.flac', 'flac');") == SQLITE_OK);
+
+  char mix[MC_UID_STRLEN], other[MC_UID_STRLEN];
+  CHECK(mc_playlist_create(lib, "", mix) == MC_ERR_INVALID_ARG);
+  CHECK(mc_playlist_create(lib, "Mix", mix) == MC_OK);
+  CHECK(mc_playlist_create(lib, "another", other) == MC_OK);
+  CHECK(changelog_count(db, "entity = 'playlists' AND field = 'name'") == 2);
+
+  char e1[MC_UID_STRLEN], e2[MC_UID_STRLEN], e3[MC_UID_STRLEN];
+  CHECK(mc_playlist_append(lib, mix, "t2", e1) == MC_OK);
+  CHECK(mc_playlist_append(lib, mix, "t1", e2) == MC_OK);
+  CHECK(mc_playlist_append(lib, mix, "t2", NULL) == MC_OK); /* again */
+  CHECK(mc_playlist_insert(lib, mix, "t3", NULL, e3) == MC_OK); /* at the start */
+  CHECK(mc_playlist_append(lib, mix, "nope", NULL) == MC_ERR_NOT_FOUND);
+  CHECK(mc_playlist_append(lib, "nope", "t1", NULL) == MC_ERR_NOT_FOUND);
+  char titles[256];
+  playlist_titles(lib, mix, titles, sizeof titles);
+  CHECK(strcmp(titles, "Three Two One Two") == 0);
+
+  CHECK(mc_playlist_insert(lib, mix, "t3", e1, NULL) == MC_OK); /* between e1 and e2 */
+  playlist_titles(lib, mix, titles, sizeof titles);
+  CHECK(strcmp(titles, "Three Two Three One Two") == 0);
+  CHECK(mc_playlist_move(lib, e3, e2) == MC_OK);
+  playlist_titles(lib, mix, titles, sizeof titles);
+  CHECK(strcmp(titles, "Two Three One Three Two") == 0);
+  CHECK(mc_playlist_move(lib, e2, NULL) == MC_OK);
+  playlist_titles(lib, mix, titles, sizeof titles);
+  CHECK(strcmp(titles, "One Two Three Three Two") == 0);
+  CHECK(mc_playlist_remove(lib, e1) == MC_OK);
+  CHECK(mc_playlist_remove(lib, e1) == MC_ERR_NOT_FOUND);
+  playlist_titles(lib, mix, titles, sizeof titles);
+  CHECK(strcmp(titles, "One Three Three Two") == 0);
+  CHECK(changelog_count(db, "entity = 'playlist_entries' AND field = 'position'") == 5 + 2);
+
+  /* Tracks carry their artist, album and cover folder, for the play queue. */
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_playlist_tracks(lib, mix, &tracks) == MC_OK && tracks && tracks->count == 4);
+  if (tracks && tracks->count == 4) {
+    CHECK_STR(tracks->items[0].artist, "Low");
+    CHECK_STR(tracks->items[0].album, "Secret Name");
+    CHECK(tracks->items[0].cover_dir && strstr(tracks->items[0].cover_dir, "Secret Name") &&
+          !strstr(tracks->items[0].cover_dir, "One.flac"));
+    CHECK(tracks->items[1].artist == NULL && tracks->items[1].album == NULL);
+    CHECK(tracks->items[3].cover_dir == NULL); /* no file here */
+    CHECK(strcmp(tracks->items[0].entry_uid, e2) == 0); /* the entries, to move and remove */
+    CHECK(tracks->items[1].entry_uid[0] && strcmp(tracks->items[1].entry_uid, tracks->items[2].entry_uid));
+  }
+  mc_track_list_free(tracks);
+
+  mc_playlist_list *lists = NULL;
+  CHECK(mc_library_list_playlists(lib, 0, &lists) == MC_OK && lists && lists->count == 2);
+  if (lists && lists->count == 2) {
+    CHECK_STR(lists->items[0].name, "another"); /* by name, ignoring case */
+    CHECK(lists->items[0].track_count == 0);
+    CHECK_STR(lists->items[1].name, "Mix");
+    CHECK(lists->items[1].track_count == 4);
+  }
+  mc_playlist_list_free(lists);
+
+  CHECK(mc_playlist_rename(lib, other, "Zzz") == MC_OK);
+  CHECK(mc_playlist_rename(lib, "nope", "Zzz") == MC_ERR_NOT_FOUND);
+  CHECK(mc_playlist_delete(lib, mix) == MC_OK);
+  CHECK(query_int(db, "SELECT count(*) FROM playlist_entries") == 0);
+  CHECK(query_int(db, "SELECT count(*) FROM tracks") == 3);
+  CHECK(changelog_count(db, "entity = 'playlist_entries' AND field = '_deleted'") == 5);
+  mc_library_close(lib);
+}
+
+/* Names of the playlists listed with flags, joined with '|', into out; *hidden gets the
+ * number left out. */
+static void playlist_names(mc_library *lib, unsigned flags, char *out, size_t n, int *hidden) {
+  out[0] = '\0';
+  *hidden = -1;
+  mc_playlist_list *list = NULL;
+  if (mc_library_list_playlists(lib, flags, &list) != MC_OK || !list) return;
+  for (int i = 0; i < list->count; i++) {
+    if (i) strncat(out, "|", n - strlen(out) - 1);
+    strncat(out, list->items[i].name, n - strlen(out) - 1);
+  }
+  *hidden = list->hidden;
+  mc_playlist_list_free(list);
+}
+
+static void smart_names(mc_library *lib, unsigned flags, char *out, size_t n, int *hidden) {
+  out[0] = '\0';
+  *hidden = -1;
+  mc_smart_list *list = NULL;
+  if (mc_library_list_smart(lib, flags, &list) != MC_OK || !list) return;
+  for (int i = 0; i < list->count; i++) {
+    if (i) strncat(out, "|", n - strlen(out) - 1);
+    strncat(out, list->items[i].name, n - strlen(out) - 1);
+  }
+  *hidden = list->hidden;
+  mc_smart_list_free(list);
+}
+
+static void group_names(mc_library *lib, unsigned flags, char *out, size_t n, int *hidden) {
+  out[0] = '\0';
+  *hidden = -1;
+  mc_album_group_list *list = NULL;
+  if (mc_library_list_album_groups(lib, flags, &list) != MC_OK || !list) return;
+  for (int i = 0; i < list->count; i++) {
+    if (i) strncat(out, "|", n - strlen(out) - 1);
+    strncat(out, list->items[i].name, n - strlen(out) - 1);
+  }
+  *hidden = list->hidden;
+  mc_album_group_list_free(list);
+}
+
+/* MC_LIST_PLAYABLE: playlists, smart lists and recents with nothing that has a file on this
+ * device are left out, by the same test that gives a track its path; and they come back as
+ * soon as a file does. An empty playlist is kept, as it's waiting for tracks, and so is a
+ * smart list that picks nothing at all. */
+static void test_playable(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_playable.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  /* t1 has its original here, t3 only a transcode sync brought; t2 and t4 have no file here
+   * (an archive device has them, say). al2 has nothing here. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al1', 'Here'), ('al2', 'Away');"
+                 "INSERT INTO tracks (uid, album_uid, title) VALUES ('t1', 'al1', 'One'), ('t2', 'al1', 'Two'),"
+                 " ('t3', 'al1', 'Three'), ('t4', 'al2', 'Four');"
+                 "INSERT INTO files (uid, track_uid, path, format, source_file_uid, source_peer_uid) VALUES"
+                 " ('f1', 't1', 'Here/01 One.flac', 'flac', NULL, NULL),"
+                 " ('f3', 't3', 'Here/03 Three.opus', 'opus', 'orig3', 'peer');") == SQLITE_OK);
+
+  char all[MC_UID_STRLEN], partly[MC_UID_STRLEN], away[MC_UID_STRLEN], empty[MC_UID_STRLEN];
+  CHECK(mc_playlist_create(lib, "All here", all) == MC_OK);
+  CHECK(mc_playlist_create(lib, "Partly", partly) == MC_OK);
+  CHECK(mc_playlist_create(lib, "Away", away) == MC_OK);
+  CHECK(mc_playlist_create(lib, "Empty", empty) == MC_OK);
+  CHECK(mc_playlist_append(lib, all, "t1", NULL) == MC_OK);
+  CHECK(mc_playlist_append(lib, partly, "t2", NULL) == MC_OK);
+  CHECK(mc_playlist_append(lib, partly, "t3", NULL) == MC_OK);
+  CHECK(mc_playlist_append(lib, away, "t2", NULL) == MC_OK);
+  CHECK(mc_playlist_append(lib, away, "t4", NULL) == MC_OK);
+  CHECK(mc_playlist_append(lib, away, "t2", NULL) == MC_OK);
+
+  /* Without the flag, every playlist, with how many of its entries can play here. */
+  mc_playlist_list *lists = NULL;
+  CHECK(mc_library_list_playlists(lib, 0, &lists) == MC_OK && lists && lists->count == 4 && lists->hidden == 0);
+  if (lists && lists->count == 4) {
+    CHECK_STR(lists->items[0].name, "All here");
+    CHECK(lists->items[0].track_count == 1 && lists->items[0].playable_count == 1);
+    CHECK_STR(lists->items[1].name, "Away");
+    CHECK(lists->items[1].track_count == 3 && lists->items[1].playable_count == 0);
+    CHECK_STR(lists->items[2].name, "Empty");
+    CHECK(lists->items[2].track_count == 0 && lists->items[2].playable_count == 0);
+    CHECK_STR(lists->items[3].name, "Partly");
+    CHECK(lists->items[3].track_count == 2 && lists->items[3].playable_count == 1);
+  }
+  mc_playlist_list_free(lists);
+
+  char names[256];
+  int hidden;
+  playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "All here|Empty|Partly") == 0);
+  CHECK(hidden == 1);
+  /* The same notion as the track list's: the hidden one's tracks all have no path. */
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_playlist_tracks(lib, away, &tracks) == MC_OK && tracks && tracks->count == 3);
+  for (int i = 0; tracks && i < tracks->count; i++) CHECK(tracks->items[i].path == NULL);
+  mc_track_list_free(tracks);
+
+  /* Smart lists: a smart playlist by whether its tracks have files here, a smart album group
+   * by whether its albums do, and one whose rule can't be evaluated is left out too. One that
+   * picks nothing anywhere is empty, not empty here, so it's kept. */
+  CHECK(exec(db, "DELETE FROM smart_lists") == SQLITE_OK); /* v10's examples */
+  char s_uid[MC_UID_STRLEN];
+  CHECK(mc_smart_create(lib, "Ones", MC_SMART_TRACKS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"One\"}}", s_uid) == MC_OK);
+  char s_away[MC_UID_STRLEN];
+  CHECK(mc_smart_create(lib, "Fours", MC_SMART_TRACKS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Four\"}}", s_away) == MC_OK);
+  CHECK(mc_smart_create(lib, "Nothing", MC_SMART_TRACKS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Zero\"}}", s_uid) == MC_OK);
+  CHECK(mc_smart_create(lib, "Here albums", MC_SMART_ALBUMS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Here\"}}", s_uid) == MC_OK);
+  CHECK(mc_smart_create(lib, "Away albums", MC_SMART_ALBUMS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Away\"}}", s_uid) == MC_OK);
+  CHECK(exec(db, "INSERT INTO smart_lists (uid, name, subject, rule) VALUES ('sx', 'Future', 'tracks', '{\"v\":9}')") ==
+        SQLITE_OK);
+  smart_names(lib, 0, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away albums|Fours|Future|Here albums|Nothing|Ones") == 0);
+  CHECK(hidden == 0);
+  smart_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Here albums|Nothing|Ones") == 0);
+  CHECK(hidden == 3);
+
+  /* Recents leave the same ones out with the flag (keeping the empty playlist), and still
+   * fill the limit. */
+  const struct {
+    mc_recent_kind kind;
+    const char *uid;
+  } opens[] = {{MC_RECENT_ALBUM, "al2"}, {MC_RECENT_PLAYLIST, all}, {MC_RECENT_PLAYLIST, s_away},
+               {MC_RECENT_PLAYLIST, partly}, {MC_RECENT_PLAYLIST, empty}, {MC_RECENT_PLAYLIST, away}};
+  for (size_t i = 0; i < sizeof opens / sizeof opens[0]; i++) {
+    mc_sleep_ms(2);
+    CHECK(mc_library_record_opened(lib, opens[i].kind, opens[i].uid) == MC_OK);
+  }
+  mc_recent_list *recents = NULL;
+  CHECK(mc_library_list_recents(lib, 0, 0, &recents) == MC_OK && recents && recents->count == 6);
+  mc_recent_list_free(recents);
+  recents = NULL;
+  CHECK(mc_library_list_recents(lib, 0, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 4);
+  if (recents && recents->count == 4) {
+    CHECK(strcmp(recents->items[0].uid, empty) == 0);
+    CHECK(strcmp(recents->items[1].uid, partly) == 0);
+    CHECK(strcmp(recents->items[2].uid, all) == 0);
+    CHECK_STR(recents->items[3].uid, "al2"); /* other kinds are kept */
+  }
+  mc_recent_list_free(recents);
+  recents = NULL;
+  CHECK(mc_library_list_recents(lib, 2, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 2);
+  if (recents && recents->count == 2) CHECK(strcmp(recents->items[1].uid, partly) == 0);
+  mc_recent_list_free(recents);
+
+  /* A file arriving (sync, an import) brings a playlist back; one going (a delete, sync
+   * removing it) takes it away. Listing again is all it takes. */
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES ('f4', 't4', 'Away/04 Four.flac', 'flac')") ==
+        SQLITE_OK);
+  CHECK(exec(db, "DELETE FROM files WHERE uid = 'f1'") == SQLITE_OK);
+  playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away|Empty|Partly") == 0);
+  CHECK(hidden == 1);
+  smart_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away albums|Fours|Here albums|Nothing") == 0);
+  /* A track that's gone takes its entries with it. */
+  CHECK(exec(db, "DELETE FROM tracks WHERE uid = 't3'") == SQLITE_OK);
+  playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away|Empty") == 0);
+  CHECK(hidden == 2);
+  /* The empty one is hidden once it has a track, if that track has no file here; and one
+   * whose tracks are all gone is empty, so it shows again. */
+  CHECK(mc_playlist_append(lib, empty, "t2", NULL) == MC_OK);
+  CHECK(exec(db, "DELETE FROM tracks WHERE uid = 't1'") == SQLITE_OK);
+  playlist_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "All here|Away") == 0);
+  CHECK(hidden == 2);
+  /* Recents too: Away, Fours (t4 is here now), All here (empty), al2. */
+  CHECK(mc_library_list_recents(lib, 0, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 4);
+  if (recents && recents->count == 4) {
+    CHECK(strcmp(recents->items[0].uid, away) == 0);
+    CHECK(strcmp(recents->items[1].uid, s_away) == 0);
+    CHECK(strcmp(recents->items[2].uid, all) == 0);
+  }
+  mc_recent_list_free(recents);
+
+  CHECK(mc_library_list_playlists(NULL, MC_LIST_PLAYABLE, &lists) == MC_ERR_INVALID_ARG);
+  mc_library_close(lib);
+}
+
+/* Album groups by the same rule as playlists: one with albums, none of them here, is empty
+ * only here (selective sync left it so), and hidden; one with no albums is kept. Recents go by
+ * it too, and smart lists kept for picking nothing go once this device has no files at all,
+ * so that a library with no music keeps its empty pages. */
+static void test_empty_here(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_empty_here.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "DELETE FROM smart_lists") == SQLITE_OK); /* v10's examples */
+  /* al1 has one track of two here, al2 none. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al1', 'Here'), ('al2', 'Away');"
+                 "INSERT INTO tracks (uid, album_uid, title) VALUES ('t1', 'al1', 'One'), ('t2', 'al1', 'Two'),"
+                 " ('t3', 'al2', 'Three');"
+                 "INSERT INTO files (uid, track_uid, path, format) VALUES ('f1', 't1', 'Here/01 One.flac', 'flac');") ==
+        SQLITE_OK);
+
+  char here[MC_UID_STRLEN], partly[MC_UID_STRLEN], away[MC_UID_STRLEN], empty[MC_UID_STRLEN];
+  CHECK(mc_album_group_create(lib, "Here", here) == MC_OK);
+  CHECK(mc_album_group_create(lib, "Partly", partly) == MC_OK);
+  CHECK(mc_album_group_create(lib, "Away", away) == MC_OK);
+  CHECK(mc_album_group_create(lib, "Empty", empty) == MC_OK);
+  CHECK(mc_album_group_add(lib, here, "al1") == MC_OK);
+  CHECK(mc_album_group_add(lib, partly, "al1") == MC_OK);
+  CHECK(mc_album_group_add(lib, partly, "al2") == MC_OK);
+  CHECK(mc_album_group_add(lib, away, "al2") == MC_OK);
+
+  /* Without the flag, every group, with how many of its albums have a file here. */
+  mc_album_group_list *groups = NULL;
+  CHECK(mc_library_list_album_groups(lib, 0, &groups) == MC_OK && groups && groups->count == 4 && groups->hidden == 0);
+  if (groups && groups->count == 4) {
+    CHECK_STR(groups->items[0].name, "Away");
+    CHECK(groups->items[0].album_count == 1 && groups->items[0].playable_count == 0);
+    CHECK_STR(groups->items[1].name, "Empty");
+    CHECK(groups->items[1].album_count == 0 && groups->items[1].playable_count == 0);
+    CHECK_STR(groups->items[2].name, "Here");
+    CHECK(groups->items[2].album_count == 1 && groups->items[2].playable_count == 1);
+    CHECK_STR(groups->items[3].name, "Partly");
+    CHECK(groups->items[3].album_count == 2 && groups->items[3].playable_count == 1);
+  }
+  mc_album_group_list_free(groups);
+
+  char names[256];
+  int hidden;
+  group_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Empty|Here|Partly") == 0);
+  CHECK(hidden == 1);
+
+  /* A limit can leave a rule's picks all away: empty here, though other tracks are here. */
+  char s_uid[MC_UID_STRLEN], s_none[MC_UID_STRLEN], s_group[MC_UID_STRLEN], s_away[MC_UID_STRLEN];
+  CHECK(mc_smart_create(lib, "Nothing", MC_SMART_TRACKS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Zero\"}}", s_none) == MC_OK);
+  CHECK(mc_smart_create(lib, "No albums", MC_SMART_ALBUMS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Zero\"}}", s_group) == MC_OK);
+  CHECK(mc_smart_create(lib, "Last", MC_SMART_TRACKS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"not_empty\"},"
+                        "\"order\":[{\"field\":\"title\",\"dir\":\"asc\"}],\"limit\":1}", s_uid) == MC_OK);
+  CHECK(mc_smart_create(lib, "Away albums", MC_SMART_ALBUMS,
+                        "{\"v\":1,\"match\":{\"field\":\"title\",\"op\":\"is\",\"value\":\"Away\"}}", s_away) == MC_OK);
+  smart_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Last|No albums|Nothing") == 0);
+  CHECK(hidden == 1);
+
+  /* Recents: the group away and the smart group away go, the empty ones stay. */
+  const struct {
+    mc_recent_kind kind;
+    const char *uid;
+  } opens[] = {{MC_RECENT_ALBUM_GROUP, away}, {MC_RECENT_ALBUM_GROUP, s_away}, {MC_RECENT_ALBUM_GROUP, empty},
+               {MC_RECENT_ALBUM_GROUP, s_group}, {MC_RECENT_PLAYLIST, s_none}, {MC_RECENT_ALBUM_GROUP, partly}};
+  for (size_t i = 0; i < sizeof opens / sizeof opens[0]; i++) {
+    mc_sleep_ms(2);
+    CHECK(mc_library_record_opened(lib, opens[i].kind, opens[i].uid) == MC_OK);
+  }
+  mc_recent_list *recents = NULL;
+  CHECK(mc_library_list_recents(lib, 0, 0, &recents) == MC_OK && recents && recents->count == 6);
+  mc_recent_list_free(recents);
+  recents = NULL;
+  CHECK(mc_library_list_recents(lib, 0, MC_LIST_PLAYABLE, &recents) == MC_OK && recents && recents->count == 4);
+  if (recents && recents->count == 4) {
+    CHECK(strcmp(recents->items[0].uid, partly) == 0);
+    CHECK(strcmp(recents->items[1].uid, s_none) == 0);
+    CHECK(strcmp(recents->items[2].uid, s_group) == 0);
+    CHECK(strcmp(recents->items[3].uid, empty) == 0);
+  }
+  mc_recent_list_free(recents);
+
+  /* A file arriving brings the group back. */
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES ('f3', 't3', 'Away/01 Three.flac', 'flac')") ==
+        SQLITE_OK);
+  group_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away|Empty|Here|Partly") == 0);
+  CHECK(hidden == 0);
+
+  /* An album that's gone takes its entries with it, so a group of nothing else is empty. */
+  CHECK(exec(db, "DELETE FROM files WHERE uid = 'f3'") == SQLITE_OK);
+  CHECK(exec(db, "DELETE FROM tracks WHERE album_uid = 'al2'; DELETE FROM albums WHERE uid = 'al2'") == SQLITE_OK);
+  group_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away|Empty|Here|Partly") == 0);
+  CHECK(hidden == 0);
+
+  /* With no files here at all, a group with albums is hidden, an empty one stays, and a smart
+   * list that picks nothing goes: it would be all a library with no music showed. */
+  CHECK(exec(db, "DELETE FROM files") == SQLITE_OK);
+  group_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "Away|Empty") == 0);
+  CHECK(hidden == 2);
+  smart_names(lib, MC_LIST_PLAYABLE, names, sizeof names, &hidden);
+  CHECK(strcmp(names, "") == 0);
+  CHECK(hidden == 4);
+
+  CHECK(mc_library_list_album_groups(NULL, MC_LIST_PLAYABLE, &groups) == MC_ERR_INVALID_ARG);
+  mc_library_close(lib);
+}
+
+/* Artists and album groups for the library's browse views. */
+static void test_artists_and_groups(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_artists.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+
+  /* An empty library has neither. */
+  mc_artist_list *artists = NULL;
+  CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 0);
+  mc_artist_list_free(artists);
+  mc_album_group_list *groups = NULL;
+  CHECK(mc_library_list_album_groups(lib, 0, &groups) == MC_OK && groups && groups->count == 0);
+  mc_album_group_list_free(groups);
+  mc_artist_list_free(NULL);
+  mc_album_group_list_free(NULL);
+
+  /* The Beatles sort under B, Low's old singles album (kind 'singles', from before v12) is an
+   * album like any other, Guest is only on a track and Nobody is on nothing at all. Secret
+   * Name has one track so far, which makes it a single: not counted, but its artist is
+   * listed. */
+  CHECK(exec(db, "INSERT INTO artists (uid, name, sort_name) VALUES"
+                 " ('ar1', 'The Beatles', 'Beatles, The'), ('ar2', 'Low', NULL),"
+                 " ('ar3', 'Guest', NULL), ('ar4', 'abba', NULL), ('ar5', 'Nobody', NULL);"
+                 "INSERT INTO albums (uid, title, artist_uid, kind) VALUES"
+                 " ('al1', 'Abbey Road', 'ar1', 'album'), ('al2', 'Help!', 'ar1', 'album'),"
+                 " ('al3', 'Secret Name', 'ar2', 'album'), ('al4', 'Low Singles', 'ar2', 'singles'),"
+                 " ('al5', 'Arrival', 'ar4', 'album');"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES"
+                 " ('t1', 'al3', 'ar3', 'Duet');") == SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 4);
+  if (artists && artists->count == 4) {
+    CHECK_STR(artists->items[0].name, "abba"); /* by sort name, ignoring case */
+    CHECK(artists->items[0].album_count == 1);
+    CHECK_STR(artists->items[0].sort_name, "abba"); /* no sort name: the name */
+    CHECK_STR(artists->items[1].name, "The Beatles");
+    CHECK_STR(artists->items[1].sort_name, "Beatles, The");
+    CHECK(strcmp(artists->items[1].uid, "ar1") == 0);
+    CHECK(artists->items[1].album_count == 2);
+    CHECK_STR(artists->items[2].name, "Guest");
+    CHECK(artists->items[2].album_count == 0);
+    CHECK_STR(artists->items[3].name, "Low");
+    CHECK(artists->items[3].album_count == 1);
+  }
+  mc_artist_list_free(artists);
+
+  /* An artist's albums: Low's own first (Secret Name, though Guest sings on one of its two
+   * tracks), then where they're on most of the tracks, then least. A track with no artist of
+   * its own is its album artist's. Low Singles now has one track: a single, left out. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title, artist_uid, year) VALUES"
+                 " ('al6', 'Mix', 'ar3', 2001), ('al7', 'Tribute', 'ar3', 1999);"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES"
+                 " ('t2', 'al3', NULL, 'Words'), ('t3', 'al4', 'ar2', 'Over the Ocean'),"
+                 " ('t4', 'al6', 'ar2', 'Canada'), ('t5', 'al6', 'ar3', 'Intro'),"
+                 " ('t6', 'al6', 'ar3', 'Outro'), ('t7', 'al7', 'ar2', 'Anon'),"
+                 " ('t8', 'al7', 'ar2', 'Belong'), ('t9', 'al7', 'ar1', 'Something');") == SQLITE_OK);
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_artist_albums(lib, "ar2", &albums) == MC_OK && albums && albums->count == 3);
+  if (albums && albums->count == 3) {
+    CHECK_STR(albums->items[0].title, "Secret Name");
+    CHECK(albums->items[0].track_count == 2 && albums->items[0].credited_count == 1);
+    CHECK(!albums->items[0].is_singles);
+    CHECK_STR(albums->items[1].title, "Tribute"); /* 2 of 3 */
+    CHECK_STR(albums->items[1].artist, "Guest");
+    CHECK(strcmp(albums->items[1].artist_uid, "ar3") == 0);
+    CHECK_STR(albums->items[2].title, "Mix"); /* 1 of 3 */
+    CHECK(albums->items[2].track_count == 3 && albums->items[2].credited_count == 1);
+  }
+  mc_album_list_free(albums);
+  /* Every album but the single, the empty ones included. */
+  albums = NULL;
+  CHECK(mc_library_list_albums(lib, &albums) == MC_OK && albums && albums->count == 6);
+  for (int i = 0; albums && i < albums->count; i++) {
+    CHECK(strcmp(albums->items[i].uid, "al4") != 0);
+    CHECK(!albums->items[i].is_singles);
+  }
+  mc_album_list_free(albums);
+  albums = NULL;
+  CHECK(mc_library_list_artist_albums(lib, "ar5", &albums) == MC_OK && albums && albums->count == 0);
+  mc_album_list_free(albums);
+  CHECK(mc_library_list_artist_albums(lib, NULL, &albums) == MC_ERR_INVALID_ARG);
+
+  /* Their tracks, by title, from every album; Duet is Guest's, Words Low's by its album. */
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "ar2", &tracks) == MC_OK && tracks && tracks->count == 5);
+  if (tracks && tracks->count == 5) {
+    const char *const titles[] = {"Anon", "Belong", "Canada", "Over the Ocean", "Words"};
+    for (int i = 0; i < 5; i++) CHECK_STR(tracks->items[i].title, titles[i]);
+    CHECK_STR(tracks->items[4].artist, "Low");
+    CHECK(strcmp(tracks->items[4].artist_uid, "ar2") == 0); /* by its album */
+    CHECK_STR(tracks->items[0].album, "Tribute");
+  }
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_artist_tracks(lib, "ar3", &tracks) == MC_OK && tracks && tracks->count == 3);
+  mc_track_list_free(tracks);
+
+  /* Their singles: the track alone on Low Singles, and one with no album at all, by year. A
+   * single on someone else's album is there too when it's theirs. */
+  CHECK(exec(db, "UPDATE albums SET year = 1994 WHERE uid = 'al4';"
+                 "INSERT INTO albums (uid, title, artist_uid, year) VALUES ('al9', 'Promo', 'ar3', 2003);"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title, year) VALUES"
+                 " ('t11', NULL, 'ar2', 'Loose', 1999), ('t12', 'al9', 'ar2', 'Promo Edit', NULL);") ==
+        SQLITE_OK);
+  tracks = NULL;
+  CHECK(mc_library_list_artist_singles(lib, "ar2", &tracks) == MC_OK && tracks && tracks->count == 3);
+  if (tracks && tracks->count == 3) {
+    CHECK_STR(tracks->items[0].title, "Over the Ocean");
+    CHECK(tracks->items[0].year == 1994); /* its album's */
+    CHECK_STR(tracks->items[0].album, "Low Singles");
+    CHECK(strcmp(tracks->items[0].album_uid, "al4") == 0);
+    CHECK_STR(tracks->items[1].title, "Loose");
+    CHECK(tracks->items[1].year == 1999 && !tracks->items[1].album && !tracks->items[1].album_uid[0]);
+    CHECK_STR(tracks->items[1].artist, "Low");
+    CHECK_STR(tracks->items[2].title, "Promo Edit");
+    CHECK(tracks->items[2].year == 2003 && strcmp(tracks->items[2].album_uid, "al9") == 0);
+  }
+  mc_track_list_free(tracks);
+  /* Guest's single album is theirs too, though the track is Low's. */
+  tracks = NULL;
+  CHECK(mc_library_list_artist_singles(lib, "ar3", &tracks) == MC_OK && tracks && tracks->count == 1);
+  if (tracks && tracks->count == 1) CHECK_STR(tracks->items[0].title, "Promo Edit");
+  mc_track_list_free(tracks);
+  CHECK(mc_library_list_artist_singles(lib, NULL, &tracks) == MC_ERR_INVALID_ARG);
+  CHECK(exec(db, "DELETE FROM tracks WHERE uid IN ('t11', 't12'); DELETE FROM albums WHERE uid = 'al9';") ==
+        SQLITE_OK);
+
+  /* The artists with something here: nothing yet, then by the files there are. Words and
+   * Canada are Low's tracks here, and Secret Name their album here; Duet is Guest's track
+   * and Mix (by Canada's file) their album. A second Low with nothing here isn't listed. */
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('ar6', 'Low');"
+                 "INSERT INTO albums (uid, title, artist_uid) VALUES ('al8', 'Other', 'ar6');"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES ('t10', 'al8', NULL, 'Elsewhere');") ==
+        SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 0);
+  mc_artist_list_free(artists);
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES"
+                 " ('f1', 't1', 'a/1.flac', 'flac'), ('f2', 't2', 'a/2.flac', 'flac'),"
+                 " ('f4', 't4', 'b/4.flac', 'flac');") == SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 2);
+  if (artists && artists->count == 2) {
+    CHECK_STR(artists->items[0].name, "Guest");
+    CHECK(artists->items[0].album_count == 1 && artists->items[0].track_count == 1);
+    CHECK(strcmp(artists->items[1].uid, "ar2") == 0);
+    CHECK(artists->items[1].album_count == 1 && artists->items[1].track_count == 2);
+  }
+  mc_artist_list_free(artists);
+  /* With a file here the other Low is listed too, after the first by uid, with its own counts. */
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES ('f10', 't10', 'c/10.flac', 'flac')") ==
+        SQLITE_OK);
+  artists = NULL;
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists && artists->count == 3);
+  if (artists && artists->count == 3) {
+    CHECK(strcmp(artists->items[1].uid, "ar2") == 0 && artists->items[1].track_count == 2);
+    CHECK(strcmp(artists->items[2].uid, "ar6") == 0); /* listed for its single */
+    CHECK(artists->items[2].album_count == 0 && artists->items[2].track_count == 1);
+  }
+  mc_artist_list_free(artists);
+  CHECK(mc_library_list_artists_here(NULL, &artists) == MC_ERR_INVALID_ARG);
+
+  /* Groups by name, ignoring case, each with its number of albums. */
+  CHECK(exec(db, "INSERT INTO album_groups (uid, name) VALUES ('g1', 'road trip'), ('g2', 'Empty'),"
+                 " ('g3', 'Beatles');"
+                 "INSERT INTO album_group_entries (uid, group_uid, album_uid, position) VALUES"
+                 " ('e1', 'g1', 'al1', 'a0'), ('e2', 'g1', 'al3', 'a1'), ('e3', 'g1', 'al5', 'a2'),"
+                 " ('e4', 'g3', 'al1', 'a0'), ('e5', 'g3', 'al2', 'a1');"
+                 "INSERT INTO smart_lists (uid, name, subject, rule) VALUES"
+                 " ('s1', 'Recent', 'albums', '{}');") == SQLITE_OK);
+  groups = NULL;
+  CHECK(mc_library_list_album_groups(lib, 0, &groups) == MC_OK && groups && groups->count == 3);
+  if (groups && groups->count == 3) {
+    CHECK_STR(groups->items[0].name, "Beatles");
+    CHECK(groups->items[0].album_count == 2);
+    CHECK_STR(groups->items[1].name, "Empty");
+    CHECK(groups->items[1].album_count == 0);
+    CHECK_STR(groups->items[2].name, "road trip");
+    CHECK(strcmp(groups->items[2].uid, "g1") == 0);
+    CHECK(groups->items[2].album_count == 3);
+  }
+  mc_album_group_list_free(groups);
+  mc_library_close(lib);
+}
+
+/* Making and changing album groups, and listing a group's albums. */
+static void test_album_group_edits(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_groups.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('ar1', 'Low');"
+                 "INSERT INTO albums (uid, title, artist_uid) VALUES ('al1', 'One', 'ar1'), ('al2', 'Two', 'ar1'),"
+                 " ('al3', 'Three', 'ar1');") == SQLITE_OK);
+
+  char uid[MC_UID_STRLEN], other[MC_UID_STRLEN];
+  CHECK(mc_album_group_create(lib, "", uid) == MC_ERR_INVALID_ARG);
+  CHECK(mc_album_group_create(lib, "Road trip", uid) == MC_OK && strlen(uid) == MC_UID_STRLEN - 1);
+  CHECK(mc_album_group_create(lib, "Other", other) == MC_OK);
+  CHECK(changelog_count(db, "entity = 'album_groups' AND field = 'name'") == 2);
+
+  /* Added at the end, each album once. */
+  CHECK(mc_album_group_add(lib, uid, "al2") == MC_OK);
+  CHECK(mc_album_group_add(lib, uid, "al1") == MC_OK);
+  CHECK(mc_album_group_add(lib, uid, "al3") == MC_OK);
+  CHECK(mc_album_group_add(lib, uid, "al1") == MC_OK);
+  CHECK(mc_album_group_add(lib, uid, "nope") == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_group_add(lib, "nope", "al1") == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_group_add(lib, other, "al1") == MC_OK);
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_album_group_albums(lib, uid, &albums) == MC_OK && albums && albums->count == 3);
+  if (albums && albums->count == 3) {
+    CHECK_STR(albums->items[0].title, "Two");
+    CHECK_STR(albums->items[0].artist, "Low");
+    CHECK_STR(albums->items[1].title, "One");
+    CHECK_STR(albums->items[2].title, "Three");
+  }
+  mc_album_list_free(albums);
+  albums = NULL;
+  CHECK(mc_library_list_album_group_albums(lib, "nope", &albums) == MC_ERR_NOT_FOUND && !albums);
+
+  /* An album sync added twice is listed and counted once, and removed for good. */
+  CHECK(exec(db, "INSERT INTO album_group_entries (uid, group_uid, album_uid, position)"
+                 " SELECT 'dup', group_uid, album_uid, 'zz' FROM album_group_entries"
+                 " WHERE album_uid = 'al2' AND group_uid = (SELECT uid FROM album_groups WHERE name = 'Road trip')")
+        == SQLITE_OK);
+  mc_album_group_list *groups = NULL;
+  CHECK(mc_library_list_album_groups(lib, 0, &groups) == MC_OK && groups && groups->count == 2);
+  if (groups && groups->count == 2) {
+    CHECK_STR(groups->items[1].name, "Road trip");
+    CHECK(groups->items[1].album_count == 3);
+  }
+  mc_album_group_list_free(groups);
+  CHECK(mc_library_list_album_group_albums(lib, uid, &albums) == MC_OK && albums && albums->count == 3);
+  if (albums && albums->count == 3) CHECK_STR(albums->items[0].title, "Two");
+  mc_album_list_free(albums);
+  /* Moves change only positions; the album sync added twice moves whole. */
+  char titles[64];
+  int positions = changelog_count(db, "entity = 'album_group_entries' AND field = 'position'");
+  int logged = changelog_count(db, "entity = 'album_group_entries'");
+  CHECK(mc_album_group_move(lib, uid, "al2", "al3") == MC_OK);
+  group_titles(lib, uid, titles, sizeof titles);
+  CHECK(strcmp(titles, "One Three Two") == 0);
+  CHECK(changelog_count(db, "entity = 'album_group_entries' AND field = 'position'") == positions + 2);
+  CHECK(changelog_count(db, "entity = 'album_group_entries'") == logged + 2);
+  CHECK(mc_album_group_move(lib, uid, "al3", NULL) == MC_OK);
+  group_titles(lib, uid, titles, sizeof titles);
+  CHECK(strcmp(titles, "Three One Two") == 0);
+  CHECK(mc_album_group_move(lib, uid, "al3", "al1") == MC_OK);
+  group_titles(lib, uid, titles, sizeof titles);
+  CHECK(strcmp(titles, "One Three Two") == 0);
+  CHECK(mc_album_group_move(lib, uid, "al2", NULL) == MC_OK);
+  group_titles(lib, uid, titles, sizeof titles);
+  CHECK(strcmp(titles, "Two One Three") == 0);
+  CHECK(mc_album_group_move(lib, uid, "al2", "al2") == MC_ERR_INVALID_ARG);
+  CHECK(mc_album_group_move(lib, uid, "nope", NULL) == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_group_move(lib, uid, "al2", "nope") == MC_ERR_NOT_FOUND);
+  CHECK(mc_album_group_move(lib, other, "al2", NULL) == MC_ERR_NOT_FOUND);
+  group_titles(lib, uid, titles, sizeof titles);
+  CHECK(strcmp(titles, "Two One Three") == 0);
+
+  CHECK(mc_album_group_remove(lib, uid, "al2") == MC_OK);
+  CHECK(mc_album_group_remove(lib, uid, "al2") == MC_ERR_NOT_FOUND);
+  CHECK(mc_library_list_album_group_albums(lib, uid, &albums) == MC_OK && albums && albums->count == 2);
+  if (albums && albums->count == 2) CHECK_STR(albums->items[0].title, "One");
+  mc_album_list_free(albums);
+
+  /* Rename and delete; the other group and the albums stay. */
+  CHECK(mc_album_group_rename(lib, uid, "") == MC_ERR_INVALID_ARG);
+  CHECK(mc_album_group_rename(lib, uid, "Holiday") == MC_OK);
+  CHECK(mc_album_group_rename(lib, "nope", "X") == MC_ERR_NOT_FOUND);
+  CHECK(query_int(db, "SELECT count(*) FROM album_groups WHERE name = 'Holiday'") == 1);
+  CHECK(mc_album_group_delete(lib, uid) == MC_OK);
+  CHECK(mc_album_group_delete(lib, uid) == MC_ERR_NOT_FOUND);
+  CHECK(query_int(db, "SELECT count(*) FROM album_group_entries") == 1);
+  CHECK(query_int(db, "SELECT count(*) FROM albums") == 3);
+
+  /* Opening one puts it in the recents. */
+  mc_recent_list *recents = NULL;
+  CHECK(mc_library_record_opened(lib, MC_RECENT_ALBUM_GROUP, other) == MC_OK);
+  CHECK(mc_library_list_recents(lib, 0, 0, &recents) == MC_OK && recents && recents->count == 1);
+  if (recents && recents->count == 1) {
+    CHECK(recents->items[0].kind == MC_RECENT_ALBUM_GROUP && !recents->items[0].is_smart);
+    CHECK_STR(recents->items[0].name, "Other");
+  }
+  mc_recent_list_free(recents);
+  mc_library_close(lib);
+}
+
+/* What a group's Play queues: its albums in the order given, each one's tracks in order,
+ * past any album with nothing here. */
+static void test_albums_tracks(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_albums_tracks.d", scratch);
+  remove_db(path);
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+  /* al1's numbers are out of insertion order; al2 has no file here; al3 only its second track. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al1', 'One'), ('al2', 'Away'), ('al3', 'Three');"
+                 "INSERT INTO tracks (uid, album_uid, title, track_no) VALUES ('t12', 'al1', 'B', 2),"
+                 " ('t11', 'al1', 'A', 1), ('t21', 'al2', 'C', 1), ('t31', 'al3', 'D', 1), ('t32', 'al3', 'E', 2);"
+                 "INSERT INTO files (uid, track_uid, path, format) VALUES ('f11', 't11', 'One/1.flac', 'flac'),"
+                 " ('f12', 't12', 'One/2.flac', 'flac'), ('f32', 't32', 'Three/2.flac', 'flac');") == SQLITE_OK);
+
+  const char *const order[] = {"al3", "al2", "nope", "al1"};
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_albums_tracks(lib, order, 4, &tracks) == MC_OK && tracks && tracks->count == 3);
+  if (tracks && tracks->count == 3) {
+    CHECK_STR(tracks->items[0].uid, "t32");
+    CHECK_STR(tracks->items[0].album_uid, "al3");
+    CHECK_STR(tracks->items[1].uid, "t11");
+    CHECK_STR(tracks->items[1].album_uid, "al1");
+    CHECK_STR(tracks->items[2].uid, "t12");
+    CHECK(tracks->items[0].path && tracks->items[2].path);
+    CHECK_STR(tracks->items[2].title, "B");
+  }
+  mc_track_list_free(tracks);
+
+  /* A group's own order, as a frontend reads it to play the group. */
+  char group[MC_UID_STRLEN];
+  CHECK(mc_album_group_create(lib, "Both", group) == MC_OK);
+  CHECK(mc_album_group_add(lib, group, "al3") == MC_OK);
+  CHECK(mc_album_group_add(lib, group, "al2") == MC_OK);
+  CHECK(mc_album_group_add(lib, group, "al1") == MC_OK);
+  mc_album_list *albums = NULL;
+  CHECK(mc_library_list_album_group_albums(lib, group, &albums) == MC_OK && albums && albums->count == 3);
+  if (albums && albums->count == 3) {
+    const char *uids[3] = {albums->items[0].uid, albums->items[1].uid, albums->items[2].uid};
+    tracks = NULL;
+    CHECK(mc_library_list_albums_tracks(lib, uids, 3, &tracks) == MC_OK && tracks && tracks->count == 3);
+    if (tracks && tracks->count == 3) {
+      CHECK_STR(tracks->items[0].uid, "t32");
+      CHECK_STR(tracks->items[2].uid, "t12");
+    }
+    mc_track_list_free(tracks);
+  }
+  mc_album_list_free(albums);
+
+  /* Nothing to play is an empty list, not an error. */
+  const char *const away[] = {"al2"};
+  tracks = NULL;
+  CHECK(mc_library_list_albums_tracks(lib, away, 1, &tracks) == MC_OK && tracks && tracks->count == 0);
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_albums_tracks(lib, NULL, 0, &tracks) == MC_OK && tracks && tracks->count == 0);
+  mc_track_list_free(tracks);
+  CHECK(mc_library_list_albums_tracks(lib, NULL, 1, &tracks) == MC_ERR_INVALID_ARG);
+  mc_library_close(lib);
+}
+
+int main(int argc, char **argv) {
+  /* The library is a folder; the database is library.db inside it. */
+  char path[1024], file[1100];
+  snprintf(path, sizeof path, "%s/test_library.d", argc > 1 ? argv[1] : ".");
+  const char *const leftovers[] = {MC_LIBRARY_DB_NAME, MC_LIBRARY_DB_NAME "-wal",
+                                   MC_LIBRARY_DB_NAME "-shm"};
+  for (int i = 0; i < 3; i++) {
+    snprintf(file, sizeof file, "%s/%s", path, leftovers[i]);
+    remove(file);
+  }
+
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return TEST_RESULT();
+
+  CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+  CHECK(query_int(mc_library_db(lib), "SELECT count(*) FROM sqlite_master WHERE"
+                                      " name = 'changelog_origin'") == 1);
+  char node[MC_UID_STRLEN];
+  strcpy(node, mc_library_node_uid(lib));
+  char library_uid[MC_UID_STRLEN];
+  strcpy(library_uid, mc_library_uid(lib));
+  CHECK(strlen(library_uid) == MC_UID_STRLEN - 1);
+  CHECK(strlen(node) == MC_UID_STRLEN - 1);
+
+  int64_t n = -1;
+  CHECK(mc_library_count(lib, MC_ENTITY_ALBUMS, &n) == MC_OK && n == 0);
+
+  /* Local edits are logged field by field. */
+  sqlite3 *db = mc_library_db(lib);
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('a1', 'Low')") == SQLITE_OK);
+  CHECK(changelog_count(db, "row_uid = 'a1' AND field = 'name'") == 1);
+  CHECK(changelog_count(db, "row_uid = 'a1' AND field = 'sort_name'") == 0); /* NULL: skipped */
+
+  CHECK(exec(db, "UPDATE artists SET name = 'Low' WHERE uid = 'a1'") == SQLITE_OK);
+  CHECK(changelog_count(db, "row_uid = 'a1'") == 1); /* unchanged value: nothing logged */
+  CHECK(exec(db, "UPDATE artists SET sort_name = 'Low' WHERE uid = 'a1'") == SQLITE_OK);
+  CHECK(changelog_count(db, "row_uid = 'a1'") == 2);
+
+  CHECK(exec(db, "DELETE FROM artists WHERE uid = 'a1'") == SQLITE_OK);
+  CHECK(changelog_count(db, "row_uid = 'a1' AND field = '_deleted'") == 1);
+
+  /* Timestamps are strictly increasing and carry this node as origin. */
+  CHECK(changelog_count(db, "origin_uid <> mc_node_uid()") == 0);
+  CHECK(changelog_count(db, "hlc <= (SELECT max(hlc) FROM changelog c2 WHERE c2.seq < changelog.seq)") == 0);
+
+  /* Changes being applied from a peer are not re-logged by the triggers. */
+  lib->applying_remote = 1;
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('a2', 'Duster')") == SQLITE_OK);
+  lib->applying_remote = 0;
+  CHECK(changelog_count(db, "row_uid = 'a2'") == 0);
+
+  /* Play counts are logged like any other tracked table and go when the track does. */
+  CHECK(exec(db, "INSERT INTO tracks (uid, title) VALUES ('t1', 'Starfire')") == SQLITE_OK);
+  CHECK(exec(db, "INSERT INTO track_plays (uid, track_uid, node_uid, play_count)"
+                 " VALUES ('p1', 't1', mc_node_uid(), 1)") == SQLITE_OK);
+  CHECK(exec(db, "UPDATE track_plays SET play_count = play_count + 1 WHERE uid = 'p1'") == SQLITE_OK);
+  CHECK(changelog_count(db, "row_uid = 'p1' AND field = 'play_count' AND value = 2") == 1);
+  CHECK(exec(db, "DELETE FROM tracks WHERE uid = 't1'") == SQLITE_OK);
+  CHECK(changelog_count(db, "row_uid = 'p1' AND field = '_deleted'") == 1);
+
+  /* An album's tracks come back by disc, then number (unnumbered last), with an absolute
+   * path to the original file rather than a transcode. */
+  CHECK(exec(db, "INSERT INTO albums (uid, title) VALUES ('al1', 'Secret Name')") == SQLITE_OK);
+  CHECK(exec(db, "INSERT INTO tracks (uid, album_uid, title, track_no, disc_no, duration_ms) VALUES"
+                 " ('t2', 'al1', 'Bright', 2, 1, 120000), ('t3', 'al1', 'Starfire', 1, 1, 200500),"
+                 " ('t4', 'al1', 'Hidden', NULL, 1, 1000), ('t5', 'al1', 'Disc Two', 1, 2, 5000),"
+                 " ('t6', NULL, 'Elsewhere', 1, 1, 1)") == SQLITE_OK);
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format, source_file_uid) VALUES"
+                 " ('f1', 't3', 'Low/Secret Name/01 Starfire.opus', 'opus', 'orig'),"
+                 " ('f2', 't3', 'Low/Secret Name/01 Starfire.flac', 'flac', NULL)") == SQLITE_OK);
+  mc_track_list *tracks = NULL;
+  CHECK(mc_library_list_album_tracks(lib, "al1", &tracks) == MC_OK && tracks && tracks->count == 4);
+  if (tracks && tracks->count == 4) {
+    CHECK_STR(tracks->items[0].title, "Starfire");
+    CHECK_STR(tracks->items[1].title, "Bright");
+    CHECK_STR(tracks->items[2].title, "Hidden");
+    CHECK_STR(tracks->items[3].title, "Disc Two");
+    CHECK(tracks->items[0].track_no == 1 && tracks->items[0].disc_no == 1);
+    CHECK(tracks->items[0].duration_ms == 200500);
+    CHECK(tracks->items[2].track_no == 0);
+    CHECK(tracks->items[0].path && strstr(tracks->items[0].path, "Starfire.flac"));
+    CHECK(tracks->items[1].path == NULL);
+    CHECK(tracks->items[0].entry_uid[0] == '\0');
+  }
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_album_tracks(lib, "nope", &tracks) == MC_OK && tracks && tracks->count == 0);
+  mc_track_list_free(tracks);
+  /* One track by uid: once though it has two files, and with its album; none if it's gone. */
+  tracks = NULL;
+  CHECK(mc_library_list_track(lib, "t3", &tracks) == MC_OK && tracks && tracks->count == 1);
+  if (tracks && tracks->count == 1) {
+    CHECK_STR(tracks->items[0].uid, "t3");
+    CHECK_STR(tracks->items[0].title, "Starfire");
+    CHECK_STR(tracks->items[0].album_uid, "al1");
+    CHECK(tracks->items[0].path && strstr(tracks->items[0].path, "Starfire.flac"));
+  }
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_track(lib, "t6", &tracks) == MC_OK && tracks && tracks->count == 1);
+  if (tracks && tracks->count == 1) CHECK(tracks->items[0].album_uid[0] == '\0' && !tracks->items[0].path);
+  mc_track_list_free(tracks);
+  tracks = NULL;
+  CHECK(mc_library_list_track(lib, "nope", &tracks) == MC_OK && tracks && tracks->count == 0);
+  mc_track_list_free(tracks);
+  CHECK(mc_library_list_track(NULL, "t3", &tracks) == MC_ERR_INVALID_ARG);
+  CHECK(mc_library_list_track(lib, NULL, &tracks) == MC_ERR_INVALID_ARG);
+
+  mc_library_close(lib);
+
+  /* Reopening keeps the node identity and doesn't re-run migrations. */
+  lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (lib) {
+    CHECK(strcmp(mc_library_node_uid(lib), node) == 0);
+    CHECK(strcmp(mc_library_uid(lib), library_uid) == 0);
+    CHECK(mc_library_schema_version(lib) == mc_library_schema_latest());
+    CHECK(mc_library_count(lib, MC_ENTITY_ARTISTS, &n) == MC_OK && n == 1);
+    mc_library_close(lib);
+  }
+
+  /* File paths are stored relative to the library folder, with '/'. A trailing separator
+   * on the folder doesn't matter. */
+  snprintf(file, sizeof file, "%s/", path);
+  lib = NULL;
+  CHECK(mc_library_open(file, &lib) == MC_OK);
+  if (lib) {
+    CHECK(strcmp(mc_library_dir(lib), path) == 0);
+    char abs[1200];
+    snprintf(abs, sizeof abs, "%s%cLow%cSecret Name (1999)%c01 Starfire.flac", path, MC_PATH_SEP,
+             MC_PATH_SEP, MC_PATH_SEP);
+    char *rel = mc_library_relpath(lib, abs);
+    CHECK_STR(rel, "Low/Secret Name (1999)/01 Starfire.flac");
+    char *back = rel ? mc_library_abspath(lib, rel) : NULL;
+    CHECK(back && strcmp(back, abs) == 0);
+    mc_free(rel);
+    mc_free(back);
+
+    CHECK(mc_library_relpath(lib, "/somewhere/else/song.flac") == NULL);
+    CHECK(mc_library_relpath(lib, path) == NULL);
+    snprintf(abs, sizeof abs, "%s-other%csong.flac", path, MC_PATH_SEP); /* sibling, same prefix */
+    CHECK(mc_library_relpath(lib, abs) == NULL);
+    mc_library_close(lib);
+  }
+
+  test_identity(argc > 1 ? argv[1] : ".");
+  test_migration_v4(argc > 1 ? argv[1] : ".");
+  test_migration_v5(argc > 1 ? argv[1] : ".");
+  test_migration_v6(argc > 1 ? argv[1] : ".");
+  test_recents(argc > 1 ? argv[1] : ".");
+  test_station_recents(argc > 1 ? argv[1] : ".");
+  test_played(argc > 1 ? argv[1] : ".");
+  test_migration_v10(argc > 1 ? argv[1] : ".");
+  test_migration_v12(argc > 1 ? argv[1] : ".");
+  test_migration_v13(argc > 1 ? argv[1] : ".");
+  test_migration_v15(argc > 1 ? argv[1] : ".");
+  test_migration_v17(argc > 1 ? argv[1] : ".");
+  test_migration_v18(argc > 1 ? argv[1] : ".");
+  test_play_log(argc > 1 ? argv[1] : ".");
+  test_credited_artists(argc > 1 ? argv[1] : ".");
+  test_artist_cover(argc > 1 ? argv[1] : ".");
+  test_playlists(argc > 1 ? argv[1] : ".");
+  test_playable(argc > 1 ? argv[1] : ".");
+  test_empty_here(argc > 1 ? argv[1] : ".");
+  test_artists_and_groups(argc > 1 ? argv[1] : ".");
+  test_album_group_edits(argc > 1 ? argv[1] : ".");
+  test_albums_tracks(argc > 1 ? argv[1] : ".");
+  return TEST_RESULT();
+}

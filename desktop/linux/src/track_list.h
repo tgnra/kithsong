@@ -1,0 +1,78 @@
+/* The track list: the selected album's or playlist's tracks, in the pane beside the grid. Behind
+ * the header is the art's colour as soft glows (art_backdrop.h), and the pane's accent is the
+ * same art's (art_accent.h). On albums with more than one disc the numbers read "2-5"; in a
+ * playlist they count its places. A smart playlist's tracks can't be moved or removed.
+ *
+ * A GtkListView, so long albums stay cheap. Only one list exists at a time.
+ */
+#ifndef KITHSONG_TRACK_LIST_H
+#define KITHSONG_TRACK_LIST_H
+
+#include <gtk/gtk.h>
+
+#include "album_grid.h"
+#include "kithcore/kithcore.h"
+
+/* What the user asks of the list. The list changes nothing itself: the callee does, then
+ * reloads it with track_list_show(). Any may be NULL. */
+typedef struct track_list_callbacks {
+  void (*play)(void *user, int index);
+  /* The header's Play and Shuffle: every track, from the first in order (shuffle off), or
+   * shuffled (shuffle on). */
+  void (*play_all)(void *user, gboolean shuffled);
+  void (*close)(void *user);
+  void (*add_to_playlist)(void *user, const char *track_uid, gboolean here); /* here: it has a file here */
+  /* In the shown playlist: take an entry out, or move it to after after_entry_uid (NULL =
+   * to the start). */
+  void (*remove)(void *user, const char *entry_uid);
+  void (*move)(void *user, const char *entry_uid, const char *after_entry_uid);
+  /* The header menu's Rename... and Delete Playlist..., for the shown playlist (smart or
+   * not), and a smart one's Edit rules.... */
+  void (*rename_playlist)(void *user);
+  void (*delete_playlist)(void *user);
+  void (*edit_rules)(void *user);
+  /* The track menu's Delete from Library... (see delete_dialog.h). */
+  void (*delete_track)(void *user, const char *track_uid, const char *title);
+  /* The track menu's Edit... (see edit_dialog.h). */
+  void (*edit_track)(void *user, const char *track_uid);
+  /* The Reshuffle button, for the shown smart playlist. */
+  void (*reshuffle)(void *user);
+  /* The track menu's Go to album, with the track to select there, and Go to artist. Go to
+   * album isn't offered on the album shown, or for a track with no album or a single, whose
+   * album the album grid leaves out (an album of one track). */
+  void (*go_to_album)(void *user, const char *album_uid, const char *track_uid);
+  void (*go_to_artist)(void *user, const char *artist_uid);
+  void *user;
+} track_list_callbacks;
+
+GtkWidget *track_list_new(const track_list_callbacks *cb);
+
+/* Shows an album's or playlist's tracks, or nothing for NULL. Showing the same one again
+ * reloads it (after an import, say), keeping the selected track. */
+void track_list_show(mc_library *lib, AlbumItem *album);
+
+/* The album or playlist shown (borrowed), or NULL. */
+AlbumItem *track_list_album(void);
+
+/* The shown tracks, in order, for the play queue. Valid until the list next changes. */
+typedef struct track_list_item {
+  const char *uid;
+  const char *title;
+  int duration_ms;  /* 0 if unknown */
+  const char *path; /* NULL if the track has no file on this device */
+  const char *artist, *album; /* NULL if unknown */
+  const char *cover_dir;      /* the album folder, or NULL if it has no cover */
+} track_list_item;
+int track_list_count(void);
+track_list_item track_list_item_at(int i);
+
+/* Selects the shown track with uid, focused and scrolled into view, if it's there. */
+void track_list_select(const char *uid);
+
+/* Marks the playing track, by uid, or none for NULL. It stays marked while other albums are
+ * shown, and when its album is shown again. */
+void track_list_set_playing(const char *uid);
+
+GtkWidget *track_list_scrolled(void);
+
+#endif

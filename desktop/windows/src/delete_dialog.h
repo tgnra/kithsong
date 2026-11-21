@@ -1,0 +1,28 @@
+/* Deleting albums and tracks from the library (kithcore/delete.h), after asking in the
+ * playlist dialogs' Delete dialog. Afterwards a message box says if any track stayed because
+ * its file couldn't go to the Recycle Bin. Restoring is mc_delete_restore(), which main.c runs
+ * at startup and whenever the window is activated.
+ */
+#ifndef KITHSONG_DELETE_DIALOG_H
+#define KITHSONG_DELETE_DIALOG_H
+
+#include <windows.h>
+
+#include "kithcore/kithcore.h"
+
+/* Where deleted.db goes (the config dir, UTF-8; copied), and what to do just before files
+ * go: before_delete (may be NULL) gets the plan, e.g. to stop playing a track in it, whose
+ * open file couldn't be moved. Call once at startup. */
+void delete_dialog_init(const char *config_dir, void (*before_delete)(const mc_delete_plan *plan));
+
+/* Asks, then deletes uid (an album or track, by kind) named name. owner is the main
+ * window. Returns TRUE if the library changed. */
+BOOL delete_dialog(HWND owner, mc_library *lib, mc_delete_kind kind, const char *uid, const wchar_t *name);
+
+/* The warning strip's Remove from Library: names the tracks missing for good
+ * (mc_sync_get_problems()), asks, with Cancel the default, then removes them from every device
+ * (mc_sync_remove_lost(), which goes only by what's lost at that moment), and says if any stayed.
+ * Returns TRUE if the library changed. */
+BOOL delete_dialog_lost(HWND owner, mc_library *lib, mc_sync *sync);
+
+#endif

@@ -1,0 +1,31 @@
+/* Renaming and deleting a playlist (or a smart list), from the track list's header menu.
+ * Rename stays insensitive while the name is blank or unchanged.
+ *
+ * Needs libadwaita 1.5 (AdwAlertDialog).
+ */
+#ifndef KITHSONG_PLAYLIST_DIALOGS_H
+#define KITHSONG_PLAYLIST_DIALOGS_H
+
+#include <adwaita.h>
+
+#include "kithcore/kithcore.h"
+
+/* Each asks over parent (any widget in the main window) about the playlist uid, currently
+ * called name, and calls changed once it's renamed or deleted. A failure is reported in a
+ * dialog of its own, and changed isn't called. */
+void playlist_rename_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
+                             void (*changed)(void *user), void *user);
+void playlist_delete_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
+                             void (*changed)(void *user), void *user);
+/* New playlist, from the Playlists page's +: the Rename dialog's twin, titled New playlist,
+ * with Create. Makes an empty playlist and calls created with its uid. */
+void playlist_create_present(GtkWidget *parent, mc_library *lib, void (*created)(void *user, const char *uid),
+                             void *user);
+/* Rename and Delete for a smart playlist or smart album group (subject says which), titled
+ * Rename smart playlist and so on. Its rule is the editor's (smart_editor.h). */
+void smart_rename_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
+                          mc_smart_subject subject, void (*changed)(void *user), void *user);
+void smart_delete_present(GtkWidget *parent, mc_library *lib, const char *uid, const char *name,
+                          mc_smart_subject subject, void (*changed)(void *user), void *user);
+
+#endif

@@ -1,0 +1,83 @@
+enable_language(RC)
+
+# The manifest, version resource and build_info.h carry PROJECT_VERSION or
+# KITHSONG_BUILD_NUMBER, so they're configured.
+set(KITHSONG_MANIFEST "${CMAKE_CURRENT_BINARY_DIR}/kithsong.manifest")
+set(KITHSONG_ICON "${PROJECT_SOURCE_DIR}/packaging/icons/kithsong.ico")
+set(KITHSONG_WORDMARK "${PROJECT_SOURCE_DIR}/packaging/icons/kithsong-wordmark.png")
+set(KITHSONG_WORDMARK_DARK "${PROJECT_SOURCE_DIR}/packaging/icons/kithsong-wordmark-dark.png")
+configure_file(src/kithsong.manifest.in "${KITHSONG_MANIFEST}" @ONLY)
+configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/version.rc" @ONLY)
+configure_file(src/build_info.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.h" @ONLY)
+
+add_executable(kithsong WIN32
+  src/main.c
+  src/add_device.c
+  src/add_to_playlist.c
+  src/album_grid.c
+  src/artist_view.c
+  src/canvas.c
+  src/cover.c
+  src/delete_dialog.c
+  src/device_view.c
+  src/dlg_template.c
+  src/drag.c
+  src/edit_dialog.c
+  src/firewall.c
+  src/firewall_banner.c
+  src/first_run.c
+  src/home_view.c
+  src/import_view.c
+  src/issue_dialog.c
+  src/item_menu.c
+  src/log_file.c
+  src/media_controls.c
+  src/move_library.c
+  src/net_monitor.c
+  src/now_playing.c
+  src/pair_dialog.c
+  src/pick_folder.c
+  src/playback.c
+  src/playlist_dialogs.c
+  src/prompt_dialog.c
+  src/queue_popup.c
+  src/remove_here.c
+  src/scrobble_service.c
+  src/scroller.c
+  src/search_view.c
+  src/settings_view.c
+  src/sidebar.c
+  src/smart_editor.c
+  src/stats_dialog.c
+  src/sync_bridge.c
+  src/taskbar.c
+  src/testing_view.c
+  src/theme.c
+  src/track_list.c
+  src/track_menu.c
+  src/uia.c
+  src/volume_popup.c
+  src/waiting_banner.c
+  src/wstr.c
+  src/app.rc
+  "${CMAKE_CURRENT_BINARY_DIR}/version.rc")
+# version.rc lives in the build dir but includes resource.h; build_info.h is generated.
+target_include_directories(kithsong PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/version.rc" APPEND PROPERTY
+  OBJECT_DEPENDS "${KITHSONG_MANIFEST}" "${KITHSONG_ICON}" "${KITHSONG_WORDMARK}" "${KITHSONG_WORDMARK_DARK}")
+# yyjson for the smart list editor, which reads and writes rules (smart_editor.c).
+target_link_libraries(kithsong PRIVATE kithcore mc_yyjson comctl32 comdlg32 ole32 oleaut32 uuid iphlpapi shell32 windowscodecs dwmapi uxtheme runtimeobject shcore shlwapi uiautomationcore oleacc)
+target_compile_definitions(kithsong PRIVATE
+  UNICODE _UNICODE WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+kithsong_warnings(kithsong)
+
+# Self-contained exe: no C++ runtime DLLs next to it.
+if(MINGW)
+  target_link_options(kithsong PRIVATE -static)
+endif()
+
+# The portable zip's layout (scripts/release-windows.ps1): the exe and LICENSES/ side by side.
+# The kithsong component leaves out the fetched libraries' own install rules.
+include(Licenses)
+install(TARGETS kithsong RUNTIME DESTINATION . COMPONENT kithsong)
+kithsong_install_licenses(LICENSES)

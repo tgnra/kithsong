@@ -1,0 +1,132 @@
+#include <windows.h>
+#include <commctrl.h>
+
+#include "resource.h"
+
+/* The dialogs' text comes from the string table (wstr.h) and is set at WM_INITDIALOG, so
+ * every caption and label here is left empty. */
+
+/* Opened from the import list for an item that needs the user's decision. */
+IDD_REVIEW DIALOGEX 0, 0, 540, 340
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "", IDC_REV_HEADER, 7, 7, 526, 28, SS_NOPREFIX
+  LTEXT           "", IDC_REV_MATCHES_LABEL, 7, 40, 200, 9
+  PUSHBUTTON      "", IDC_REV_WIDER, 443, 36, 90, 14
+  CONTROL         "", IDC_REV_MATCHES, "SysListView32",
+                  LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER |
+                  WS_BORDER | WS_TABSTOP, 7, 51, 526, 92
+  LTEXT           "", IDC_REV_TRACKS_LABEL, 7, 149, 120, 9
+  RTEXT           "", IDC_REV_TRACKS_HINT, 133, 149, 305, 9, SS_NOPREFIX
+  /* Several rows can be selected: a missing track and a file, for Use as Track on the menu. */
+  CONTROL         "", IDC_REV_TRACKS, "SysListView32",
+                  LVS_REPORT | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER | WS_BORDER | WS_TABSTOP,
+                  7, 160, 526, 118
+  /* After the list, for Tab: the selected missing track's files, for the keyboard and screen
+   * readers, which can't see the list's cells drop anything down. Shown with the hint. */
+  PUSHBUTTON      "", IDC_REV_CHOOSE_FILE, 443, 146, 90, 12, NOT WS_VISIBLE
+  LTEXT           "", IDC_REV_SEARCH_LABEL, 7, 290, 48, 9
+  LTEXT           "", IDC_REV_ARTIST_LABEL, 58, 290, 22, 9
+  EDITTEXT        IDC_REV_ARTIST, 82, 288, 150, 13, ES_AUTOHSCROLL
+  LTEXT           "", IDC_REV_TITLE_LABEL, 240, 290, 24, 9
+  EDITTEXT        IDC_REV_TITLE, 266, 288, 200, 13, ES_AUTOHSCROLL
+  PUSHBUTTON      "", IDC_REV_SEARCH, 473, 287, 60, 15
+  PUSHBUTTON      "", IDC_REV_ASIS, 7, 319, 80, 15
+  PUSHBUTTON      "", IDC_REV_SKIP, 92, 319, 50, 15
+  DEFPUSHBUTTON   "", IDOK, 413, 319, 60, 15
+  PUSHBUTTON      "", IDCANCEL, 478, 319, 55, 15
+END
+
+/* New Playlist and Rename Playlist (playlist_dialogs.c): the caption and the OK button's
+ * label depend on which. The note, hidden unless there is one, takes the buttons' place, as
+ * tall as its lines, and they move down beneath it. */
+IDD_PLAYLIST_NAME DIALOGEX 0, 0, 230, 70
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "", IDC_PL_LABEL, 7, 9, 216, 9, SS_NOPREFIX
+  EDITTEXT        IDC_PL_NAME, 7, 20, 216, 14, ES_AUTOHSCROLL
+  LTEXT           "", IDC_PL_NOTE, 7, 42, 216, 27, SS_NOPREFIX | NOT WS_VISIBLE
+  DEFPUSHBUTTON   "", IDOK, 113, 48, 52, 15
+  PUSHBUTTON      "", IDCANCEL, 171, 48, 52, 15
+END
+
+/* Delete Playlist: the heading names the playlist. Cancel is the default. */
+IDD_PLAYLIST_DELETE DIALOGEX 0, 0, 230, 70
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "", IDC_PL_HEADING, 7, 8, 216, 12, SS_NOPREFIX | SS_ENDELLIPSIS
+  LTEXT           "", IDC_PL_NOTE, 7, 24, 216, 9, SS_NOPREFIX
+  PUSHBUTTON      "", IDOK, 113, 48, 52, 15
+  DEFPUSHBUTTON   "", IDCANCEL, 171, 48, 52, 15
+END
+
+/* Delete from Library (delete_dialog.c): the same, wider, with room for a few lines of note
+ * (how many files go to the Recycle Bin). */
+IDD_LIBRARY_DELETE DIALOGEX 0, 0, 260, 84
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "", IDC_PL_HEADING, 7, 8, 246, 12, SS_NOPREFIX | SS_ENDELLIPSIS
+  LTEXT           "", IDC_PL_NOTE, 7, 24, 246, 28, SS_NOPREFIX
+  PUSHBUTTON      "", IDOK, 143, 62, 52, 15
+  DEFPUSHBUTTON   "", IDCANCEL, 201, 62, 52, 15
+END
+
+/* Remove from this PC (remove_here.c): the same, with room for a longer note (what goes,
+ * what stays, how to get it back). */
+IDD_DEVICE_REMOVE DIALOGEX 0, 0, 260, 100
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "", IDC_PL_HEADING, 7, 8, 246, 12, SS_NOPREFIX | SS_ENDELLIPSIS
+  LTEXT           "", IDC_PL_NOTE, 7, 24, 246, 46, SS_NOPREFIX
+  PUSHBUTTON      "", IDOK, 143, 78, 52, 15
+  DEFPUSHBUTTON   "", IDCANCEL, 201, 78, 52, 15
+END
+
+/* Removing tracks missing for good (delete_dialog.c): the same, with room to name them. */
+IDD_LOST_REMOVE DIALOGEX 0, 0, 280, 176
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  LTEXT           "", IDC_PL_HEADING, 7, 8, 266, 12, SS_NOPREFIX | SS_ENDELLIPSIS
+  LTEXT           "", IDC_PL_NOTE, 7, 24, 266, 122, SS_NOPREFIX
+  PUSHBUTTON      "", IDOK, 163, 154, 52, 15
+  DEFPUSHBUTTON   "", IDCANCEL, 221, 154, 52, 15
+END
+
+/* The smart list editor (smart_editor.c): resizable, with everything but Save and Cancel
+ * made at run time, as each page's rows come and go. */
+IDD_SMART_EDITOR DIALOGEX 0, 0, 574, 374
+STYLE DS_SHELLFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_CLIPCHILDREN
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  CONTROL         "", IDOK, "Button", BS_OWNERDRAW | WS_TABSTOP, 460, 352, 52, 15
+  CONTROL         "", IDCANCEL, "Button", BS_OWNERDRAW | WS_TABSTOP, 515, 352, 52, 15
+END
+
+/* A question or a message (prompt_dialog.c), laid out at run time to fit its text. In reading
+ * order, for screen readers; the focus is put on the default button. What isn't used is hidden. */
+IDD_PROMPT DIALOGEX 0, 0, 280, 100
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | DS_SETFOREGROUND | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 0, 0, 1
+BEGIN
+  CONTROL         "", IDC_PROMPT_ICON, "Static", SS_ICON | SS_REALSIZECONTROL, 7, 7, 21, 20
+  LTEXT           "", IDC_PROMPT_HEADING, 40, 7, 230, 12, SS_NOPREFIX
+  LTEXT           "", IDC_PROMPT_TEXT, 40, 24, 230, 30, SS_NOPREFIX
+  AUTOCHECKBOX    "", IDC_PROMPT_CHECK, 40, 60, 230, 12
+  DEFPUSHBUTTON   "", IDOK, 102, 78, 52, 15
+  PUSHBUTTON      "", IDNO, 160, 78, 52, 15
+  PUSHBUTTON      "", IDCANCEL, 218, 78, 52, 15
+END

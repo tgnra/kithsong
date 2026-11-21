@@ -1,0 +1,124 @@
+name: Deploy the website
+
+on:
+  push:
+    branches: [master]
+    paths: ["site/**", ".github/workflows/site.yml"]
+  # Publishing a release brings its Flatpak repo to the site, once the check below sees it. The
+  # release event never started a run here, so this doesn't rely on it.
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: site
+
+jobs:
+  # A scheduled run only goes on if the latest release isn't the one on the site. Drafts and
+  # prereleases are never the latest, so a release candidate doesn't reach flatpak update.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.check.outputs.deploy }}
+    steps:
+      - id: check
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          deploy=true
+          if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+            latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+            live="$(curl -fsS "https://kithso.ng/flatpak-release.txt?t=$(date +%s)" || true)"
+            [[ "$latest" == "$live" ]] && deploy=false
+            echo "Latest release: $latest. On the site: ${live:-unknown}."
+          fi
+          echo "deploy=$deploy" >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: site/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Cache generated image variants
+        uses: actions/cache@v4
+        with:
+          path: site/.cache/images
+          key: site-images-${{ hashFiles('site/**/*.jpg', 'site/**/*.png', 'site/**/*.gif', 'site/**/*.webp', 'site/ssg/images.py') }}
+          restore-keys: site-images-
+
+      - name: Test
+        run: python -m unittest
+
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Require a root-level site
+        if: steps.pages.outputs.base_path != ''
+        run: |
+          echo "::error::The site uses root-relative URLs (/img/, /docs/) and must be served from the domain root, but Pages will serve it under '${{ steps.pages.outputs.base_path }}'. Set the custom domain (kithso.ng) in Settings → Pages first."
+          exit 1
+
+      # Every deploy replaces the whole site, so each one brings the repo back from the latest
+      # release. static/ goes into dist/ as it is. A failed download stops the deploy rather
+      # than take the repo offline; only a release from before the repo existed has none.
+      - name: Fetch the Flatpak repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset=kithsong-flatpak-repo.tar.gz
+          if ! latest="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest"               --jq '[.tag_name, (.assets[].name)] | join(" ")' 2>&1)"; then
+            if [[ "$latest" == *"HTTP 404"* ]]; then
+              echo "::notice::No published release yet, so no Flatpak repo."
+              exit 0
+            fi
+            echo "$latest" >&2
+            exit 1
+          fi
+          read -r tag assets <<<"$latest"
+          echo "$tag" >static/flatpak-release.txt
+          if [[ " $assets " != *" $asset "* ]]; then
+            echo "::notice::$tag has no $asset, so no Flatpak repo."
+            exit 0
+          fi
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$asset" --output "$RUNNER_TEMP/$asset"
+          tar -xzf "$RUNNER_TEMP/$asset" -C static
+          test -f static/repo/summary -a -f static/repo/summary.sig -a -f static/kithsong.flatpakref
+
+      - name: Build
+        run: python -m ssg build --base-url "${{ steps.pages.outputs.base_url }}"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

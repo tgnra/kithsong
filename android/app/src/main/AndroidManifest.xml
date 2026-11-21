@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- MusicBrainz lookups, LAN sync, and serving the music to a Cast device. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- To tell whether sync is on Wi-Fi. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- mDNS discovery needs a multicast lock. Sync opens its own sockets and uses no Wi-Fi
+         scanning, Wi-Fi Direct or Aware, so it needs neither NEARBY_WIFI_DEVICES nor location. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Background playback: PlaybackService runs in the foreground while playing (API 28+
+         needs FOREGROUND_SERVICE, API 34+ the permission for its type), and holds a wake lock. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- The playback and sync notifications, API 33+. Asked for once, on first play, and
+         from settings. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- SyncService runs in the foreground while a sync session or pairing is under way, and
+         ImportService while an import is (API 34+: the dataSync type). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- CHANGE_WIFI_MULTICAST_STATE would otherwise make Play infer Wi-Fi as required and hide
+         the app from devices without it. Only sync's discovery wants Wi-Fi; playback, import
+         and Cast over Ethernet work without it. -->
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <!-- No storage permission: import reads only what the user picks or shares, through the
+         Storage Access Framework (OpenDocumentTree, OpenMultipleDocuments, and the intents
+         below), and copies it into the app's own storage for the core. -->
+
+    <!-- hasFragileUserData: Android 10+'s uninstall dialog offers to keep the app's data, the
+         library and this device's place in its sync group, which a reinstall then picks up. -->
+    <application
+        android:name=".KithsongApp"
+        android:hasFragileUserData="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Kithsong">
+        <!-- The launch screen theme until onCreate installs the splash screen, which then
+             switches to Theme.Kithsong. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Kithsong.Starting">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- "Open with" for a zip, e.g. a Bandcamp download in Files: imports it. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+            <!-- The share sheet: a zip, or audio files, one or several. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/zip" />
+            </intent-filter>
+            <!-- A voice assistant's "play ... on Kithsong". -->
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <service
+            android:name=".importer.ImportService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".sync.SyncService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <!-- Album art for Android Auto's browse lists, which it loads itself from the items'
+             artwork URIs. Exported with no permission, as the session can't grant Auto (or
+             whatever else browses) each URI: it's read-only, and only ever serves art decoded
+             from the folders covers live in, never a file as it is. -->
+        <provider
+            android:name=".playback.ArtProvider"
+            android:authorities="${applicationId}.art"
+            android:exported="true" />
+        <!-- Exported so media controllers (system UI, Bluetooth, Android Auto) can connect. -->
+        <service
+            android:name=".playback.PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+        <!-- A play button (Bluetooth, say) with the process gone: the session goes on from the
+             queue PlaybackService kept. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+        <!-- Google Cast: its options (the Default Media Receiver, and no notification or media
+             session of its own) come from this class; see ng.kithso.android.cast. -->
+        <meta-data
+            android:name="com.google.android.gms.cast.framework.OPTIONS_PROVIDER_CLASS_NAME"
+            android:value="ng.kithso.android.cast.CastOptionsProvider" />
+        <!-- Android Auto: the app is a media app, which Auto browses through PlaybackService. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+    </application>
+</manifest>

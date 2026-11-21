@@ -1,0 +1,2330 @@
+/* GTK4 + libadwaita frontend: the main window and the wiring between the views.
+ *
+ *   AdwToolbarView
+ *   +- AdwHeaderBar: playback buttons, now-playing strip (now_playing.c), volume (volume_button.c)
+ *   +- AdwOverlaySplitView (sidebar: pages, Recents (recents.c), Devices (devices.c))
+ *      +- AdwBanners: problems with the files here, tracks waiting for a device (app_update_waiting())
+ *      +- GtkStack of pages: "library" | "home" | "artists" | "search" | "import" | "device"
+ *         +- AdwOverlaySplitView, the track list as its end sidebar while an album is picked
+ *            +- GtkStack: albums | playlists | album groups (album_groups.c), each with an
+ *                         empty-state page
+ *
+ * The playback buttons are the app.previous, app.play-pause and app.next actions, so their
+ * sensitivity follows the actions'. Shuffle and volume are kept in settings.json. Keyboard
+ * shortcuts are on_shortcut(), listed in README.md.
+ */
+#include <adwaita.h>
+#include <locale.h>
+#include <math.h>
+#include <string.h>
+
+#include "add_to_playlist.h"
+#include "album_grid.h"
+#include "album_groups.h"
+#include "app.h"
+#include "art_backdrop.h"
+#include "brand_backdrop.h"
+#include "artist_view.h"
+#include "cover.h"
+#include "delete_dialog.h"
+#include "issue_dialog.h"
+#include "devices.h"
+#include "edit_dialog.h"
+#include "first_run.h"
+#include "home_view.h"
+#include "import_view.h"
+#include "library_folder.h"
+#include "move_library.h"
+#include "mpris.h"
+#include "kithcore/kithcore.h"
+#include "kithcore/source_run.h"
+#include "now_playing.h"
+#include "perf_ui.h"
+#include "playback.h"
+#include "testing_view.h"
+#include "playlist_dialogs.h"
+#include "recents.h"
+#include "remove_here.h"
+#include "search_view.h"
+#include "settings_view.h"
+#include "smart_editor.h"
+#include "stats_dialog.h"
+#include "track_list.h"
+#include "volume_button.h"
+
+static const char css[] =
+    "banner.warning > revealer > widget { background-color: alpha(@warning_bg_color, 0.3); }"
+  ".album-cover { border-radius: 8px; background-color: alpha(currentColor, 0.08); }"
+  ".now-playing .album-cover { border-radius: 4px; }"
+  /* The edit dialog's cover, which is a button, and what a file over the dialog shows. */
+  ".edit-cover { padding: 0; border-radius: 8px; }"
+  ".edit-cover-drop { background-color: @accent_bg_color; color: @accent_fg_color; }"
+  ".edit-dropping { outline: 2px solid @accent_bg_color; outline-offset: -6px; border-radius: 12px; }"
+  ".album-grid { padding: 12px; }"
+  ".album-grid > child { padding: 8px; border-radius: 12px; }"
+  ".track-list > row.drop-above { box-shadow: inset 0 2px @accent_bg_color; }"
+  ".track-list > row.drop-below { box-shadow: inset 0 -2px @accent_bg_color; }"
+  /* Where a dragged track or album would go (drag.h): onto a playlist or group, or beside an album. */
+  ".drop-into { box-shadow: inset 0 0 0 2px @accent_bg_color; border-radius: 8px; }"
+  ".album-grid > child > .drop-before { box-shadow: -10px 0 0 -7px @accent_bg_color; }"
+  ".album-grid > child > .drop-after { box-shadow: 10px 0 0 -7px @accent_bg_color; }"
+  ".now-playing scale { padding-top: 2px; padding-bottom: 2px; }"
+  ".now-playing .shuffle:checked { color: @accent_color; }"
+  /* The queue's popover (queue_button.c): its grip shows on the row in hand, and the row being
+   * dragged stands back while the line shows where it would go. */
+  ".queue-list > row { min-height: 48px; padding: 0 2px; }"
+  ".queue-grip { opacity: 0; }"
+  ".queue-list > row:hover .queue-grip, .queue-list > row:selected .queue-grip { opacity: 0.55; }"
+  ".queue-list > row.queue-dragged { opacity: 0.6; }"
+  ".queue-list > row.drop-above { box-shadow: inset 0 2px @accent_bg_color; }"
+  ".queue-list > row.drop-below { box-shadow: inset 0 -2px @accent_bg_color; }"
+  ".pair-code { font-size: 20pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
+  ".pair-code-shown { font-size: 32pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
+  ".sync-picker { background: none; }"
+  ".search-large { font-size: 14pt; min-height: 44px; }"
+  ".search-albums > flowboxchild { padding: 8px; border-radius: 12px; }"
+  ".home-tile { padding: 8px; border-radius: 12px; font-weight: normal; }"
+  ".album-cover.home-round { border-radius: 50%; }";
+
+static GtkWidget *play_button;
+static guint save_volume_source; /* a timeout, so a held key saves the volume once */
+
+enum {
+  LOGO = 36, /* the logo's square, as tall as the playback buttons (and the now-playing cover) */
+  VOLUME_STEP = 5, /* per press of a volume shortcut */
+  SEEK_STEP_MS = 5000,
+  SAVE_VOLUME_MS = 1000,
+};
+
+/* --- Import and Settings --- */
+
+static void show_page(app *a, const char *name) {
+  perf_ui_view(name);
+  gtk_stack_set_visible_child_name(a->pages, name);
+}
+
+static void on_import(GtkButton *button, gpointer user) {
+  (void)button;
+  show_page(user, "import");
+}
+
+static void on_import_present(void *user) {
+  show_page(user, "import");
+}
+
+static void on_import_library_changed(void *user) {
+  app_reload_library(user);
+}
+
+/* While an import session is open the library mustn't change under it, so the sidebar's pages and
+ * Settings are locked, as on Windows. */
+static void on_import_session(void *user, gboolean active) {
+  app *a = user;
+  gtk_widget_set_sensitive(a->sidebar, !active);
+  gtk_widget_set_sensitive(a->settings, !active);
+}
+
+static void open_view(app *a, app_view view);
+
+/* Back to the library page last picked, in the sidebar too: the import may have come from Home
+ * or Search. */
+static void on_import_done(void *user) {
+  app *a = user;
+  open_view(a, a->view);
+}
+
+/* The empty Albums page suggests importing while this computer isn't in a group, with an
+ * Import button, and choosing what to sync once it is, with Choose what to sync. When
+ * the library has tracks but they're all singles (which the page leaves out), it says where
+ * they are instead. */
+static void set_empty_description(app *a) {
+  if (!a->empty) return; /* not built yet */
+  if (a->first_run) { /* there's no library yet, and the dialog over this page says why */
+    adw_status_page_set_title(a->empty, "");
+    adw_status_page_set_description(a->empty, "");
+    return;
+  }
+  devices_state state = devices_sync_state();
+  gboolean singles = a->lib && a->all_singles;
+  gboolean alone = a->lib && !singles && state == DEVICES_ALONE;
+  gboolean grouped = a->lib && !singles && state == DEVICES_GROUPED;
+  enum mc_str_id text = !a->lib   ? MC_STR_LIBRARY_OPEN_FAILED
+                        : singles ? MC_STR_ALBUMS_ALL_SINGLES_TEXT
+                        : alone   ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_PAIR
+                        : grouped ? MC_STR_LINUX_COMPUTER_EMPTY_TEXT_CHOOSE
+                                  : MC_STR_EMPTY_TEXT;
+  adw_status_page_set_title(a->empty, mc_str(singles ? MC_STR_ALBUMS_ALL_SINGLES_TITLE : MC_STR_EMPTY_TITLE));
+  char *desc = mc_format_alloc(mc_str(MC_STR_LINUX_EMPTY_WITH_VERSION), MC_S(mc_str(text)), MC_S(mc_version()));
+  adw_status_page_set_description(a->empty, desc);
+  mc_free(desc);
+  if (a->empty_import) gtk_widget_set_visible(a->empty_import, a->lib && !singles && !grouped);
+  if (a->empty_choose_sync) gtk_widget_set_visible(a->empty_choose_sync, grouped);
+}
+
+/* Choose what to sync shows under "none of them have tracks on this device" once this
+ * computer is in a group. */
+static void set_no_playlists(app *a) {
+  gboolean hidden = a->hidden_playlists > 0;
+  adw_status_page_set_title(a->no_playlists, mc_str(hidden ? MC_STR_NO_PLAYABLE_PLAYLISTS_TITLE
+                                                           : MC_STR_NO_PLAYLISTS_TITLE));
+  adw_status_page_set_description(a->no_playlists, mc_str(hidden ? MC_STR_NO_PLAYABLE_PLAYLISTS_TEXT
+                                                                 : MC_STR_NO_PLAYLISTS_TEXT));
+  gtk_widget_set_visible(a->choose_sync, hidden && devices_sync_state() == DEVICES_GROUPED);
+}
+
+void app_update_empty_pages(app *a) {
+  if (!a->empty || !a->no_playlists) return; /* not built yet */
+  set_empty_description(a);
+  set_no_playlists(a);
+  album_groups_update_empty();
+}
+
+void app_group_digits(long long n, char *out, size_t size) {
+  g_snprintf(out, size, "%'lld", n);
+  /* The C locale has no grouping, but its strings are English, so it goes as English writes it. */
+  const char *locale = setlocale(LC_NUMERIC, NULL);
+  if (g_strcmp0(locale, "C") && g_strcmp0(locale, "POSIX") && !g_str_has_prefix(locale, "C.")) return;
+  char digits[32];
+  g_snprintf(digits, sizeof digits, "%lld", n);
+  size_t at = 0, start = digits[0] == '-', len = strlen(digits);
+  for (size_t i = 0; i < len && at + 2 < size; i++) {
+    out[at++] = digits[i];
+    if (i >= start && i + 1 < len && (len - i - 1) % 3 == 0) out[at++] = ',';
+  }
+  out[at] = '\0';
+}
+
+void app_set_tooltip(GtkWidget *widget, const char *label, const char *accel) {
+  guint key = 0;
+  GdkModifierType mods = 0;
+  if (!accel || !gtk_accelerator_parse(accel, &key, &mods)) {
+    gtk_widget_set_tooltip_text(widget, label);
+    return;
+  }
+  char *keys = gtk_accelerator_get_label(key, mods);
+  char *text = mc_format_alloc(mc_str(MC_STR_TOOLTIP_SHORTCUT), MC_S(label), MC_S(keys));
+  gtk_widget_set_tooltip_text(widget, text ? text : label);
+  mc_free(text);
+  g_free(keys);
+}
+
+GtkWidget *app_list_header(const char *title, const char *tooltip, const char *accel, GCallback clicked,
+                           gpointer user, GMenuModel *menu, const char *menu_tooltip) {
+  GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_widget_set_margin_start(header, 18);
+  gtk_widget_set_margin_end(header, 18);
+  gtk_widget_set_margin_top(header, 12);
+  GtkWidget *label = gtk_label_new(title);
+  gtk_widget_add_css_class(label, "title-2");
+  gtk_label_set_xalign(GTK_LABEL(label), 0);
+  gtk_widget_set_hexpand(label, TRUE);
+  gtk_box_append(GTK_BOX(header), label);
+  GtkWidget *add;
+  if (menu) {
+    add = adw_split_button_new();
+    adw_split_button_set_icon_name(ADW_SPLIT_BUTTON(add), "list-add-symbolic");
+    adw_split_button_set_menu_model(ADW_SPLIT_BUTTON(add), menu);
+    adw_split_button_set_dropdown_tooltip(ADW_SPLIT_BUTTON(add), menu_tooltip);
+  } else {
+    add = gtk_button_new_from_icon_name("list-add-symbolic");
+    gtk_widget_add_css_class(add, "circular");
+  }
+  app_set_tooltip(add, tooltip, accel);
+  gtk_widget_add_css_class(add, "flat");
+  gtk_widget_set_valign(add, GTK_ALIGN_CENTER);
+  g_signal_connect(add, "clicked", clicked, user);
+  gtk_box_append(GTK_BOX(header), add);
+  return header;
+}
+
+/* Deleted tracks whose files are back from the Trash come back into the library
+ * (kithcore/delete.h). Cheap: run when a library opens and whenever the window becomes
+ * active. TRUE if any came back; a toast says how many tracks. */
+static gboolean restore_deleted(app *a) {
+  int restored = 0, tracks = 0;
+  if (!a->lib || mc_delete_restore(a->lib, a->settings_dir, &restored, &tracks) != MC_OK || !restored) return FALSE;
+  if (tracks && a->toasts) {
+    char text[128];
+    mc_format(text, sizeof text, mc_str_plural(MC_STR_DELETE_RESTORED, tracks), MC_D(tracks));
+    AdwToast *toast = adw_toast_new("");
+    adw_toast_set_use_markup(toast, FALSE);
+    adw_toast_set_title(toast, text);
+    adw_toast_overlay_add_toast(a->toasts, toast);
+  }
+  return TRUE;
+}
+
+/* The library just opened: a way back left from before is no use in a real library, and the
+ * banner says if this is a stress test library. */
+static void library_opened(app *a) {
+  gboolean stress = mc_library_is_stress(a->lib);
+  mc_settings *settings = NULL;
+  if (!stress && mc_settings_load(a->settings_dir, &settings) == MC_OK &&
+      mc_settings_string(settings, MC_STRESS_RETURN_SETTING)) {
+    mc_settings_set_string(settings, MC_STRESS_RETURN_SETTING, NULL);
+    mc_settings_save(settings);
+  }
+  mc_settings_free(settings);
+  app_update_waiting(a);
+  if (!mc_perf_enabled() || !a->lib) return;
+  static const struct { const char *key; mc_entity entity; } counts[] = {
+    {"library_tracks", MC_ENTITY_TRACKS}, {"library_albums", MC_ENTITY_ALBUMS},
+    {"library_artists", MC_ENTITY_ARTISTS}, {"library_playlists", MC_ENTITY_PLAYLISTS}};
+  for (size_t i = 0; i < G_N_ELEMENTS(counts); i++) {
+    int64_t n = 0;
+    if (mc_library_count(a->lib, counts[i].entity, &n) == MC_OK) mc_perf_note_int(counts[i].key, n);
+  }
+  mc_perf_note("library_stress", stress ? "yes" : "no");
+}
+
+static void activate_nav_row(app *a, int n);
+
+/* Settings' Open Another Library. The import view lets go of the old library first. */
+static gboolean open_library(void *user, const char *dir) {
+  app *a = user;
+  mc_library *lib = NULL;
+  if (mc_library_open(dir, &lib) != MC_OK) {
+    AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_LIBRARY_OPEN_FAILED), dir);
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+    adw_dialog_present(alert, GTK_WIDGET(a->win));
+    return FALSE;
+  }
+  edit_dialog_close();
+  devices_stop(a); /* sync reads the old library */
+  import_view_set_library(a->import, lib);
+  playback_set_library(lib, a->settings_dir);
+  mc_library_close(a->lib);
+  a->lib = lib;
+  set_empty_description(a);
+  restore_deleted(a);
+  app_reload_library(a);
+  devices_start(a);
+  library_opened(a);
+  return TRUE;
+}
+
+gboolean app_open_library(app *a, const char *dir) {
+  return open_library(a, dir);
+}
+
+/* Switches to dir and saves it as the library. return_dir, if not NULL, is saved as the way
+ * back, before the switch, which clears it for a real library. */
+static void switch_and_save(app *a, const char *dir, const char *return_dir) {
+  mc_settings *settings = NULL;
+  if (return_dir && mc_settings_load(a->settings_dir, &settings) == MC_OK) {
+    mc_settings_set_string(settings, MC_STRESS_RETURN_SETTING, return_dir);
+    mc_settings_save(settings);
+  }
+  mc_settings_free(settings);
+  settings = NULL;
+  if (!open_library(a, dir)) return;
+  if (mc_settings_load(a->settings_dir, &settings) == MC_OK) {
+    mc_settings_set_library_dir(settings, dir);
+    mc_settings_save(settings);
+  }
+  mc_settings_free(settings);
+}
+
+void app_open_stress(app *a, const char *dir) {
+  char *real = NULL;
+  if (!mc_library_is_stress(a->lib) && a->lib) real = g_strdup(mc_library_dir(a->lib));
+  switch_and_save(a, dir, real);
+  g_free(real);
+}
+
+void app_back_to_library(app *a) {
+  mc_settings *settings = NULL;
+  char *dir = NULL;
+  if (mc_settings_load(a->settings_dir, &settings) == MC_OK)
+    dir = g_strdup(mc_settings_string(settings, MC_STRESS_RETURN_SETTING));
+  mc_settings_free(settings);
+  if (dir) switch_and_save(a, dir, NULL);
+  else app_show_testing(a); /* nothing saved: Open Another Library is in Settings */
+  g_free(dir);
+}
+
+void app_show_view(app *a, app_view view) {
+  activate_nav_row(a, (int)view);
+}
+
+static void on_settings_renamed(void *user, const char *name) {
+  devices_renamed(user, name);
+}
+
+static void on_settings_group_changed(void *user) {
+  devices_refresh(user);
+}
+
+/* Before Move Library moves the files: everything that reads the library or plays its files
+ * lets go, and it closes. */
+static void move_close_library(void *user) {
+  app *a = user;
+  stats_dialog_stop();
+  edit_dialog_close();
+  devices_stop(a); /* sync reads the library */
+  playback_clear();
+  import_view_set_library(a->import, NULL);
+  playback_set_library(NULL, NULL);
+  album_grid_unselect(a->album_grid);
+  album_grid_unselect(a->playlist_grid);
+  mc_library_close(a->lib);
+  a->lib = NULL;
+  app_reload_library(a);
+}
+
+/* After the move, or the first run: the library opens where it is now. */
+static void move_reopen_library(void *user, const char *dir) {
+  app *a = user;
+  if (mc_library_open(dir, &a->lib) != MC_OK) a->lib = NULL; /* the empty page says so */
+  import_view_set_library(a->import, a->lib);
+  playback_set_library(a->lib, a->settings_dir);
+  set_empty_description(a);
+  restore_deleted(a);
+  app_reload_library(a);
+  devices_start(a);
+  gtk_window_present(a->win);
+}
+
+/* The first run's answer: dir becomes the library (on failure the empty page says so), or
+ * with NULL the user closed the dialog, which quits. */
+static void on_first_run_done(void *user, const char *dir) {
+  app *a = user;
+  if (!dir) {
+    gtk_window_close(a->win);
+    return;
+  }
+  a->first_run = FALSE;
+  mc_settings *settings = NULL;
+  mc_status st = mc_settings_load(a->settings_dir, &settings);
+  if (st == MC_OK) {
+    mc_settings_set_library_dir(settings, dir);
+    st = mc_settings_save(settings);
+  }
+  mc_settings_free(settings);
+  move_reopen_library(a, dir);
+  if (st != MC_OK) {
+    AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_APP_NAME), mc_str(MC_STR_SETTINGS_FIRST_SAVE_FAILED));
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+    adw_dialog_present(alert, GTK_WIDGET(a->win));
+  }
+}
+
+static void move_library_to(app *a, const char *to) {
+  static move_library_host host = {move_close_library, move_reopen_library, NULL};
+  host.user = a;
+  move_library_start(a->win, a->settings_dir, &host, to);
+}
+
+static void move_library(void *user) {
+  move_library_to(user, NULL);
+}
+
+static void on_saved_replaced(gpointer data, const char *dir, gboolean saved) {
+  app *a = data;
+  if (!dir || saved) return;
+  AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_SETTINGS), mc_str(MC_STR_SETTINGS_SAVE_FAILED));
+  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+  adw_dialog_present(alert, GTK_WIDGET(a->win));
+}
+
+/* With the library open, Again is Move library… and own storage is where to move it; without,
+ * another library or one in own storage. */
+static void on_saved_explained(gpointer data, library_folder_answer answer, const char *own) {
+  app *a = data;
+  if (answer == LIBRARY_FOLDER_CANCEL) return;
+  if (a->lib) move_library_to(a, answer == LIBRARY_FOLDER_OWN ? own : NULL);
+  else if (answer == LIBRARY_FOLDER_OWN) switch_and_save(a, own, NULL);
+  else settings_view_choose_library(GTK_WIDGET(a->win), a->settings_dir, open_library, a, FALSE, on_saved_replaced, a,
+                                    NULL);
+}
+
+/* At startup: a library folder that fails the check (a document portal path from an older
+ * Flatpak, or a folder that's become read-only) says so now rather than failing later. */
+static void check_saved_library(app *a) {
+  mc_settings *settings = NULL;
+  char *dir = NULL;
+  if (mc_settings_load(a->settings_dir, &settings) == MC_OK && !mc_settings_string(settings, MC_STRESS_RETURN_SETTING))
+    dir = g_strdup(mc_settings_library_dir(settings));
+  mc_settings_free(settings);
+  mc_folder_problem problem = dir ? library_folder_check(dir, MC_FOLDER_USE_ANY) : MC_FOLDER_OK;
+  if (problem != MC_FOLDER_OK) {
+    char *why = library_folder_why(problem, dir, MC_FOLDER_USE_ANY);
+    char *body = mc_format_alloc(mc_str(MC_STR_LINUX_LIBRARY_FOLDER_SAVED_TEXT), MC_S(dir), MC_S(why));
+    library_folder_explain(GTK_WIDGET(a->win), mc_str(MC_STR_LINUX_LIBRARY_FOLDER_SAVED_CANT_TITLE), body, problem, dir,
+                           a->lib ? MC_FOLDER_USE_EMPTY : MC_FOLDER_USE_LIBRARY,
+                           a->lib ? mc_str(MC_STR_LIBRARY_MOVE) : NULL, on_saved_explained, a);
+    mc_free(body);
+    g_free(why);
+  }
+  g_free(dir);
+}
+
+/* Settings' Reset Kithsong…, once confirmed: marks the settings folder to be cleared and
+ * closes the window, so the app quits; the next start clears the folder (main()). */
+static void reset_app(void *user) {
+  app *a = user;
+  mc_status st = mc_settings_request_reset(a->settings_dir);
+  if (st != MC_OK) {
+    char *text = mc_format_alloc(mc_str(MC_STR_RESET_APP_FAILED), MC_S(a->settings_dir), MC_S(mc_status_str(st)));
+    AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_SETTINGS_RESET), text);
+    mc_free(text);
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+    adw_dialog_present(alert, GTK_WIDGET(a->win));
+    return;
+  }
+  gtk_window_close(a->win);
+}
+
+static void on_settings(GtkButton *button, gpointer user);
+
+void app_show_testing(app *a) {
+  testing_view_open_next();
+  on_settings(NULL, a);
+}
+
+static void on_settings(GtkButton *button, gpointer user) {
+  (void)button;
+  app *a = user;
+  static const settings_view_sync sync = {devices_sync, devices_sync_off_text, on_settings_renamed,
+                                          on_settings_group_changed};
+  settings_view_present(GTK_WIDGET(a->win), a->settings_dir, open_library, move_library, reset_app, &sync, a);
+}
+
+static void close_confirmed(void *user, gboolean closed) {
+  app *a = user;
+  if (!closed) return;
+  devices_stop(a); /* while its dialogs and the device page are still there */
+  gtk_window_destroy(a->win);
+}
+
+/* Closing the window while an import runs asks first. */
+static gboolean on_close_request(GtkWindow *win, gpointer user) {
+  (void)win;
+  app *a = user;
+  if (edit_dialog_saving()) return TRUE; /* the dialog is up, with Cancel to stop it */
+  if (import_view_is_running(a->import)) {
+    import_view_confirm_close(a->import, close_confirmed, a);
+    return TRUE;
+  }
+  /* A dialog over the window closes instead of it, so sync carries on. */
+  if (!adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(a->win))) devices_stop(a);
+  return FALSE;
+}
+
+/* --- Sidebar --- */
+
+enum { TOP_NAV_HOME, TOP_NAV_SEARCH }; /* top_nav's rows */
+/* The rows pinned below the rest, as on Windows. */
+enum { BOTTOM_IMPORT, BOTTOM_STATS, BOTTOM_SETTINGS, BOTTOM_ABOUT };
+
+static void show_album(app *a);
+static GtkWidget *shown_grid(app *a);
+static void update_buttons(app *a);
+static void show_about(app *a);
+
+/* Albums, Playlists and Album groups lead back to the library page, e.g. from Import, each
+ * with its grid; Artists to the Artists page. The grid left loses its selection, so the
+ * track list closes. */
+static void on_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
+  (void)list;
+  app *a = user;
+  devices_unselect();
+  gtk_list_box_unselect_all(a->top_nav);
+  app_view view = (app_view)gtk_list_box_row_get_index(row);
+  if (view != a->view) {
+    GtkWidget *grid = shown_grid(a);
+    if (grid) album_grid_unselect(grid);
+    a->view = view;
+    app_reload_library(a);
+  }
+  show_page(a, view == APP_VIEW_ARTISTS ? "artists" : "library");
+  update_buttons(a);
+}
+
+static GtkWidget *nav_row(const char *icon, const char *label) {
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_widget_set_margin_start(box, 6);
+  gtk_widget_set_margin_end(box, 6);
+  gtk_widget_set_margin_top(box, 6);
+  gtk_widget_set_margin_bottom(box, 6);
+  gtk_box_append(GTK_BOX(box), gtk_image_new_from_icon_name(icon));
+  gtk_box_append(GTK_BOX(box), gtk_label_new(label));
+  return box;
+}
+
+/* Home, or Search. Home reads what's been played since it last showed. */
+static void on_top_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
+  (void)list;
+  app *a = user;
+  devices_unselect();
+  gtk_list_box_unselect_all(a->nav);
+  if (gtk_list_box_row_get_index(row) == TOP_NAV_HOME) {
+    home_view_refresh();
+    show_page(a, "home");
+    update_buttons(a);
+    return;
+  }
+  show_page(a, "search");
+  update_buttons(a);
+  search_view_focus();
+}
+
+/* Picks Search in the sidebar, as clicking it does. */
+static void open_search(app *a) {
+  GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->top_nav, TOP_NAV_SEARCH);
+  gtk_list_box_select_row(a->top_nav, row);
+  on_top_nav_activated(a->top_nav, row, a);
+}
+
+static GtkWidget *build_top_nav(app *a) {
+  GtkWidget *list = gtk_list_box_new();
+  gtk_widget_add_css_class(list, "navigation-sidebar");
+  gtk_list_box_append(GTK_LIST_BOX(list), nav_row("go-home-symbolic", mc_str(MC_STR_SECTION_HOME)));
+  gtk_list_box_append(GTK_LIST_BOX(list), nav_row("system-search-symbolic", mc_str(MC_STR_SEARCH)));
+  g_signal_connect(list, "row-activated", G_CALLBACK(on_top_nav_activated), a);
+  a->top_nav = GTK_LIST_BOX(list);
+  return list;
+}
+
+/* The arrow keys stop at the ends of a list; past them, they go on to the next or previous
+ * one (Recents, Devices), as Tab does. */
+static gboolean on_sidebar_keynav_failed(GtkWidget *list, GtkDirectionType dir, gpointer user) {
+  (void)user;
+  if (dir != GTK_DIR_UP && dir != GTK_DIR_DOWN) return FALSE;
+  gtk_widget_child_focus(GTK_WIDGET(gtk_widget_get_root(list)),
+                         dir == GTK_DIR_DOWN ? GTK_DIR_TAB_FORWARD : GTK_DIR_TAB_BACKWARD);
+  return TRUE;
+}
+
+static void connect_keynav(GtkWidget *widget) {
+  if (GTK_IS_LIST_BOX(widget)) g_signal_connect(widget, "keynav-failed", G_CALLBACK(on_sidebar_keynav_failed), NULL);
+  for (GtkWidget *c = gtk_widget_get_first_child(widget); c; c = gtk_widget_get_next_sibling(c)) connect_keynav(c);
+}
+
+static GtkWidget *sidebar_separator(void) {
+  GtkWidget *separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+  gtk_widget_set_margin_start(separator, 12);
+  gtk_widget_set_margin_end(separator, 12);
+  gtk_widget_set_margin_top(separator, 3);
+  gtk_widget_set_margin_bottom(separator, 3);
+  return separator;
+}
+
+static void on_bottom_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
+  (void)list;
+  app *a = user;
+  switch (gtk_list_box_row_get_index(row)) {
+    case BOTTOM_IMPORT: show_page(a, "import"); break;
+    case BOTTOM_STATS: stats_dialog_present(a); break;
+    case BOTTOM_SETTINGS: on_settings(NULL, a); break;
+    default: show_about(a); break;
+  }
+}
+
+/* A row of the bottom list. Its tooltip has its shortcut, accel (see app_set_tooltip()), if any. */
+static GtkWidget *add_bottom_row(GtkWidget *list, const char *icon, const char *label, const char *accel) {
+  gtk_list_box_append(GTK_LIST_BOX(list), nav_row(icon, label));
+  GtkWidget *row = gtk_widget_get_last_child(list);
+  if (accel) app_set_tooltip(row, label, accel);
+  return row;
+}
+
+/* Only Import is a page, and it shows as picked by the page rather than a selection
+ * (show_import_picked()), so moving through these rows with the keyboard picks nothing. */
+static GtkWidget *build_bottom_nav(app *a) {
+  GtkWidget *list = gtk_list_box_new();
+  gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_NONE);
+  gtk_widget_add_css_class(list, "navigation-sidebar");
+  a->import_row = add_bottom_row(list, "list-add-symbolic", mc_str(MC_STR_IMPORT_MUSIC), "<Control>o");
+  a->stats_row = add_bottom_row(list, "x-office-spreadsheet-symbolic", mc_str(MC_STR_STATS_TITLE), NULL);
+  a->settings = add_bottom_row(list, "emblem-system-symbolic", mc_str(MC_STR_SETTINGS), "<Control>comma");
+  add_bottom_row(list, "help-about-symbolic", mc_str(MC_STR_ABOUT), "F1");
+  g_signal_connect(list, "row-activated", G_CALLBACK(on_bottom_activated), a);
+  return list;
+}
+
+static GtkWidget *build_sidebar(app *a) {
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_box_append(GTK_BOX(box), build_top_nav(a));
+  gtk_box_append(GTK_BOX(box), sidebar_separator());
+
+  /* In app_view's order. */
+  GtkWidget *nav = gtk_list_box_new();
+  gtk_widget_add_css_class(nav, "navigation-sidebar");
+  gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("media-optical-symbolic", mc_str(MC_STR_SECTION_ALBUMS)));
+  gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("avatar-default-symbolic", mc_str(MC_STR_SECTION_ARTISTS)));
+  gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("view-list-symbolic", mc_str(MC_STR_SECTION_PLAYLISTS)));
+  gtk_list_box_append(GTK_LIST_BOX(nav), nav_row("folder-symbolic", mc_str(MC_STR_SECTION_ALBUM_GROUPS)));
+  gtk_list_box_select_row(GTK_LIST_BOX(nav), gtk_list_box_get_row_at_index(GTK_LIST_BOX(nav), 0));
+  g_signal_connect(nav, "row-activated", G_CALLBACK(on_nav_activated), a);
+  gtk_box_append(GTK_BOX(box), nav);
+  a->nav = GTK_LIST_BOX(nav);
+
+  gtk_box_append(GTK_BOX(box), recents_new(a));
+  gtk_box_append(GTK_BOX(box), devices_new(a));
+
+  /* It all scrolls when it's taller than the window, with a scrollbar only then; moving the
+   * focus with the keyboard scrolls the focused row into view. What's pinned below stays put. */
+  GtkWidget *viewport = gtk_viewport_new(NULL, NULL);
+  gtk_viewport_set_scroll_to_focus(GTK_VIEWPORT(viewport), TRUE);
+  gtk_viewport_set_child(GTK_VIEWPORT(viewport), box);
+  GtkWidget *scroller = gtk_scrolled_window_new();
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER,
+                                 GTK_POLICY_AUTOMATIC);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), viewport);
+  gtk_widget_set_vexpand(scroller, TRUE);
+  a->sidebar = scroller;
+
+  GtkWidget *sidebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_box_append(GTK_BOX(sidebar), scroller);
+  gtk_box_append(GTK_BOX(sidebar), sidebar_separator());
+  gtk_box_append(GTK_BOX(sidebar), build_bottom_nav(a));
+  connect_keynav(sidebar);
+  return sidebar;
+}
+
+/* --- Playback buttons --- */
+
+static void set_action_enabled(app *a, const char *name, gboolean enabled) {
+  GAction *action = g_action_map_lookup_action(G_ACTION_MAP(a->gapp), name);
+  if (action) g_simple_action_set_enabled(G_SIMPLE_ACTION(action), enabled);
+}
+
+/* An artist's page is what's shown: Play plays the artist rather than the album. */
+static gboolean artist_shown(app *a) {
+  return !g_strcmp0(gtk_stack_get_visible_child_name(a->pages), "artists") && artist_view_artist();
+}
+
+/* Whether the shown album (or artist) has anything to play. */
+static gboolean album_playable(app *a) {
+  if (artist_shown(a)) return artist_view_playable();
+  for (int i = 0, n = track_list_count(); i < n; i++)
+    if (track_list_item_at(i).path) return TRUE;
+  return FALSE;
+}
+
+/* Play turns into Pause while playing. With nothing current, it starts the queue, or with that
+ * empty too plays the album shown. */
+static void update_buttons(app *a) {
+  gboolean playing = playback_is_playing();
+  gtk_button_set_icon_name(GTK_BUTTON(play_button),
+                           playing ? "media-playback-pause-symbolic" : "media-playback-start-symbolic");
+  app_set_tooltip(play_button, mc_str(playing ? MC_STR_PAUSE : MC_STR_PLAY), "space");
+  set_action_enabled(a, "previous", playback_has_current());
+  set_action_enabled(a, "play-pause", playback_has_current() || playback_up_next_count() > 0 || album_playable(a));
+  set_action_enabled(a, "next", playback_has_next());
+}
+
+/* Just before a delete trashes files: playback stops if any queued track goes, as it would
+ * play on from the trashed file (and the next one the player may have opened already). */
+static void before_delete(const mc_delete_plan *plan) {
+  for (int i = 0, n = playback_queue_count(); i < n; i++)
+    if (mc_delete_plan_has(plan, playback_queue_uid(i))) {
+      playback_clear();
+      return;
+    }
+}
+
+/* The same before Remove from this computer: what's playing is going from under the bar. */
+static void before_remove_here(const mc_here_plan *plan) {
+  for (int i = 0, n = playback_queue_count(); i < n; i++)
+    if (mc_here_plan_has(plan, playback_queue_uid(i))) {
+      playback_clear();
+      return;
+    }
+}
+
+static void playback_changed(void *user) {
+  update_buttons(user);
+}
+
+static void on_previous(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  playback_previous();
+}
+
+static void on_play_pause(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  if (playback_toggle()) return;
+  if (artist_shown(user)) artist_view_play(-1); /* nothing queued yet: the artist or album that's shown */
+  else app_play_album(user, -1);
+}
+
+static void on_next(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  playback_next();
+}
+
+/* Space in an album grid or the track list. Those would take it to select the item with the
+ * focus, but clicking or the arrow keys has selected it already, so Space plays there. Home's
+ * tiles would take it as a click. */
+static gboolean on_list_space(GtkWidget *win, GVariant *args, gpointer user) {
+  (void)args;
+  (void)user;
+  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(win));
+  gboolean in_list = focus && (gtk_widget_get_ancestor(focus, GTK_TYPE_GRID_VIEW) ||
+                                gtk_widget_get_ancestor(focus, GTK_TYPE_LIST_VIEW) || home_view_is_tile(focus));
+  if (!in_list) return FALSE;
+  gtk_widget_activate_action(win, "app.play-pause", NULL);
+  return TRUE;
+}
+
+static void on_seek(void *user, int ms) {
+  (void)user;
+  playback_seek(ms);
+}
+
+static void set_shuffle(app *a, gboolean on) {
+  if (!on == !playback_shuffle()) return;
+  playback_set_shuffle(on);
+  mc_settings *settings = NULL;
+  if (mc_settings_load(a->settings_dir, &settings) != MC_OK) return;
+  if (mc_settings_set_shuffle(settings, on) == MC_OK) mc_settings_save(settings);
+  mc_settings_free(settings);
+}
+
+static void on_shuffle(void *user, gboolean on) {
+  set_shuffle(user, on);
+}
+
+/* --- Keyboard shortcuts --- */
+
+static gboolean save_volume(gpointer user) {
+  app *a = user;
+  save_volume_source = 0;
+  mc_settings *settings = NULL;
+  if (mc_settings_load(a->settings_dir, &settings) != MC_OK) return G_SOURCE_REMOVE;
+  if (mc_settings_set_volume(settings, playback_volume()) == MC_OK) mc_settings_save(settings);
+  mc_settings_free(settings);
+  return G_SOURCE_REMOVE;
+}
+
+/* Shows the volume (or Muted) for a moment in the now-playing strip, as the volume control
+ * only shows the level while it's open. */
+static void flash_volume(void) {
+  if (playback_muted()) {
+    now_playing_flash(mc_str(MC_STR_VOLUME_MUTED));
+    return;
+  }
+  char *text = mc_format_alloc(mc_str(MC_STR_VOLUME_LEVEL), MC_D(playback_volume()));
+  now_playing_flash(text);
+  mc_free(text);
+}
+
+/* Volume 0 to 100, kept in settings.json for next time. Changing it unmutes. */
+static void set_volume(app *a, int volume) {
+  playback_set_muted(FALSE);
+  playback_set_volume(volume);
+  if (save_volume_source) g_source_remove(save_volume_source);
+  save_volume_source = g_timeout_add(SAVE_VOLUME_MS, save_volume, a);
+}
+
+/* MPRIS's Volume, set from the desktop's media controls: as the volume keys do. */
+static void on_mpris_volume(void *user, int volume) {
+  set_volume(user, volume);
+  flash_volume();
+}
+
+/* The volume control's slider and speaker, which show the change themselves. */
+static void on_volume(void *user, int volume) {
+  set_volume(user, volume);
+}
+
+static void on_muted(void *user, gboolean muted) {
+  (void)user;
+  playback_set_muted(muted);
+}
+
+/* The sidebar's row n of Albums, Artists, Playlists..., as clicking it does. */
+static void activate_nav_row(app *a, int n) {
+  GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->nav, n);
+  if (!row) return;
+  gtk_list_box_select_row(a->nav, row);
+  g_signal_emit_by_name(a->nav, "row-activated", row);
+}
+
+typedef enum shortcut {
+  SC_NEXT,
+  SC_PREVIOUS,
+  SC_SEEK_FORWARD,
+  SC_SEEK_BACK,
+  SC_VOLUME_UP,
+  SC_VOLUME_DOWN,
+  SC_MUTE,
+  SC_SHUFFLE,
+  SC_SEARCH,
+  SC_PAGE_1, /* ...to SC_PAGE_1 + 3 */
+  SC_SETTINGS = SC_PAGE_1 + 4,
+  SC_IMPORT,
+  SC_NEW_PLAYLIST,
+  SC_SHORTCUTS,
+  SC_ABOUT,
+  SC_CLOSE,
+} shortcut;
+
+static void on_playlist_created(void *user, const char *uid);
+static void show_shortcuts(app *a);
+
+/* Whether the focus is in a text box, whose own keys (arrows, + and -) it keeps. */
+static gboolean text_focused(GtkWidget *win) {
+  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(win));
+  return focus && (GTK_IS_EDITABLE(focus) || GTK_IS_TEXT_VIEW(focus));
+}
+
+/* The window's keyboard shortcuts, besides Space (see README.md). Captured before the focused
+ * widget sees them, so the lists' own arrow keys don't hide them; text boxes keep the keys
+ * they use (the arrows, + and -), and a dialog over the window keeps them all. The pages and
+ * Settings aren't reached while an import has the sidebar locked. */
+static gboolean on_shortcut(GtkWidget *win, GVariant *args, gpointer user) {
+  app *a = user;
+  shortcut sc = (shortcut)g_variant_get_int32(args);
+  if (adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(win))) return FALSE;
+  gboolean text = text_focused(win);
+  switch (sc) {
+    case SC_NEXT:
+    case SC_PREVIOUS:
+      if (text) return FALSE; /* a word at a time */
+      if (sc == SC_NEXT) playback_next();
+      else playback_previous();
+      return TRUE;
+    case SC_SEEK_FORWARD:
+    case SC_SEEK_BACK:
+      if (text) return FALSE;
+      playback_seek_by(sc == SC_SEEK_FORWARD ? SEEK_STEP_MS : -SEEK_STEP_MS);
+      return TRUE;
+    case SC_VOLUME_UP:
+    case SC_VOLUME_DOWN:
+      if (text) return FALSE;
+      set_volume(a, playback_volume() + (sc == SC_VOLUME_UP ? VOLUME_STEP : -VOLUME_STEP));
+      flash_volume();
+      return TRUE;
+    case SC_MUTE:
+      playback_set_muted(!playback_muted());
+      flash_volume();
+      return TRUE;
+    case SC_SHUFFLE:
+      set_shuffle(a, !playback_shuffle());
+      now_playing_flash(mc_str(playback_shuffle() ? MC_STR_SHUFFLE_ON : MC_STR_SHUFFLE_OFF));
+      return TRUE;
+    case SC_SEARCH:
+      if (gtk_widget_is_sensitive(a->sidebar)) open_search(a);
+      return TRUE;
+    case SC_SETTINGS:
+      if (gtk_widget_is_sensitive(a->settings)) on_settings(NULL, a);
+      return TRUE;
+    case SC_IMPORT: /* the import page's Choose folders… */
+      show_page(a, "import");
+      import_view_choose_folders(a->import);
+      return TRUE;
+    case SC_NEW_PLAYLIST: /* the Playlists page's + */
+      if (!gtk_widget_is_sensitive(a->sidebar) || !a->lib) return TRUE;
+      activate_nav_row(a, APP_VIEW_PLAYLISTS);
+      playlist_create_present(GTK_WIDGET(a->win), a->lib, on_playlist_created, a);
+      return TRUE;
+    case SC_SHORTCUTS:
+      show_shortcuts(a);
+      return TRUE;
+    case SC_ABOUT:
+      show_about(a);
+      return TRUE;
+    case SC_CLOSE: /* Ctrl+W and Ctrl+Q: closing the window quits, as playback goes with it */
+      gtk_window_close(a->win);
+      return TRUE;
+    default:
+      if (gtk_widget_is_sensitive(a->sidebar)) activate_nav_row(a, sc - SC_PAGE_1);
+      return TRUE;
+  }
+}
+
+/* Volume and seeking also come from the plain keys, so held down they repeat. */
+static void add_shortcuts(app *a, GtkWidget *win) {
+  static const struct {
+    guint key;
+    GdkModifierType mods;
+    shortcut sc;
+  } keys[] = {
+    {GDK_KEY_Right, GDK_CONTROL_MASK, SC_NEXT},
+    {GDK_KEY_Left, GDK_CONTROL_MASK, SC_PREVIOUS},
+    {GDK_KEY_Right, GDK_SHIFT_MASK, SC_SEEK_FORWARD},
+    {GDK_KEY_Left, GDK_SHIFT_MASK, SC_SEEK_BACK},
+    {GDK_KEY_Up, GDK_CONTROL_MASK, SC_VOLUME_UP},
+    {GDK_KEY_Down, GDK_CONTROL_MASK, SC_VOLUME_DOWN},
+    {GDK_KEY_plus, 0, SC_VOLUME_UP},
+    {GDK_KEY_equal, 0, SC_VOLUME_UP},
+    {GDK_KEY_KP_Add, 0, SC_VOLUME_UP},
+    {GDK_KEY_minus, 0, SC_VOLUME_DOWN},
+    {GDK_KEY_KP_Subtract, 0, SC_VOLUME_DOWN},
+    {GDK_KEY_m, GDK_CONTROL_MASK, SC_MUTE},
+    {GDK_KEY_s, GDK_CONTROL_MASK, SC_SHUFFLE},
+    {GDK_KEY_f, GDK_CONTROL_MASK, SC_SEARCH},
+    {GDK_KEY_1, GDK_CONTROL_MASK, SC_PAGE_1},
+    {GDK_KEY_2, GDK_CONTROL_MASK, SC_PAGE_1 + 1},
+    {GDK_KEY_3, GDK_CONTROL_MASK, SC_PAGE_1 + 2},
+    {GDK_KEY_4, GDK_CONTROL_MASK, SC_PAGE_1 + 3},
+    {GDK_KEY_comma, GDK_CONTROL_MASK, SC_SETTINGS},
+    {GDK_KEY_o, GDK_CONTROL_MASK, SC_IMPORT},
+    {GDK_KEY_n, GDK_CONTROL_MASK, SC_NEW_PLAYLIST},
+    {GDK_KEY_question, GDK_CONTROL_MASK, SC_SHORTCUTS},
+    {GDK_KEY_F1, 0, SC_ABOUT},
+    {GDK_KEY_w, GDK_CONTROL_MASK, SC_CLOSE},
+    {GDK_KEY_q, GDK_CONTROL_MASK, SC_CLOSE},
+  };
+  GtkEventController *controller = gtk_shortcut_controller_new();
+  gtk_event_controller_set_propagation_phase(controller, GTK_PHASE_CAPTURE);
+  for (size_t i = 0; i < G_N_ELEMENTS(keys); i++)
+    gtk_shortcut_controller_add_shortcut(
+      GTK_SHORTCUT_CONTROLLER(controller),
+      gtk_shortcut_new_with_arguments(gtk_keyval_trigger_new(keys[i].key, keys[i].mods),
+                                      gtk_callback_action_new(on_shortcut, a, NULL), "i", (gint32)keys[i].sc));
+  gtk_widget_add_controller(win, controller);
+}
+
+/* The open group's albums' tracks with a file here, one album after another: the n albums of
+ * grid in the group's order, or if order isn't NULL, album order[i] in place i. NULL if there's
+ * none to list. Free with mc_track_list_free(). */
+static mc_track_list *group_tracks(app *a, GtkWidget *grid, int n, const int *order) {
+  const char **uids = g_new(const char *, n);
+  for (int i = 0; i < n; i++) uids[i] = album_grid_uid_at(grid, order ? order[i] : i);
+  mc_track_list *list = NULL;
+  if (mc_library_list_albums_tracks(a->lib, uids, n, &list) != MC_OK) list = NULL;
+  g_free(uids);
+  return list;
+}
+
+/* Plays list, the open group's (group_tracks()), from item start; or with start -1 from the
+ * first, which shuffled is any. Playing it puts the group first in the recents, as playing an
+ * album does. */
+static void play_group_tracks(app *a, const mc_track_list *list, int start) {
+  const char *group = album_groups_open_group();
+  playback_track *queue = g_new0(playback_track, (gsize)list->count);
+  for (int i = 0; i < list->count; i++) {
+    const mc_track_info *t = &list->items[i];
+    queue[i] = (playback_track){t->uid, t->path, t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED), t->artist,
+                                t->album, t->cover_dir, t->duration_ms};
+  }
+  playback_play(queue, list->count, start, MC_PLAY_CONTEXT_ALBUM_GROUP, group);
+  g_free(queue);
+  if (group && mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, group) == MC_OK) recents_refresh(a);
+}
+
+/* An album shown in the track list, on its group's page: the whole group as the queue, from
+ * the album's track start (the list's index), or with start -1 its first, so previous and
+ * next see the albums either side. A track with no file here starts from the one before it,
+ * as app_play_album() does. FALSE, with nothing played, if none of the album is in the queue. */
+static gboolean play_group_from(app *a, const char *album, int start) {
+  GtkWidget *grid = album_groups_album_grid();
+  const char *track = NULL;
+  for (int i = start; i >= 0 && !track; i--) {
+    track_list_item t = track_list_item_at(i);
+    if (t.path) track = t.uid;
+  }
+  int albums = 0;
+  while (grid && album_grid_uid_at(grid, albums)) albums++;
+  if (!a->lib || !albums) return FALSE;
+  mc_track_list *list = group_tracks(a, grid, albums, NULL);
+  int first = -1;
+  for (int i = 0; list && i < list->count && first < 0; i++)
+    if (!strcmp(list->items[i].album_uid, album) && (!track || !strcmp(list->items[i].uid, track))) first = i;
+  if (first >= 0) play_group_tracks(a, list, first);
+  mc_track_list_free(list);
+  return first >= 0;
+}
+
+/* See app.h. Shuffled, an album on a group's page plays on its own (the album's Shuffle); the
+ * group has Shuffle tracks for that. */
+void app_play_album(app *a, int start) {
+  int n = track_list_count(), count = 0, first = start < 0 ? -1 : 0;
+  AlbumItem *album = track_list_album();
+  if (!album || !n) return;
+  if (a->view == APP_VIEW_ALBUM_GROUPS && album_groups_open_group() && !album->is_playlist && !album->is_group &&
+      (start >= 0 || !playback_shuffle()) && play_group_from(a, album->uid, start))
+    return;
+  playback_track *queue = g_new0(playback_track, (gsize)n);
+  for (int i = 0; i < n; i++) {
+    track_list_item t = track_list_item_at(i);
+    if (!t.path) continue;
+    if (start >= 0 && i <= start) first = count;
+    queue[count++] = (playback_track){t.uid, t.path, t.title, t.artist, t.album, t.cover_dir, t.duration_ms};
+  }
+  mc_play_context context = album->is_playlist ? MC_PLAY_CONTEXT_PLAYLIST
+                            : album->is_group  ? MC_PLAY_CONTEXT_ALBUM_GROUP
+                                               : MC_PLAY_CONTEXT_ALBUM;
+  if (count) playback_play(queue, count, first, context, album->uid);
+  g_free(queue);
+
+  mc_recent_kind kind = album->is_playlist ? MC_RECENT_PLAYLIST : MC_RECENT_ALBUM;
+  if (count && a->lib && mc_library_record_opened(a->lib, kind, album->uid) == MC_OK) recents_refresh(a);
+}
+
+void app_play_album_group(app *a, app_group_play how) {
+  GtkWidget *grid = album_groups_album_grid();
+  int albums = 0;
+  while (grid && album_grid_uid_at(grid, albums)) albums++;
+  if (!a->lib || !albums) return;
+  int *order = g_new(int, albums);
+  for (int i = 0; i < albums; i++) order[i] = i;
+  for (int i = albums - 1; how == APP_PLAY_SHUFFLE_ALBUMS && i > 0; i--) { /* Fisher-Yates */
+    int j = g_random_int_range(0, i + 1), t = order[i];
+    order[i] = order[j];
+    order[j] = t;
+  }
+  mc_track_list *list = group_tracks(a, grid, albums, order);
+  if (list && list->count) {
+    set_shuffle(a, how == APP_PLAY_SHUFFLE_TRACKS);
+    play_group_tracks(a, list, how == APP_PLAY_SHUFFLE_TRACKS ? -1 : 0);
+  }
+  mc_track_list_free(list);
+  g_free(order);
+}
+
+/* --- Albums, playlists and tracks --- */
+
+/* The grid whose selection the track list shows: on Album groups, the open group's albums
+ * (NULL while the groups show); on Artists, none. */
+static GtkWidget *shown_grid(app *a) {
+  switch (a->view) {
+    case APP_VIEW_PLAYLISTS: return a->playlist_grid;
+    case APP_VIEW_ALBUM_GROUPS: return album_groups_album_grid();
+    case APP_VIEW_ARTISTS: return NULL;
+    default: return a->album_grid;
+  }
+}
+
+/* Shows the selected album's or playlist's tracks, or hides the track list when none is
+ * selected. */
+static void show_album(app *a) {
+  GtkWidget *grid = shown_grid(a);
+  AlbumItem *album = grid ? album_grid_selection(grid) : NULL;
+  track_list_show(a->lib, album);
+  adw_overlay_split_view_set_show_sidebar(a->album_split, album != NULL);
+  update_buttons(a);
+}
+
+static void on_album_changed(void *user) {
+  show_album(user);
+}
+
+/* A track played from the track list. From an album (not a playlist), shuffle goes off
+ * first so the album plays in order, unless mc_settings_album_in_order() says not to. */
+static void on_track_play(void *user, int index) {
+  app *a = user;
+  AlbumItem *album = track_list_album();
+  if (album && !album->is_playlist && !album->is_group && playback_shuffle()) {
+    mc_settings *settings = NULL;
+    gboolean in_order = TRUE;
+    if (mc_settings_load(a->settings_dir, &settings) == MC_OK) in_order = mc_settings_album_in_order(settings);
+    mc_settings_free(settings);
+    if (in_order) set_shuffle(a, FALSE);
+  }
+  app_play_album(a, index);
+}
+
+/* The track list's Play and Shuffle: the whole album or playlist, in order from the first
+ * track, or shuffled. */
+static void on_track_play_all(void *user, gboolean shuffled) {
+  set_shuffle(user, shuffled);
+  app_play_album(user, shuffled ? -1 : 0);
+}
+
+static void on_tracks_close(void *user) {
+  GtkWidget *grid = shown_grid(user);
+  if (grid) album_grid_unselect(grid);
+  show_album(user);
+}
+
+/* A tile opened on the Home page. */
+static void on_home_open(void *user, mc_recent_kind kind, const char *uid, const char *artist) {
+  switch (kind) {
+    case MC_RECENT_ARTIST: app_open_artist(user, uid); break;
+    case MC_RECENT_ALBUM_GROUP: app_open_album_group(user, uid); break;
+    case MC_RECENT_PLAYLIST: app_open(user, TRUE, uid); break;
+    default: app_open_album_or_single(user, uid, artist); break;
+  }
+}
+
+/* An album clicked on an artist's page: it opens on the Albums page. */
+static void on_artist_album(void *user, const char *album_uid) {
+  app_open(user, FALSE, album_uid);
+}
+
+/* Opening an album group, or going back from one: the track list follows. */
+static void on_group_navigated(void *user) {
+  show_album(user);
+}
+
+/* Play next and Play last on anything the library holds (track_menu_append_queue()). */
+static void on_queue_add(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)user;
+  int kind;
+  const char *uid, *name;
+  g_variant_get(param, "(i&s&s)", &kind, &uid, &name);
+  playback_add((mc_up_next_kind)kind, uid, name, !strcmp(g_action_get_name(G_ACTION(action)), "play-next"));
+}
+
+/* Right-clicking an album in the album grid: Add to album group. */
+static void on_album_menu(void *user, GtkWidget *grid, AlbumItem *album, double x, double y) {
+  album_groups_album_menu(user, grid, album, NULL, x, y);
+}
+
+/* Right-clicking a playlist on the Playlists page: the menu it has on the Home page. */
+static void on_playlist_menu(void *user, GtkWidget *grid, AlbumItem *playlist, double x, double y) {
+  (void)user;
+  gtk_widget_insert_action_group(grid, "home", home_view_actions());
+  GMenuModel *menu = home_view_playlist_menu(playlist->uid, playlist->title, playlist->is_smart);
+  album_grid_popup(grid, menu, x, y);
+  g_object_unref(menu); /* the popover keeps it */
+}
+
+static void on_playlists_changed(void *user) {
+  app_reload_library(user);
+}
+
+/* The Playlists header's +: the new playlist opens. */
+static void on_playlist_created(void *user, const char *uid) {
+  app *a = user;
+  app_reload_library(a);
+  app_open(a, TRUE, uid);
+}
+
+static void on_new_playlist(GtkButton *button, gpointer user) {
+  app *a = user;
+  playlist_create_present(GTK_WIDGET(button), a->lib, on_playlist_created, a);
+}
+
+/* The + menu's New smart playlist… (smart.new-playlist): the new one opens. */
+static void on_new_smart_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (a->lib) smart_editor_new(GTK_WIDGET(a->win), a->lib, MC_SMART_TRACKS, on_playlist_created, a);
+}
+
+/* The "smart." actions, on the window. */
+static void add_smart_actions(app *a) {
+  const GActionEntry entries[] = {{"new-playlist", on_new_smart_playlist, NULL, NULL, NULL, {0}}};
+  GSimpleActionGroup *group = g_simple_action_group_new();
+  g_action_map_add_action_entries(G_ACTION_MAP(group), entries, G_N_ELEMENTS(entries), a);
+  gtk_widget_insert_action_group(GTK_WIDGET(a->win), "smart", G_ACTION_GROUP(group));
+  g_object_unref(group);
+}
+
+/* The Playlists header's + menu. */
+static GMenuModel *new_playlist_menu(void) {
+  GMenu *menu = g_menu_new();
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_SMART_NEW_PLAYLIST_MENU), "smart.new-playlist");
+  return G_MENU_MODEL(menu);
+}
+
+static void on_choose_sync(GtkButton *button, gpointer user) {
+  (void)button, (void)user;
+  devices_open_self();
+}
+
+static void on_track_add_to_playlist(void *user, const char *track_uid, gboolean here) {
+  app *a = user;
+  add_to_playlist_present(GTK_WIDGET(a->win), a->lib, track_uid, here, on_playlists_changed, a);
+}
+
+static void playlist_failed(app *a, const char *heading) {
+  AdwDialog *alert = adw_alert_dialog_new(heading, NULL);
+  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+  adw_dialog_present(alert, GTK_WIDGET(a->win));
+}
+
+/* A change to the shown playlist's tracks puts it first in the recents, as adding to one does. */
+static void playlist_changed(app *a) {
+  AlbumItem *playlist = track_list_album();
+  if (playlist && playlist->is_playlist) mc_library_record_opened(a->lib, MC_RECENT_PLAYLIST, playlist->uid);
+}
+
+static void on_track_remove(void *user, const char *entry_uid) {
+  app *a = user;
+  if (mc_playlist_remove(a->lib, entry_uid) != MC_OK) playlist_failed(a, mc_str(MC_STR_PLAYLIST_REMOVE_FAILED));
+  else playlist_changed(a);
+  app_reload_library(a);
+}
+
+static void on_track_move(void *user, const char *entry_uid, const char *after_entry_uid) {
+  app *a = user;
+  if (mc_playlist_move(a->lib, entry_uid, after_entry_uid) != MC_OK) playlist_failed(a, mc_str(MC_STR_PLAYLIST_MOVE_FAILED));
+  else playlist_changed(a);
+  app_reload_library(a);
+}
+
+/* A track dragged onto a manual playlist's tile is added to it (drag.h). */
+static GdkDragAction on_playlist_drop_over(void *user, AlbumItem *target, const drag_item *item) {
+  (void)user;
+  return item->kind == DRAG_TRACK && target->is_playlist && !target->is_smart ? GDK_ACTION_COPY : 0;
+}
+
+static gboolean on_playlist_dropped(void *user, AlbumItem *target, const drag_item *item, gboolean after) {
+  (void)after;
+  app *a = user;
+  if (!a->lib || !on_playlist_drop_over(a, target, item)) return FALSE;
+  if (mc_playlist_append(a->lib, target->uid, item->uid, NULL) != MC_OK) {
+    playlist_failed(a, mc_str(MC_STR_PLAYLIST_ADD_FAILED));
+    return FALSE;
+  }
+  mc_library_record_opened(a->lib, MC_RECENT_PLAYLIST, target->uid);
+  app_reload_library(a);
+  return TRUE;
+}
+
+/* Rename… and Delete… for a playlist, smart or not. */
+static void rename_playlist(app *a, AlbumItem *playlist) {
+  if (!a->lib || !playlist || !playlist->is_playlist) return;
+  if (playlist->is_smart)
+    smart_rename_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, MC_SMART_TRACKS,
+                         on_playlists_changed, a);
+  else
+    playlist_rename_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
+}
+
+static void delete_playlist(app *a, AlbumItem *playlist) {
+  if (!a->lib || !playlist || !playlist->is_playlist) return;
+  if (playlist->is_smart)
+    smart_delete_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, MC_SMART_TRACKS,
+                         on_playlists_changed, a);
+  else
+    playlist_delete_present(GTK_WIDGET(a->win), a->lib, playlist->uid, playlist->title, on_playlists_changed, a);
+}
+
+static void on_playlist_rename(void *user) {
+  rename_playlist(user, track_list_album());
+}
+
+static void on_playlist_delete(void *user) {
+  delete_playlist(user, track_list_album());
+}
+
+static void on_smart_saved(void *user, const char *uid) {
+  (void)uid;
+  app_reload_library(user);
+}
+
+/* Edit rules… for the shown smart playlist. */
+static void on_playlist_edit_rules(void *user) {
+  app *a = user;
+  AlbumItem *playlist = track_list_album();
+  if (a->lib && playlist && playlist->is_smart)
+    smart_editor_edit(GTK_WIDGET(a->win), a->lib, playlist->uid, on_smart_saved, a);
+}
+
+/* A new order for the shown smart playlist, which is in random order. */
+static void on_reshuffle(void *user) {
+  app *a = user;
+  AlbumItem *playlist = track_list_album();
+  if (!playlist || !playlist->is_smart) return;
+  if (mc_smart_reshuffle(a->lib, playlist->uid) != MC_OK) playlist_failed(a, mc_str(MC_STR_RESHUFFLE_FAILED));
+  app_reload_library(a);
+}
+
+/* The track menu's Delete from library... (the album tiles' is in album_groups_album_menu().) */
+static void on_track_delete(void *user, const char *track_uid, const char *title) {
+  app *a = user;
+  delete_dialog_present(GTK_WIDGET(a->win), a->lib, a->settings_dir, MC_DELETE_TRACKS, track_uid, title,
+                        on_playlists_changed, a);
+}
+
+/* The track menu's Go to album and Go to artist. */
+static void on_track_edit(void *user, const char *track_uid) {
+  edit_dialog_present(user, EDIT_TRACK, track_uid);
+}
+
+static void on_track_go_to_album(void *user, const char *album_uid, const char *track_uid) {
+  app_open_track(user, album_uid, track_uid);
+}
+
+static void on_track_go_to_artist(void *user, const char *artist_uid) {
+  app_open_artist(user, artist_uid);
+}
+
+/* Where the now-playing strip's track is. Not during an import session, when the library
+ * mustn't change under it (see on_import_session()). */
+static mc_library *now_playing_library(void *user) {
+  app *a = user;
+  return gtk_widget_get_sensitive(a->sidebar) ? a->lib : NULL;
+}
+
+static void on_active_changed(GObject *win, GParamSpec *pspec, gpointer user) {
+  (void)pspec;
+  if (gtk_window_is_active(GTK_WINDOW(win)) && restore_deleted(user)) app_reload_library(user);
+}
+
+void app_reload_library(app *a) {
+  int albums = album_grid_reload(a->album_grid, a->lib);
+  int playlists = album_grid_reload_playlists(a->playlist_grid, a->lib, a->art_dir, &a->hidden_playlists);
+  /* No albums but some tracks: they're all singles, so the empty page mustn't say no music. */
+  int64_t tracks = 0;
+  if (albums > 0 || !a->lib || mc_library_count(a->lib, MC_ENTITY_TRACKS, &tracks) != MC_OK) tracks = 0;
+  a->all_singles = tracks > 0;
+  set_empty_description(a);
+  /* Playlists with nothing to play here are hidden; say so rather than "No playlists yet". */
+  set_no_playlists(a);
+  gtk_stack_set_visible_child_name(a->playlists, playlists > 0 ? "grid" : "none");
+  album_groups_reload(a); /* if the open group went, back to the groups */
+  artist_view_reload();
+  const char *page = a->view == APP_VIEW_PLAYLISTS      ? "playlists"
+                     : a->view == APP_VIEW_ALBUM_GROUPS ? "groups"
+                                                        : (albums > 0 ? "grid" : "empty");
+  gtk_stack_set_visible_child_name(a->albums, page);
+  show_album(a); /* if the album went, the selection did too */
+  recents_refresh(a);
+  playback_cover_check(a->lib);
+  if (a->lib) mc_library_search_prepare(a->lib); /* the index is ready before the user types */
+  search_view_refresh();
+  gtk_widget_set_sensitive(a->stats_row, a->lib != NULL);
+  stats_dialog_refresh();
+}
+
+/* Picks view in the sidebar, as clicking it does. */
+static void open_view(app *a, app_view view) {
+  GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->nav, (int)view);
+  gtk_list_box_select_row(a->nav, row);
+  on_nav_activated(a->nav, row, a);
+}
+
+void app_open(app *a, gboolean playlist, const char *uid) {
+  open_view(a, playlist ? APP_VIEW_PLAYLISTS : APP_VIEW_ALBUMS);
+  gboolean found = album_grid_select(shown_grid(a), uid);
+  if (!found && playlist) { /* a smart playlist with nothing here is hidden, until it's asked for by name */
+    album_grid_keep_smart(a->playlist_grid, uid);
+    app_reload_library(a);
+    found = album_grid_select(a->playlist_grid, uid);
+  }
+  if (found) show_album(a);
+}
+
+void app_open_album_or_single(app *a, const char *uid, const char *artist) {
+  AlbumItem *album = album_grid_find(a->album_grid, uid);
+  const char *found = album ? NULL : artist_view_find(artist);
+  char artist_uid[MC_UID_STRLEN];
+  g_strlcpy(artist_uid, found ? found : "", sizeof artist_uid); /* opening reloads the list it's from */
+  if (album) g_object_unref(album);
+  if (artist_uid[0]) app_open_artist(a, artist_uid);
+  else app_open(a, FALSE, uid);
+}
+
+void app_open_artist(app *a, const char *uid) {
+  open_view(a, APP_VIEW_ARTISTS);
+  artist_view_open(uid);
+}
+
+void app_open_album_group(app *a, const char *uid) {
+  open_view(a, APP_VIEW_ALBUM_GROUPS);
+  album_groups_open(a, uid);
+}
+
+void app_open_track(app *a, const char *album_uid, const char *track_uid) {
+  app_open(a, FALSE, album_uid);
+  AlbumItem *album = track_list_album();
+  if (album && !strcmp(album->uid, album_uid)) track_list_select(track_uid);
+}
+
+/* --- SteadyBin --- */
+
+/* Holds the album grids while the track list slides in and out. The split view shrinks its
+ * content a little each frame, which would reflow the grid every frame; this lays the child
+ * out at the width it will end at, at once, and clips what the sliding pane will cover. */
+#define STEADY_TYPE_BIN (steady_bin_get_type())
+G_DECLARE_FINAL_TYPE(SteadyBin, steady_bin, STEADY, BIN, GtkWidget)
+
+struct _SteadyBin {
+  GtkWidget parent;
+  GtkWidget *child;
+  AdwOverlaySplitView *split;
+};
+
+G_DEFINE_FINAL_TYPE(SteadyBin, steady_bin, GTK_TYPE_WIDGET)
+
+/* The content's width once the split view settles; mirrors its get_sidebar_width(). */
+static int steady_bin_target_width(SteadyBin *self, int width) {
+  GtkWidget *split = GTK_WIDGET(self->split);
+  int split_width = gtk_widget_get_width(split);
+  if (adw_overlay_split_view_get_collapsed(self->split)) return width; /* the pane overlays */
+  if (!adw_overlay_split_view_get_show_sidebar(self->split)) return split_width;
+
+  GtkSettings *settings = gtk_widget_get_settings(split);
+  AdwLengthUnit unit = adw_overlay_split_view_get_sidebar_width_unit(self->split);
+  int sidebar_min, content_min;
+  gtk_widget_measure(adw_overlay_split_view_get_sidebar(self->split), GTK_ORIENTATION_HORIZONTAL, -1,
+                     &sidebar_min, NULL, NULL, NULL);
+  sidebar_min = MAX(sidebar_min, (int)ceil(adw_length_unit_to_px(
+                                     unit, adw_overlay_split_view_get_min_sidebar_width(self->split), settings)));
+  int sidebar_max = MAX(sidebar_min, (int)ceil(adw_length_unit_to_px(
+                                         unit, adw_overlay_split_view_get_max_sidebar_width(self->split), settings)));
+  gtk_widget_measure(GTK_WIDGET(self), GTK_ORIENTATION_HORIZONTAL, -1, &content_min, NULL, NULL, NULL);
+  int sidebar = MIN((int)(split_width * adw_overlay_split_view_get_sidebar_width_fraction(self->split)),
+                    split_width - content_min);
+  return split_width - CLAMP(sidebar, sidebar_min, sidebar_max);
+}
+
+static void steady_bin_measure(GtkWidget *widget, GtkOrientation orientation, int for_size, int *minimum,
+                               int *natural, int *minimum_baseline, int *natural_baseline) {
+  SteadyBin *self = STEADY_BIN(widget);
+  gtk_widget_measure(self->child, orientation, for_size, minimum, natural, minimum_baseline, natural_baseline);
+}
+
+static void steady_bin_size_allocate(GtkWidget *widget, int width, int height, int baseline) {
+  SteadyBin *self = STEADY_BIN(widget);
+  int min;
+  gtk_widget_measure(self->child, GTK_ORIENTATION_HORIZONTAL, height, &min, NULL, NULL, NULL);
+  gtk_widget_allocate(self->child, MAX(min, steady_bin_target_width(self, width)), height, baseline, NULL);
+}
+
+static void steady_bin_dispose(GObject *obj) {
+  SteadyBin *self = STEADY_BIN(obj);
+  g_clear_pointer(&self->child, gtk_widget_unparent);
+  G_OBJECT_CLASS(steady_bin_parent_class)->dispose(obj);
+}
+
+static void steady_bin_class_init(SteadyBinClass *klass) {
+  G_OBJECT_CLASS(klass)->dispose = steady_bin_dispose;
+  GTK_WIDGET_CLASS(klass)->measure = steady_bin_measure;
+  GTK_WIDGET_CLASS(klass)->size_allocate = steady_bin_size_allocate;
+}
+
+static void steady_bin_init(SteadyBin *self) {
+  gtk_widget_set_overflow(GTK_WIDGET(self), GTK_OVERFLOW_HIDDEN);
+}
+
+static GtkWidget *steady_bin_new(AdwOverlaySplitView *split, GtkWidget *child) {
+  SteadyBin *self = g_object_new(STEADY_TYPE_BIN, NULL);
+  self->split = split;
+  self->child = child;
+  gtk_widget_set_parent(child, GTK_WIDGET(self));
+  return GTK_WIDGET(self);
+}
+
+/* Delete and F2 on the selected playlist, smart or not (args TRUE for F2): the track list's
+ * Delete playlist… and Rename… for it. */
+static gboolean on_playlist_key(GtkWidget *grid, GVariant *args, gpointer user) {
+  app *a = user;
+  AlbumItem *playlist = album_grid_selection(grid);
+  if (!a->lib || !playlist || !playlist->is_playlist) return FALSE;
+  if (g_variant_get_boolean(args)) rename_playlist(a, playlist);
+  else delete_playlist(a, playlist);
+  return TRUE;
+}
+
+/* The Playlists page glows in the logo's colours while it has none to show (brand_backdrop.h). */
+static void on_playlists_shown(GtkStack *playlists, GParamSpec *pspec, gpointer page) {
+  (void)pspec;
+  brand_backdrop_set_lit(page, !g_strcmp0(gtk_stack_get_visible_child_name(playlists), "none"));
+}
+
+static GtkWidget *build_albums(app *a) {
+  GtkWidget *empty = adw_status_page_new();
+  adw_status_page_set_icon_name(ADW_STATUS_PAGE(empty), "folder-music-symbolic");
+  a->empty = ADW_STATUS_PAGE(empty);
+  a->empty_import = gtk_button_new_with_label(mc_str(MC_STR_IMPORT_MUSIC));
+  gtk_widget_add_css_class(a->empty_import, "pill");
+  gtk_widget_add_css_class(a->empty_import, "suggested-action");
+  gtk_widget_set_halign(a->empty_import, GTK_ALIGN_CENTER);
+  gtk_widget_set_visible(a->empty_import, FALSE);
+  g_signal_connect(a->empty_import, "clicked", G_CALLBACK(on_import), a);
+  a->empty_choose_sync = gtk_button_new_with_label(mc_str(MC_STR_CHOOSE_WHAT_TO_SYNC));
+  gtk_widget_add_css_class(a->empty_choose_sync, "pill");
+  gtk_widget_set_halign(a->empty_choose_sync, GTK_ALIGN_CENTER);
+  gtk_widget_set_visible(a->empty_choose_sync, FALSE);
+  g_signal_connect(a->empty_choose_sync, "clicked", G_CALLBACK(on_choose_sync), a);
+  GtkWidget *empty_buttons = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0); /* one shows at a time */
+  gtk_box_append(GTK_BOX(empty_buttons), a->empty_import);
+  gtk_box_append(GTK_BOX(empty_buttons), a->empty_choose_sync);
+  adw_status_page_set_child(a->empty, empty_buttons);
+  set_empty_description(a);
+
+  GtkWidget *no_playlists = adw_status_page_new();
+  adw_status_page_set_icon_name(ADW_STATUS_PAGE(no_playlists), "view-list-symbolic");
+  a->no_playlists = ADW_STATUS_PAGE(no_playlists);
+  a->choose_sync = gtk_button_new_with_label(mc_str(MC_STR_CHOOSE_WHAT_TO_SYNC));
+  gtk_widget_add_css_class(a->choose_sync, "pill");
+  gtk_widget_set_halign(a->choose_sync, GTK_ALIGN_CENTER);
+  g_signal_connect(a->choose_sync, "clicked", G_CALLBACK(on_choose_sync), a);
+  adw_status_page_set_child(a->no_playlists, a->choose_sync);
+  set_no_playlists(a);
+
+  /* The playlists under a header with the page's name and New playlist (+). */
+  GtkWidget *playlists = gtk_stack_new();
+  gtk_widget_set_vexpand(playlists, TRUE);
+  a->playlists = GTK_STACK(playlists);
+  gtk_stack_add_named(a->playlists, no_playlists, "none");
+  a->playlist_grid = album_grid_new(mc_str(MC_STR_SECTION_PLAYLISTS), on_album_changed, a);
+  album_grid_set_drop(a->playlist_grid, on_playlist_drop_over, on_playlist_dropped, a);
+  album_grid_set_menu(a->playlist_grid, on_playlist_menu, a);
+  GtkEventController *keys = gtk_shortcut_controller_new();
+  const guint playlist_keys[] = {GDK_KEY_Delete, GDK_KEY_KP_Delete, GDK_KEY_F2};
+  for (size_t i = 0; i < G_N_ELEMENTS(playlist_keys); i++)
+    gtk_shortcut_controller_add_shortcut(
+      GTK_SHORTCUT_CONTROLLER(keys),
+      gtk_shortcut_new_with_arguments(gtk_keyval_trigger_new(playlist_keys[i], 0),
+                                      gtk_callback_action_new(on_playlist_key, a, NULL), "b",
+                                      playlist_keys[i] == GDK_KEY_F2));
+  gtk_widget_add_controller(a->playlist_grid, keys);
+  gtk_stack_add_named(a->playlists, a->playlist_grid, "grid");
+  GtkWidget *playlists_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  GMenuModel *new_menu = new_playlist_menu();
+  gtk_box_append(GTK_BOX(playlists_box),
+                 app_list_header(mc_str(MC_STR_SECTION_PLAYLISTS), mc_str(MC_STR_NEW_PLAYLIST), "<Control>n",
+                                 G_CALLBACK(on_new_playlist), a, new_menu, mc_str(MC_STR_SMART_NEW_PLAYLIST_TITLE)));
+  g_object_unref(new_menu);
+  gtk_box_append(GTK_BOX(playlists_box), playlists);
+  /* The whole page glows, header and all, so the glow has no edge under the header; the
+   * view background is the backdrop's, beneath its glows. */
+  GtkWidget *playlists_page = brand_backdrop_new(playlists_box);
+  gtk_widget_add_css_class(playlists_page, "view");
+  g_signal_connect(playlists, "notify::visible-child-name", G_CALLBACK(on_playlists_shown), playlists_page);
+  on_playlists_shown(a->playlists, NULL, playlists_page);
+
+  GtkWidget *stack = gtk_stack_new();
+  gtk_stack_add_named(GTK_STACK(stack), brand_backdrop_new(empty), "empty");
+  a->album_grid = album_grid_new(mc_str(MC_STR_SECTION_ALBUMS), on_album_changed, a);
+  album_grid_set_menu(a->album_grid, on_album_menu, a);
+  gtk_stack_add_named(GTK_STACK(stack), a->album_grid, "grid");
+  gtk_stack_add_named(GTK_STACK(stack), playlists_page, "playlists");
+  gtk_stack_add_named(GTK_STACK(stack), album_groups_new(a, on_album_changed, on_group_navigated), "groups");
+  a->albums = GTK_STACK(stack);
+  return stack;
+}
+
+/* --- Window --- */
+
+/* A button whose tooltip has its shortcut, accel (see app_set_tooltip()). */
+static GtkWidget *icon_button(const char *icon, const char *tooltip, const char *accel) {
+  GtkWidget *b = gtk_button_new_from_icon_name(icon);
+  app_set_tooltip(b, tooltip, accel);
+  return b;
+}
+
+/* The Kithsong logo, at the start of the header bar before the playback buttons: the icon
+ * (built in, brand_logo()) in a LOGO x LOGO square, empty if it couldn't be decoded. It's
+ * only decoration: screen readers skip it, and clicks go through to the header bar, so it
+ * drags the window. */
+static GtkWidget *logo_new(void) {
+  /* A GtkImage, not a GtkPicture: it asks for pixel-size, where a picture would ask for the
+   * texture's 128 pixels and make the header bar that tall. */
+  GtkWidget *logo = g_object_new(GTK_TYPE_IMAGE, "accessible-role", GTK_ACCESSIBLE_ROLE_PRESENTATION,
+                                 "paintable", brand_logo(), "pixel-size", LOGO, NULL);
+  gtk_widget_set_valign(logo, GTK_ALIGN_CENTER);
+  gtk_widget_set_can_target(logo, FALSE);
+  return logo;
+}
+
+/* The playback buttons don't take the focus when clicked, so Space after clicking Next still
+ * plays or pauses rather than skipping again. */
+static GtkWidget *action_button(const char *icon, const char *tooltip, const char *accel, const char *action) {
+  GtkWidget *b = icon_button(icon, tooltip, accel);
+  gtk_actionable_set_action_name(GTK_ACTIONABLE(b), action);
+  gtk_widget_set_focus_on_click(b, FALSE);
+  return b;
+}
+
+/* Clears playlists' pictures out of the cache when their playlists have gone, on a worker
+ * thread with its own connection, since it looks each one up. data is the library folder
+ * and the cache folder. */
+static void prune_art_thread(GTask *task, gpointer source, gpointer data, GCancellable *cancellable) {
+  (void)source;
+  (void)cancellable;
+  char **dirs = data;
+  mc_library *lib = NULL;
+  if (mc_library_open(dirs[0], &lib) == MC_OK) {
+    mc_playlist_art_prune(lib, dirs[1]);
+    mc_library_close(lib);
+  }
+  g_task_return_boolean(task, TRUE);
+}
+
+static void prune_art(app *a) {
+  if (!a->lib) return;
+  char **dirs = g_new0(char *, 3);
+  dirs[0] = g_strdup(mc_library_dir(a->lib));
+  dirs[1] = g_strdup(a->art_dir);
+  GTask *task = g_task_new(NULL, NULL, NULL, NULL);
+  g_task_set_task_data(task, dirs, (GDestroyNotify)g_strfreev);
+  g_task_run_in_thread(task, prune_art_thread);
+  g_object_unref(task);
+}
+
+/* Sync goes with the window, before the library closes, if closing it didn't stop sync
+ * already (it does, while the pairing dialogs and the device page are still there). */
+static void on_window_destroy(GtkWidget *win, gpointer user) {
+  (void)win;
+  stats_dialog_stop();
+  devices_stop(user);
+}
+
+static void on_shutdown(GApplication *gapp, gpointer user) {
+  (void)gapp;
+  stats_dialog_stop();
+  if (save_volume_source) { /* a change not saved yet */
+    g_source_remove(save_volume_source);
+    save_volume(user);
+  }
+  playback_free();
+  mpris_free();
+  cover_cache_free();
+  art_colors_cache_free();
+}
+
+/* --- About, the shortcuts list and type to search --- */
+
+#define WEBSITE "https://kithso.ng"
+
+/* F1. */
+static void show_about(app *a) {
+  AdwDialog *about = adw_about_dialog_new();
+  AdwAboutDialog *d = ADW_ABOUT_DIALOG(about);
+  adw_about_dialog_set_application_name(d, mc_str(MC_STR_APP_NAME));
+  adw_about_dialog_set_application_icon(d, "ng.kithso.Kithsong");
+  adw_about_dialog_set_version(d, mc_version());
+  adw_about_dialog_set_comments(d, mc_str(MC_STR_APP_SUMMARY));
+  adw_about_dialog_set_website(d, WEBSITE);
+  adw_dialog_present(about, GTK_WIDGET(a->win));
+}
+
+/* The shortcuts list (Ctrl+?), as in README.md, by section: a section's heading has no
+ * accel. accel is as GtkShortcutsShortcut takes it: alternatives separated by spaces. */
+static const struct {
+  enum mc_str_id title;
+  const char *accel;
+} shortcut_list[] = {
+  {MC_STR_LINUX_SHORTCUTS_GENERAL, NULL},
+  {MC_STR_LINUX_SHORTCUTS_SEARCH, "<Control>f"},
+  {MC_STR_SECTION_ALBUMS, "<Control>1"},
+  {MC_STR_SECTION_ARTISTS, "<Control>2"},
+  {MC_STR_SECTION_PLAYLISTS, "<Control>3"},
+  {MC_STR_SECTION_ALBUM_GROUPS, "<Control>4"},
+  {MC_STR_LINUX_SHORTCUTS_BACK, "<Alt>Left BackSpace"},
+  {MC_STR_IMPORT_MUSIC, "<Control>o"},
+  {MC_STR_NEW_PLAYLIST, "<Control>n"},
+  {MC_STR_SETTINGS, "<Control>comma"},
+  {MC_STR_LINUX_SHORTCUTS_SHORTCUTS, "<Control>question"},
+  {MC_STR_ABOUT_TITLE, "F1"},
+  {MC_STR_LINUX_SHORTCUTS_CLOSE, "<Control>w <Control>q"},
+  {MC_STR_LINUX_SHORTCUTS_PLAYBACK, NULL},
+  {MC_STR_LINUX_SHORTCUTS_PLAY_PAUSE, "space"},
+  {MC_STR_NEXT_TRACK, "<Control>Right"},
+  {MC_STR_PREVIOUS_TRACK, "<Control>Left"},
+  {MC_STR_LINUX_SHORTCUTS_SEEK_FORWARD, "<Shift>Right"},
+  {MC_STR_LINUX_SHORTCUTS_SEEK_BACK, "<Shift>Left"},
+  {MC_STR_LINUX_SHORTCUTS_VOLUME_UP, "<Control>Up plus"},
+  {MC_STR_LINUX_SHORTCUTS_VOLUME_DOWN, "<Control>Down minus"},
+  {MC_STR_LINUX_SHORTCUTS_MUTE, "<Control>m"},
+  {MC_STR_LINUX_SHORTCUTS_SHUFFLE, "<Control>s"},
+  {MC_STR_LINUX_SHORTCUTS_TRACK_LIST, NULL},
+  {MC_STR_LINUX_SHORTCUTS_PLAY_TRACK, "Return"},
+  {MC_STR_LINUX_SHORTCUTS_REMOVE_TRACK, "Delete"},
+  {MC_STR_MOVE_UP, "<Alt>Up"},
+  {MC_STR_MOVE_DOWN, "<Alt>Down"},
+  {MC_STR_LINUX_SHORTCUTS_RENAME_PLAYLIST, "F2"},
+  {MC_STR_LINUX_SHORTCUTS_DELETE_PLAYLIST, "Delete"},
+  {MC_STR_LINUX_SHORTCUTS_TRACK_MENU, "Menu <Shift>F10"},
+  {MC_STR_LINUX_SHORTCUTS_CLOSE_TRACKS, "Escape"},
+};
+
+/* shortcut_list[i]'s title, formatted into buf if it needs to be. */
+static const char *shortcut_title(size_t i, char *buf, size_t size) {
+  if (shortcut_list[i].title != MC_STR_ABOUT_TITLE) return mc_str(shortcut_list[i].title);
+  mc_format(buf, size, mc_str(MC_STR_ABOUT_TITLE), MC_S(mc_str(MC_STR_APP_NAME)));
+  return buf;
+}
+
+#if ADW_CHECK_VERSION(1, 8, 0)
+static void show_shortcuts(app *a) {
+  AdwDialog *dialog = adw_shortcuts_dialog_new();
+  AdwShortcutsSection *section = NULL;
+  for (size_t i = 0; i < G_N_ELEMENTS(shortcut_list); i++) {
+    char buf[128];
+    const char *title = shortcut_title(i, buf, sizeof buf);
+    if (!shortcut_list[i].accel) {
+      section = adw_shortcuts_section_new(title);
+      adw_shortcuts_dialog_add(ADW_SHORTCUTS_DIALOG(dialog), section);
+    } else if (section) {
+      adw_shortcuts_section_add(section, adw_shortcuts_item_new(title, shortcut_list[i].accel));
+    }
+  }
+  adw_dialog_present(dialog, GTK_WIDGET(a->win));
+}
+#else
+/* Before libadwaita 1.8's AdwShortcutsDialog, a GtkShortcutsWindow, made from a builder
+ * description so its deprecation (GTK 4.18) doesn't show at build time. */
+static void show_shortcuts(app *a) {
+  GString *ui = g_string_new("<interface><object class='GtkShortcutsWindow' id='window'>"
+                             "<property name='modal'>1</property>"
+                             "<child><object class='GtkShortcutsSection'>"
+                             "<property name='section-name'>shortcuts</property>");
+  gboolean in_group = FALSE;
+  for (size_t i = 0; i < G_N_ELEMENTS(shortcut_list); i++) {
+    char buf[128];
+    const char *title = shortcut_title(i, buf, sizeof buf);
+    char *item;
+    if (!shortcut_list[i].accel) {
+      if (in_group) g_string_append(ui, "</object></child>");
+      item = g_markup_printf_escaped("<child><object class='GtkShortcutsGroup'><property name='title'>%s</property>",
+                                     title);
+      in_group = TRUE;
+    } else {
+      item = g_markup_printf_escaped("<child><object class='GtkShortcutsShortcut'><property name='title'>%s</property>"
+                                     "<property name='accelerator'>%s</property></object></child>",
+                                     title, shortcut_list[i].accel);
+    }
+    g_string_append(ui, item);
+    g_free(item);
+  }
+  g_string_append(ui, "</object></child></object></child></object></interface>");
+  GtkBuilder *builder = gtk_builder_new_from_string(ui->str, -1);
+  g_string_free(ui, TRUE);
+  GtkWindow *window = GTK_WINDOW(gtk_builder_get_object(builder, "window"));
+  gtk_window_set_transient_for(window, a->win);
+  gtk_window_present(window);
+  g_object_unref(builder);
+}
+#endif
+
+/* Type to search, as in GNOME's apps: a letter, digit or other printable character typed
+ * where it isn't text (and isn't a shortcut) opens Search with it in the box. Not over a
+ * dialog, nor while an import has the sidebar locked. */
+static gboolean on_type_to_search(GtkEventControllerKey *keys, guint keyval, guint keycode, GdkModifierType state,
+                                  gpointer user) {
+  (void)keycode;
+  app *a = user;
+  GtkWidget *win = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(keys));
+  gunichar c = gdk_keyval_to_unicode(keyval);
+  if (!c || !g_unichar_isgraph(c) || (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_SUPER_MASK | GDK_META_MASK)))
+    return FALSE;
+  if (text_focused(win) || adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(win))) return FALSE;
+  if (!gtk_widget_is_sensitive(a->sidebar)) return FALSE;
+  char text[8] = "";
+  g_unichar_to_utf8(c, text);
+  open_search(a);
+  search_view_start(text);
+  return TRUE;
+}
+
+/* --- Waiting for a device --- */
+
+static void on_banner_clicked(AdwBanner *banner, gpointer user) {
+  (void)banner;
+  app_back_to_library(user);
+}
+
+/* Details... on the problems banner: every sync problem, with how to fix it (Remove from
+ * Library... among them for lost tracks). */
+static void on_problems_clicked(AdwBanner *banner, gpointer user) {
+  (void)banner;
+  app *a = user;
+  issue_dialog_present(GTK_WIDGET(a->win), NULL);
+}
+
+/* The problems banner, for this library's sync. */
+static void update_problems(app *a, gboolean library) {
+  char text[512] = "";
+  mc_sync *sync = devices_sync();
+  mc_sync_problems *p = NULL;
+  if (sync && !mc_library_is_stress(a->lib) && mc_sync_get_problems(sync, &p) == MC_OK)
+    mc_sync_problems_text(p, text, sizeof text);
+  adw_banner_set_button_label(a->problems, p && p->issue_count > 0 ? mc_str(MC_STR_SYNC_ISSUES_DETAILS) : NULL);
+  mc_sync_problems_free(p);
+  /* The title stays while the banner slides away. */
+  if (text[0]) adw_banner_set_title(a->problems, text);
+  adw_banner_set_revealed(a->problems, library && text[0]);
+}
+
+void app_update_waiting(app *a) {
+  if (!a->waiting) return;
+  const char *page = gtk_stack_get_visible_child_name(a->pages);
+  gboolean library = page && !strcmp(page, "library");
+  update_problems(a, library);
+  /* A stress test library has no sync to wait for: the banner's the way back. */
+  if (mc_library_is_stress(a->lib)) {
+    adw_banner_set_title(a->waiting, mc_str(MC_STR_STRESS_BANNER_TITLE));
+    adw_banner_set_button_label(a->waiting, mc_str(MC_STR_STRESS_BACK));
+    adw_banner_set_revealed(a->waiting, library);
+    return;
+  }
+  adw_banner_set_button_label(a->waiting, NULL);
+  char text[512] = "";
+  mc_sync *sync = devices_sync();
+  mc_sync_waiting *w = NULL;
+  if (sync && mc_sync_get_waiting(sync, &w) == MC_OK) mc_sync_waiting_text(w, text, sizeof text);
+  mc_sync_waiting_free(w);
+  /* The title stays while the banner slides away. */
+  if (text[0]) adw_banner_set_title(a->waiting, text);
+  adw_banner_set_revealed(a->waiting, library && text[0]);
+}
+
+/* The Import row shows as picked on its page, which everything that opens it comes through. */
+static void show_import_picked(app *a) {
+  gboolean picked = !g_strcmp0(gtk_stack_get_visible_child_name(a->pages), "import");
+  if (picked) {
+    devices_unselect();
+    gtk_list_box_unselect_all(a->top_nav);
+    gtk_list_box_unselect_all(a->nav);
+    gtk_widget_set_state_flags(a->import_row, GTK_STATE_FLAG_SELECTED, FALSE);
+  } else {
+    gtk_widget_unset_state_flags(a->import_row, GTK_STATE_FLAG_SELECTED);
+  }
+  gtk_accessible_update_state(GTK_ACCESSIBLE(a->import_row), GTK_ACCESSIBLE_STATE_SELECTED, picked, -1);
+}
+
+static void on_page_changed(GObject *pages, GParamSpec *pspec, gpointer user) {
+  (void)pages;
+  (void)pspec;
+  app *a = user;
+  if (a->import_row) show_import_picked(a);
+  app_update_waiting(a);
+}
+
+/* --page's page (see main()), once the window is up: home, albums, artists, album:<title>,
+ * artist:<name> or search:<text>; with --demo-library, import, import-review and sync too.
+ * An unknown page, or a title not there, is passed over. Then --demo-playing's track. Called
+ * again (G_SOURCE_CONTINUE) until a page that needs something to come first can open. */
+static gboolean open_start_page(gpointer user) {
+  app *a = user;
+  const char *page = a->start_page;
+  static gboolean demo_import_started;
+  static int tries;
+  if (!page || !a->lib) {
+  } else if (a->demo && (!strcmp(page, "import") || !strcmp(page, "import-review"))) {
+    if (!demo_import_started) {
+      demo_import_started = TRUE;
+      show_page(a, "import");
+      import_view_start_demo(a->import);
+    }
+    if (!strcmp(page, "import-review")) {
+      if (!import_view_item_shown(a->import, MC_DEMO_IMPORT_REVIEW) && ++tries < 40) return G_SOURCE_CONTINUE;
+      import_view_open_review(a->import, MC_DEMO_IMPORT_REVIEW);
+    }
+  } else if (a->demo && !strcmp(page, "sync")) {
+    mc_sync *sync = devices_sync();
+    if (!sync || !devices_open(MC_DEMO_PHONE_UID)) {
+      if (++tries < 40) return G_SOURCE_CONTINUE;
+    } else {
+      mc_demo_sync_show(sync);
+      /* A made-up stranger nearby, for one of the store shots (scripts/store-screenshots). */
+      const char *stranger = g_getenv("KITHSONG_DEMO_STRANGER");
+      if (stranger && *stranger) mc_demo_sync_stranger(sync, stranger);
+    }
+  } else if (!strcmp(page, "home")) {
+    GtkListBoxRow *row = gtk_list_box_get_row_at_index(a->top_nav, TOP_NAV_HOME);
+    gtk_list_box_select_row(a->top_nav, row);
+    on_top_nav_activated(a->top_nav, row, a);
+  } else if (!strcmp(page, "albums")) {
+    open_view(a, APP_VIEW_ALBUMS);
+  } else if (!strcmp(page, "artists")) {
+    open_view(a, APP_VIEW_ARTISTS);
+  } else if (g_str_has_prefix(page, "search:")) {
+    open_search(a);
+    search_view_start(page + 7);
+  } else if (g_str_has_prefix(page, "album:")) {
+    char uid[MC_UID_STRLEN] = "";
+    mc_album_list *list = NULL;
+    if (mc_library_list_albums(a->lib, &list) == MC_OK)
+      for (int i = 0; i < list->count && !uid[0]; i++)
+        if (list->items[i].title && !strcmp(list->items[i].title, page + 6)) g_strlcpy(uid, list->items[i].uid, sizeof uid);
+    mc_album_list_free(list);
+    if (uid[0]) app_open(a, FALSE, uid);
+  } else if (g_str_has_prefix(page, "artist:")) {
+    char uid[MC_UID_STRLEN] = "";
+    mc_artist_list *list = NULL;
+    if (mc_library_list_artists(a->lib, &list) == MC_OK)
+      for (int i = 0; i < list->count && !uid[0]; i++)
+        if (list->items[i].name && !strcmp(list->items[i].name, page + 7)) g_strlcpy(uid, list->items[i].uid, sizeof uid);
+    mc_artist_list_free(list);
+    if (uid[0]) app_open_artist(a, uid);
+  }
+  g_free(a->start_page);
+  a->start_page = NULL;
+  if (a->demo_playing && a->lib) {
+    char uid[MC_UID_STRLEN];
+    int position = 0;
+    if (mc_demo_playing_track(a->lib, a->demo_playing, uid, &position) == MC_OK) playback_demo_show(uid, position);
+    else g_printerr("--demo-playing: no track %s in the library\n", a->demo_playing);
+  }
+  g_clear_pointer(&a->demo_playing, g_free);
+  return G_SOURCE_REMOVE;
+}
+
+/* --demo-library (see main()): the demo library in settings_dir/demo-library, made if it
+ * isn't there, as the settings' library. NULL if so, else why not, to free: the settings
+ * name another library already (a real settings folder never loses its library to it), or
+ * it couldn't be made. With --page sync, the made-up group of kithcore/demo.h is written into
+ * settings_dir's sync.db too, before sync starts. */
+static char *use_demo_library(const char *settings_dir, mc_settings *settings, const char *page) {
+  char *dir = g_build_filename(settings_dir, MC_DEMO_DIR_NAME, NULL), *why = NULL;
+  const char *current = mc_settings_library_dir(settings);
+  if (current && strcmp(current, dir)) {
+    why = mc_format_alloc(mc_str(MC_STR_DEMO_LIBRARY_OTHER), MC_S(current));
+  } else {
+    mc_status st = mc_demo_is_complete(dir) ? MC_OK : mc_demo_create(dir, NULL);
+    if (st != MC_OK) why = mc_format_alloc(mc_str(MC_STR_DEMO_LIBRARY_FAILED), MC_S(dir), MC_S(mc_status_str(st)));
+    else if (!current && mc_settings_set_library_dir(settings, dir) == MC_OK) mc_settings_save(settings);
+    if (st == MC_OK && page && !strcmp(page, "sync")) {
+      st = mc_demo_sync_group(dir, settings_dir, mc_settings_device_name(settings));
+      if (st != MC_OK) why = mc_format_alloc(mc_str(MC_STR_DEMO_LIBRARY_FAILED), MC_S(dir), MC_S(mc_status_str(st)));
+    }
+  }
+  g_free(dir);
+  return why;
+}
+
+/* Takes the screenshot options out of argv, which GApplication would refuse:
+ * --demo-library, --window-size WxH, --page <page> and --demo-playing <album>#<n>@<m:ss>
+ * (each also as --x=value). FALSE, having said why, for a bad one. */
+static gboolean take_options(int *argc, char **argv, app *a, gboolean *demo) {
+  int out = 1;
+  for (int i = 1; i < *argc; i++) {
+    const char *arg = argv[i], *value = NULL;
+    if (!strcmp(arg, "--")) { /* the rest are GApplication's */
+      while (i < *argc) argv[out++] = argv[i++];
+      break;
+    }
+    if (!strcmp(arg, "--demo-library")) {
+      *demo = TRUE;
+      continue;
+    }
+    gboolean size = !strcmp(arg, "--window-size") || g_str_has_prefix(arg, "--window-size=");
+    gboolean page = !strcmp(arg, "--page") || g_str_has_prefix(arg, "--page=");
+    gboolean playing = !strcmp(arg, "--demo-playing") || g_str_has_prefix(arg, "--demo-playing=");
+    if (!size && !page && !playing) {
+      argv[out++] = argv[i];
+      continue;
+    }
+    const char *eq = strchr(arg, '=');
+    value = eq ? eq + 1 : i + 1 < *argc ? argv[++i] : NULL;
+    if (!value || !*value) {
+      g_printerr("%s: %s needs a value\n", g_get_prgname() ? g_get_prgname() : "kithsong", arg);
+      return FALSE;
+    }
+    if (page) {
+      g_free(a->start_page);
+      a->start_page = g_strdup(value);
+      continue;
+    }
+    if (playing) {
+      g_free(a->demo_playing);
+      a->demo_playing = g_strdup(value);
+      continue;
+    }
+    int w = 0, h = 0;
+    char end = 0;
+    if (sscanf(value, "%dx%d%c", &w, &h, &end) != 2 || w < 320 || h < 240 || w > 16384 || h > 16384) {
+      g_printerr("%s: --window-size wants <width>x<height>, not %s\n", g_get_prgname() ? g_get_prgname() : "kithsong", value);
+      return FALSE;
+    }
+    a->window_w = w;
+    a->window_h = h;
+  }
+  argv[out] = NULL;
+  *argc = out;
+  return TRUE;
+}
+
+static void on_activate(GtkApplication *gapp, gpointer user) {
+  app *a = user;
+  if (a->win) { /* launched again: the app was already running */
+    gtk_window_present(a->win);
+    return;
+  }
+  a->gapp = gapp;
+  /* KITHSONG_THEME=light or dark overrides the desktop's style, for testing and screenshots,
+   * as on Windows. */
+  const char *theme = g_getenv("KITHSONG_THEME");
+  if (theme && (!strcmp(theme, "light") || !strcmp(theme, "dark")))
+    adw_style_manager_set_color_scheme(adw_style_manager_get_default(),
+                                       !strcmp(theme, "dark") ? ADW_COLOR_SCHEME_FORCE_DARK : ADW_COLOR_SCHEME_FORCE_LIGHT);
+
+  GtkCssProvider *provider = gtk_css_provider_new();
+  gtk_css_provider_load_from_string(provider, css);
+  gtk_style_context_add_provider_for_display(gdk_display_get_default(), GTK_STYLE_PROVIDER(provider),
+                                             GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+  g_object_unref(provider);
+
+  const GActionEntry actions[] = {
+    {"previous", on_previous, NULL, NULL, NULL, {0}},
+    {"play-pause", on_play_pause, NULL, NULL, NULL, {0}},
+    {"next", on_next, NULL, NULL, NULL, {0}},
+    {"play-next", on_queue_add, "(iss)", NULL, NULL, {0}},
+    {"play-last", on_queue_add, "(iss)", NULL, NULL, {0}},
+  };
+  g_action_map_add_action_entries(G_ACTION_MAP(gapp), actions, G_N_ELEMENTS(actions), a);
+
+  GtkWidget *header = adw_header_bar_new();
+  adw_header_bar_pack_start(ADW_HEADER_BAR(header), logo_new());
+  adw_header_bar_pack_start(ADW_HEADER_BAR(header),
+                            action_button("media-skip-backward-symbolic", mc_str(MC_STR_PREVIOUS_TRACK),
+                                          "<Control>Left", "app.previous"));
+  play_button = action_button("media-playback-start-symbolic", mc_str(MC_STR_PLAY), "space", "app.play-pause");
+  adw_header_bar_pack_start(ADW_HEADER_BAR(header), play_button);
+  adw_header_bar_pack_start(ADW_HEADER_BAR(header), action_button("media-skip-forward-symbolic", mc_str(MC_STR_NEXT_TRACK),
+                                                                  "<Control>Right", "app.next"));
+  adw_header_bar_pack_end(ADW_HEADER_BAR(header), volume_button_new(on_volume, on_muted, a));
+
+  /* The now-playing strip takes the title's place, up to a point. */
+  GtkWidget *clamp = adw_clamp_new();
+  adw_clamp_set_maximum_size(ADW_CLAMP(clamp), 640);
+  adw_clamp_set_tightening_threshold(ADW_CLAMP(clamp), 640);
+  gtk_widget_set_hexpand(clamp, TRUE);
+  gtk_widget_set_margin_start(clamp, 12);
+  gtk_widget_set_margin_end(clamp, 12);
+  adw_clamp_set_child(ADW_CLAMP(clamp), now_playing_new(on_seek, on_shuffle, a));
+  adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), clamp);
+
+  /* Right-hand track pane: hidden until an album is selected. */
+  GtkWidget *album_split = adw_overlay_split_view_new();
+  a->album_split = ADW_OVERLAY_SPLIT_VIEW(album_split);
+  adw_overlay_split_view_set_sidebar_position(a->album_split, GTK_PACK_END);
+  adw_overlay_split_view_set_min_sidebar_width(a->album_split, 320);
+  adw_overlay_split_view_set_max_sidebar_width(a->album_split, 420);
+  const track_list_callbacks tracks_cb = {on_track_play, on_track_play_all, on_tracks_close, on_track_add_to_playlist,
+                                          on_track_remove, on_track_move, on_playlist_rename, on_playlist_delete,
+                                          on_playlist_edit_rules,
+                                          on_track_delete, on_track_edit, on_reshuffle, on_track_go_to_album,
+                                          on_track_go_to_artist, a};
+  adw_overlay_split_view_set_sidebar(a->album_split, track_list_new(&tracks_cb));
+  now_playing_set_track_menu(&tracks_cb, now_playing_library);
+  adw_overlay_split_view_set_content(a->album_split, steady_bin_new(a->album_split, build_albums(a)));
+  adw_overlay_split_view_set_show_sidebar(a->album_split, FALSE);
+
+  GtkWidget *pages = gtk_stack_new();
+  a->pages = GTK_STACK(pages);
+  gtk_stack_add_named(a->pages, album_split, "library");
+  const home_view_callbacks home_cb = {on_home_open, on_import_present, a};
+  a->home = home_view_new(a, &home_cb);
+  gtk_stack_add_named(a->pages, a->home, "home");
+  const artist_view_callbacks artists_cb = {on_shuffle, on_track_add_to_playlist, on_artist_album, playback_changed, a};
+  a->artists = artist_view_new(a, &artists_cb);
+  gtk_stack_add_named(a->pages, a->artists, "artists");
+  a->search = search_view_new(a, &tracks_cb);
+  gtk_stack_add_named(a->pages, a->search, "search");
+  const import_view_callbacks import_cb = {on_import_library_changed, on_import_session,
+                                           on_import_done, on_import_present, a};
+  a->import = import_view_new(a->lib, &import_cb);
+  gtk_stack_add_named(a->pages, a->import, "import");
+
+  /* Tracks waiting for a device, above the library's pages: calm, no button, not dismissed. */
+  GtkWidget *content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  /* And what's wrong with the files here, above it. It goes by itself, not dismissed either. */
+  GtkWidget *problems = adw_banner_new("");
+  a->problems = ADW_BANNER(problems);
+  g_signal_connect(problems, "button-clicked", G_CALLBACK(on_problems_clicked), a);
+  adw_banner_set_use_markup(a->problems, FALSE);
+  gtk_widget_add_css_class(problems, "warning");
+  gtk_box_append(GTK_BOX(content), problems);
+  GtkWidget *waiting = adw_banner_new("");
+  a->waiting = ADW_BANNER(waiting);
+  g_signal_connect(waiting, "button-clicked", G_CALLBACK(on_banner_clicked), a);
+  adw_banner_set_use_markup(a->waiting, FALSE);
+  gtk_box_append(GTK_BOX(content), waiting);
+  gtk_widget_set_vexpand(pages, TRUE);
+  gtk_box_append(GTK_BOX(content), pages);
+  g_signal_connect(pages, "notify::visible-child-name", G_CALLBACK(on_page_changed), a);
+
+  GtkWidget *sidebar = build_sidebar(a);
+  GtkWidget *nav_split = adw_overlay_split_view_new();
+  adw_overlay_split_view_set_sidebar(ADW_OVERLAY_SPLIT_VIEW(nav_split), sidebar);
+  adw_overlay_split_view_set_content(ADW_OVERLAY_SPLIT_VIEW(nav_split), content);
+
+  GtkWidget *toolbar = adw_toolbar_view_new();
+  adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
+  adw_toolbar_view_set_top_bar_style(ADW_TOOLBAR_VIEW(toolbar), ADW_TOOLBAR_RAISED_BORDER);
+  adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), nav_split);
+  import_view_add_drop_target(a->import, toolbar); /* folders and zips dropped anywhere are imported */
+
+  GtkWidget *win = adw_application_window_new(gapp);
+  a->win = GTK_WINDOW(win);
+  add_smart_actions(a);
+  gtk_window_set_title(a->win, mc_str(MC_STR_APP_NAME));
+  gtk_window_set_default_size(a->win, a->window_w ? a->window_w : 1200, a->window_h ? a->window_h : 800);
+  GtkWidget *toasts = adw_toast_overlay_new();
+  a->toasts = ADW_TOAST_OVERLAY(toasts);
+  adw_toast_overlay_set_child(a->toasts, toolbar);
+  adw_application_window_set_content(ADW_APPLICATION_WINDOW(win), toasts);
+  g_signal_connect(win, "close-request", G_CALLBACK(on_close_request), a);
+
+  /* Space plays or pauses. The shortcut is in the bubble phase, so entries, buttons and
+   * switches still get Space first; the album grids and the track list don't (on_list_space()). */
+  GtkEventController *keys = gtk_shortcut_controller_new();
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_space, 0), gtk_named_action_new("app.play-pause")));
+  gtk_widget_add_controller(win, keys);
+  GtkEventController *list_keys = gtk_shortcut_controller_new();
+  gtk_event_controller_set_propagation_phase(list_keys, GTK_PHASE_CAPTURE);
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(list_keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_space, 0), gtk_callback_action_new(on_list_space, NULL, NULL)));
+  gtk_widget_add_controller(win, list_keys);
+  add_shortcuts(a, win);
+  /* Type to search: in the bubble phase too, after the focused widget has had the key. */
+  GtkEventController *typing = gtk_event_controller_key_new();
+  g_signal_connect(typing, "key-pressed", G_CALLBACK(on_type_to_search), a);
+  gtk_widget_add_controller(win, typing);
+
+  playback_init(a->win, playback_changed, a);
+  playback_set_library(a->lib, a->settings_dir);
+  delete_dialog_init(before_delete);
+  remove_here_init(before_remove_here);
+  mc_settings *settings = NULL;
+  if (mc_settings_load(a->settings_dir, &settings) == MC_OK) { /* shuffle and volume as they were left */
+    playback_set_shuffle(mc_settings_shuffle(settings));
+    playback_set_volume(mc_settings_volume(settings));
+    playback_set_scrobble(mc_settings_scrobble(settings));
+    playback_set_queue_tracks(mc_settings_queue_tracks(settings));
+  }
+  mc_settings_free(settings);
+
+  mpris_init(gapp, a->win, a->from_source, on_shuffle, on_mpris_volume, a);
+  prune_art(a);
+  restore_deleted(a);
+  mc_perf_mark("window_created");
+  perf_ui_init(a);
+  perf_ui_watch(album_grid_scrolled(a->album_grid), "albums");
+  perf_ui_watch(album_grid_scrolled(a->playlist_grid), "playlists");
+  perf_ui_watch(artist_view_scrolled(), "artists");
+  perf_ui_watch(home_view_scrolled(), "home");
+  perf_ui_watch(track_list_scrolled(), "tracks");
+  app_reload_library(a);
+  perf_ui_content_ready();
+  if (!a->first_run) devices_start(a); /* else once there's a library, on_first_run_done() */
+  mc_perf_mark("sync_started");
+  library_opened(a);
+  g_signal_connect(win, "notify::is-active", G_CALLBACK(on_active_changed), a);
+  g_signal_connect(win, "destroy", G_CALLBACK(on_window_destroy), a);
+  gtk_window_present(a->win);
+  mc_perf_mark("window_shown");
+  if (a->start_page || a->demo_playing) g_timeout_add(500, open_start_page, a); /* once the window has settled */
+  if (a->first_run) first_run_present(win, on_first_run_done, a);
+  else if (!a->demo) check_saved_library(a);
+  if (a->reset_failed) {
+    AdwDialog *alert = adw_alert_dialog_new(mc_str(MC_STR_SETTINGS_RESET), a->reset_failed);
+    adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+    adw_dialog_present(alert, GTK_WIDGET(a->win));
+    mc_free(a->reset_failed);
+    a->reset_failed = NULL;
+  }
+}
+
+/* The UI language: LANGUAGE's first choice, else LC_ALL, LC_MESSAGES or LANG, as GLib
+ * reads them for gettext. With none set it's "C", which is English. */
+static void set_strings_locale(void) {
+  const char *const *names = g_get_language_names();
+  mc_strings_set_locale(names[0]);
+}
+
+/* Moves path to the trash for core (mc_set_trash_handler()), through the portal in the
+ * Flatpak. Any thread. */
+static mc_status trash_with_gio(void *user, const char *path) {
+  (void)user;
+  GFile *file = g_file_new_for_path(path);
+  GError *error = NULL;
+  gboolean ok = g_file_trash(file, NULL, &error);
+  if (!ok) {
+    g_warning("Couldn't move %s to the trash: %s", path, error ? error->message : "unknown error");
+    g_clear_error(&error);
+  }
+  g_object_unref(file);
+  return ok ? MC_OK : MC_ERR_IO;
+}
+
+/* Settings from before the app was called Kithsong move over once; if that fails, the new
+ * folder starts out empty as on a first run.
+ *
+ * Screenshot options (scripts/store-screenshots), as on Windows: --demo-library opens the
+ * demo library (kithcore/demo.h) in <settings folder>/demo-library and refuses a settings
+ * folder that names another library (point XDG_CONFIG_HOME at a new folder for it).
+ * --window-size WxH is the starting size. --page is home, albums, artists, album:<title>,
+ * artist:<name> or search:<text>, and with --demo-library also import, import-review or sync.
+ * --demo-playing <album>#<track>@<m:ss> shows that track paused, without playing it
+ * (playback_demo_show()). */
+int main(int argc, char **argv) {
+  uint64_t main_us = mc_perf_now_us();
+  app a = {0};
+  /* In the Flatpak the sandbox has no trash folder of its own: deletes go through the trash
+   * portal (GIO's), as Files would. */
+  if (g_file_test("/.flatpak-info", G_FILE_TEST_EXISTS)) mc_set_trash_handler(trash_with_gio, NULL);
+  mc_init();
+  set_strings_locale(); /* before the player's and import's threads look anything up */
+  gboolean demo = FALSE;
+  if (!take_options(&argc, argv, &a, &demo)) {
+    mc_shutdown();
+    return 2;
+  }
+  a.demo = demo;
+
+  /* Settings in ~/.config/kithsong say where the library folder is. With none yet, the first
+   * run asks, once the window is up. Run from a checkout, settings are in kithsong-debug
+   * beside it, and the library is one in the temp folder (kithcore/source_run.h). */
+  int from_source = mc_source_run();
+  char *settings_dir = g_build_filename(g_get_user_config_dir(), from_source ? MC_SOURCE_SETTINGS_DIR : "kithsong", NULL);
+  if (!from_source) { /* the old folder is the installed app's to take */
+    char *old_dir = g_build_filename(g_get_user_config_dir(), "musicapp", NULL);
+    mc_settings_move_old_dir(old_dir, settings_dir);
+    g_free(old_dir);
+  }
+  /* Settings' Reset Kithsong… marked the folder and quit: clear it before anything opens it. */
+  char *left = NULL;
+  mc_status reset = mc_source_reset_if_requested(settings_dir, from_source, NULL, &left);
+  if (reset != MC_OK)
+    a.reset_failed = mc_format_alloc(mc_str(MC_STR_RESET_APP_FAILED), MC_S(left ? left : settings_dir),
+                                     MC_S(mc_status_str(reset)));
+  mc_free(left);
+  mc_settings *settings = NULL;
+  mc_status loaded = mc_settings_load(settings_dir, &settings);
+  if (demo) {
+    char *why = loaded != MC_OK ? mc_format_alloc(mc_str(MC_STR_DEMO_LIBRARY_FAILED), MC_S(settings_dir),
+                                                  MC_S(mc_status_str(loaded)))
+                                : use_demo_library(settings_dir, settings, a.start_page);
+    if (why) {
+      g_printerr("%s\n", why);
+      mc_free(why);
+      mc_settings_free(settings);
+      g_free(settings_dir);
+      g_free(a.start_page);
+      g_free(a.demo_playing);
+      mc_free(a.reset_failed);
+      mc_shutdown();
+      return 2;
+    }
+  }
+  /* If that fails the first run asks, with no Music folder to offer. */
+  if (loaded == MC_OK && from_source && !demo) mc_source_library_prepare(settings_dir, settings);
+  a.first_run = loaded == MC_OK && !mc_settings_library_dir(settings);
+  /* As early as it can be known; the start itself comes from the system. */
+  mc_perf_set_enabled(mc_settings_bool(settings, MC_PERF_SETTING, 0) || mc_perf_env_enabled());
+  mc_perf_mark_at("main_entered", main_us);
+  mc_perf_mark("settings_loaded");
+  a.settings_dir = settings_dir;
+  a.from_source = from_source;
+  a.art_dir = g_build_filename(settings_dir, MC_PLAYLIST_ART_CACHE_DIR, NULL);
+  const char *library_dir = mc_settings_library_dir(settings);
+  if (!library_dir || mc_library_open(library_dir, &a.lib) != MC_OK) a.lib = NULL;
+  mc_settings_free(settings);
+  mc_perf_mark("library_opened");
+
+  /* Its own id from a checkout, or this would only bring an installed copy forward. */
+  /* The demo library is never handed to a running copy, which has its own library. */
+  AdwApplication *gapp = adw_application_new(from_source ? "ng.kithso.Kithsong.Debug" : "ng.kithso.Kithsong",
+                                             demo ? G_APPLICATION_NON_UNIQUE : G_APPLICATION_DEFAULT_FLAGS);
+  g_signal_connect(gapp, "activate", G_CALLBACK(on_activate), &a);
+  g_signal_connect(gapp, "shutdown", G_CALLBACK(on_shutdown), &a);
+  int status = g_application_run(G_APPLICATION(gapp), argc, argv);
+  g_object_unref(gapp);
+
+  /* The window, and the import view with it, is gone by now, so the library can close once a
+   * search of the Edit dialog's is done with it. */
+  edit_dialog_wait();
+  mc_library_close(a.lib);
+  g_free(a.settings_dir);
+  g_free(a.art_dir);
+  g_free(a.start_page);
+  g_free(a.demo_playing);
+  mc_free(a.reset_failed);
+  mc_shutdown();
+  return status;
+}

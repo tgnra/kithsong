@@ -1,0 +1,139 @@
+#define COBJMACROS
+#include "pick_folder.h"
+
+#include <shobjidl.h>
+#include <stdlib.h>
+
+#include "prompt_dialog.h"
+#include "wstr.h"
+
+/* The item's file system path, as a malloc'd UTF-8 string, or NULL. */
+static char *item_path(IShellItem *item) {
+  wchar_t *path = NULL;
+  char *result = NULL;
+  if (SUCCEEDED(IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &path))) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, path, -1, NULL, 0, NULL, NULL);
+    if (n > 0 && (result = malloc((size_t)n))) WideCharToMultiByte(CP_UTF8, 0, path, -1, result, n, NULL, NULL);
+    CoTaskMemFree(path);
+  }
+  return result;
+}
+
+char *pick_folder(HWND owner, const wchar_t *title, const char *initial) {
+  IFileOpenDialog *dlg = NULL;
+  char *result = NULL;
+  if (FAILED(CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                              &IID_IFileOpenDialog, (void **)&dlg)))
+    return NULL;
+  DWORD opts = 0;
+  IFileOpenDialog_GetOptions(dlg, &opts);
+  IFileOpenDialog_SetOptions(dlg, opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+  IFileOpenDialog_SetTitle(dlg, title);
+
+  /* The shell can't go to a folder past MAX_PATH with Windows' long paths off, or one that's
+   * gone: the nearest parent it can will do. */
+  wchar_t *winitial = initial ? wstr_dup_from_utf8(initial) : NULL;
+  for (wchar_t *sep = winitial; sep;) {
+    IShellItem *folder = NULL;
+    if (SUCCEEDED(SHCreateItemFromParsingName(winitial, NULL, &IID_IShellItem, (void **)&folder))) {
+      IFileOpenDialog_SetFolder(dlg, folder);
+      IShellItem_Release(folder);
+      break;
+    }
+    if ((sep = wcsrchr(winitial, L'\\')) != NULL) *sep = L'\0';
+  }
+  free(winitial);
+
+  if (SUCCEEDED(IFileOpenDialog_Show(dlg, owner))) {
+    IShellItem *item = NULL;
+    if (SUCCEEDED(IFileOpenDialog_GetResult(dlg, &item))) {
+      result = item_path(item);
+      IShellItem_Release(item);
+    }
+  }
+  IFileOpenDialog_Release(dlg);
+  return result;
+}
+
+wchar_t *pick_file(HWND owner, const wchar_t *title, const wchar_t *types, const wchar_t *pattern) {
+  IFileOpenDialog *dlg = NULL;
+  wchar_t *result = NULL;
+  if (FAILED(CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                              &IID_IFileOpenDialog, (void **)&dlg)))
+    return NULL;
+  DWORD opts = 0;
+  IFileOpenDialog_GetOptions(dlg, &opts);
+  IFileOpenDialog_SetOptions(dlg, opts | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
+  IFileOpenDialog_SetTitle(dlg, title);
+  COMDLG_FILTERSPEC spec = {types, pattern};
+  IFileOpenDialog_SetFileTypes(dlg, 1, &spec);
+  if (SUCCEEDED(IFileOpenDialog_Show(dlg, owner))) {
+    IShellItem *item = NULL;
+    if (SUCCEEDED(IFileOpenDialog_GetResult(dlg, &item))) {
+      wchar_t *path = NULL;
+      if (SUCCEEDED(IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &path))) {
+        result = _wcsdup(path);
+        CoTaskMemFree(path);
+      }
+      IShellItem_Release(item);
+    }
+  }
+  IFileOpenDialog_Release(dlg);
+  return result;
+}
+
+char **pick_folders(HWND owner, const wchar_t *title, int *count) {
+  IFileOpenDialog *dlg = NULL;
+  char **result = NULL;
+  *count = 0;
+  if (FAILED(CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
+                              &IID_IFileOpenDialog, (void **)&dlg)))
+    return NULL;
+  DWORD opts = 0;
+  IFileOpenDialog_GetOptions(dlg, &opts);
+  IFileOpenDialog_SetOptions(dlg, opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_ALLOWMULTISELECT);
+  IFileOpenDialog_SetTitle(dlg, title);
+
+  IShellItemArray *items = NULL;
+  DWORD n = 0;
+  if (SUCCEEDED(IFileOpenDialog_Show(dlg, owner)) && SUCCEEDED(IFileOpenDialog_GetResults(dlg, &items)) &&
+      SUCCEEDED(IShellItemArray_GetCount(items, &n)) && n > 0 && (result = calloc(n, sizeof *result))) {
+    for (DWORD i = 0; i < n; i++) {
+      IShellItem *item = NULL;
+      if (FAILED(IShellItemArray_GetItemAt(items, i, &item))) continue;
+      char *path = item_path(item);
+      if (path) result[(*count)++] = path;
+      IShellItem_Release(item);
+    }
+    if (!*count) {
+      free(result);
+      result = NULL;
+    }
+  }
+  if (items) IShellItemArray_Release(items);
+  IFileOpenDialog_Release(dlg);
+  return result;
+}
+
+/* Sync clients copy files while they're being written, which can corrupt the SQLite
+ * database, and Windows often redirects Music into OneDrive. */
+static BOOL in_onedrive(const char *dir) {
+  static const wchar_t *const vars[] = {L"OneDrive", L"OneDriveConsumer", L"OneDriveCommercial"};
+  wchar_t wdir[MAX_PATH * 2];
+  wstr_from_utf8(wdir, MAX_PATH * 2, dir);
+  BOOL inside = FALSE;
+  for (size_t i = 0; !inside && i < sizeof vars / sizeof vars[0]; i++) {
+    wchar_t root[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(vars[i], root, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) continue;
+    inside = CompareStringOrdinal(wdir, (int)min(n, wcslen(wdir)), root, (int)n, TRUE) == CSTR_EQUAL &&
+             (wdir[n] == L'\0' || wdir[n] == L'\\');
+  }
+  return inside;
+}
+
+BOOL confirm_onedrive(HWND owner, const char *dir) {
+  if (!in_onedrive(dir)) return TRUE;
+  return confirm_dialog(owner, mc_wstr(MC_STR_LIBRARY_FOLDER), mc_wstr(MC_STR_WINDOWS_ONEDRIVE_WARNING), MB_ICONWARNING,
+                        mc_wstr_mnemonic(MC_STR_WINDOWS_YES), mc_wstr_mnemonic(MC_STR_WINDOWS_NO), TRUE);
+}

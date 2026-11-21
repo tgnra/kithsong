@@ -1,0 +1,110 @@
+/* One sync session over an established channel: HELLO, then the group changelog, then the
+ * library's and the files (transfer.c) if both devices hold the group's library, then BYE.
+ * See "Session" in
+ * docs/sync-protocol.md. Internal to core. */
+#ifndef MC_SYNC_SESSION_H
+#define MC_SYNC_SESSION_H
+
+#include "sync/pace.h"
+#include "sync/sync_internal.h"
+
+/* A turn's files so far: the estimates of those answered, and of those that came, with what
+ * those really took. */
+typedef struct mc_turn_sizes {
+  int64_t est_answered, est_moved, moved;
+} mc_turn_sizes;
+
+/* A track the peer asked this device to encode ahead (PREPARE_REQ for itself), at kbps. */
+typedef struct mc_ahead_track {
+  char track[MC_UID_STRLEN];
+  int kbps;
+} mc_ahead_track;
+
+typedef struct mc_session {
+  mc_sync *sync;
+  mc_sync_conn *conn;
+  mc_channel *ch;
+  char peer_uid[MC_UID_STRLEN]; /* known before run: the KK peer, or the pairing partner */
+  /* This device's user asked for this session, so it is shown from the start and its failure
+   * reported (mc_sync_progress.user). */
+  int asked;
+  /* This device's user asked for a session with the peer (mc_sync_pressed(); for the
+   * initiator, it was started for mc_sync_now()), so the library exchange may send the
+   * recycle bin's deletes (kithcore/delete.h). Never set from the peer's HELLO. */
+  int pressed;
+  /* The library exchange was left out: the recycle bin holds deletes and pressed is 0. */
+  int bin_held;
+  /* The peer's HELLO says it serves COVER_REQ (older versions end the session on it). */
+  int peer_covers;
+  /* Both HELLOs say they take FILES_PLAN (older versions end the session on it). */
+  int files_plan;
+  /* This side takes the first file turn (step 6): set by run from the HELLOs. */
+  int receive_first;
+  /* Versions: what this device says (set by run), what the peer said, and the optional
+   * features both HELLOs name (MC_FEAT_BIT()s). version_refused: the peer refused us for
+   * our version. */
+  mc_version_self self;
+  mc_sync_version peer_version;
+  unsigned features;
+  int version_refused;
+  /* The peer refused the session as busy, with this hold (MC_HOLD_NONE if it gave none, or
+   * one is running), until this Unix ms (0 for no end). */
+  mc_sync_hold refused_hold;
+  int64_t refused_until_ms;
+  /* What this side's receive turn found (issues.h), handed to sync at its end. */
+  struct mc_findings *findings;
+  /* Results. */
+  int64_t rows_sent, rows_received;
+  int64_t rows_new; /* received rows that were new here */
+  int library_synced;
+  int converged;   /* every database exchanged ended with equal digests */
+  int we_removed;  /* this device learnt it was removed from the group */
+  int follow_up;   /* group rows were written after the group exchange; sync again soon */
+  /* The file phase (transfer.c). */
+  int files_received, files_missing, files_corrupt, files_deleted, files_unknown, files_sent;
+  int files_done, files_total; /* this side's requests, for progress */
+  int64_t files_bytes;         /* their estimated size */
+  /* The peer's requests, as its FILES_PLAN announced them (0 until then), and how many of
+   * them this side has answered. A retry (FILE_REQ "retry") isn't counted again. */
+  int sends_done, sends_total;
+  int copying; /* this serving turn has used the encode pool (mc_sync_copying()) */
+  /* The peer's encode-ahead this turn, in its order, kept so that what's left of it can be
+   * queued again once transcoding is allowed again: closing the pool cancels it (transfer.c).
+   * ahead_at is the first the peer hasn't asked for yet; ahead_queued says it's queued from
+   * there on, as of the pool's ahead_closings. */
+  mc_ahead_track *ahead;
+  int ahead_n, ahead_cap, ahead_at, ahead_queued;
+  unsigned ahead_closings;
+  int64_t sends_bytes;
+  int covers_received;
+  int64_t bytes_received, bytes_sent;
+  /* The file phase's speed and time left, and how each turn's files came out against their
+   * estimates, which are often well off. */
+  mc_sync_pace pace;
+  mc_turn_sizes fetched_sizes, sent_sizes;
+  uint64_t progress_ms; /* when the file phase last reported progress */
+  struct mc_transfer *xfer; /* between mc_transfer_begin() and mc_transfer_end() */
+} mc_session;
+
+/* Noise KK as the initiator, to the member whose static key is peer_key. */
+mc_status mc_session_handshake_initiate(mc_session *s, const unsigned char *peer_key);
+/* Noise KK as the responder: finds the calling member and sets peer_uid. A removed
+ * member is told so (ERROR "removed") and gets MC_ERR_NOT_FOUND, like a stranger. */
+mc_status mc_session_handshake_respond(mc_session *s);
+
+/* Ends a session before HELLO with ERROR {reason, msg}, then reads what the peer sent
+ * meanwhile so that closing doesn't reset the connection before it reads the ERROR. */
+void mc_session_refuse(mc_channel *ch, const char *reason, const char *msg);
+/* The same for "busy", with what holds this device back (mc_hold_name(), or "running" for a
+ * session already under way) and until when (Unix ms, 0 for no end). */
+void mc_session_refuse_busy(mc_channel *ch, const char *hold, int64_t until_ms, const char *msg);
+
+/* Runs the session from HELLO to BYE. */
+mc_status mc_session_run(mc_session *s);
+
+/* Brings this device's own group rows up to date: its devices row (name, kind, host, key)
+ * and its capabilities (benchmark, free space, power, address hints). Logged only when
+ * something changed meaningfully. No-op outside a group. */
+mc_status mc_session_refresh_self(mc_sync *sync, mc_sync_conn *c);
+
+#endif

@@ -1,0 +1,8 @@
+/* Configured by CMake into the build dir: the build number (KITHSONG_BUILD_NUMBER, 0 for
+ * local builds), shown in the sidebar footer and stamped into the version resource. */
+#ifndef KITHSONG_BUILD_INFO_H
+#define KITHSONG_BUILD_INFO_H
+
+#define KITHSONG_BUILD_NUMBER @KITHSONG_BUILD_NUMBER@
+
+#endif

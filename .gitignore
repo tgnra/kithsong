@@ -1,0 +1,36 @@
+# CMake
+/build/
+/out/
+
+# Release packages (scripts/release-*)
+/dist/
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/*/build/
+android/*/.cxx/
+android/.kotlin/
+android/local.properties
+*.apk
+*.aab
+
+# Editor and IDE settings stay local
+.vscode/
+.idea/
+.vs/
+*.swp
+
+# Local data and secrets
+*.db
+*.db-wal
+*.db-shm
+CMakeUserPresets.json
+*.local.cmake
+*.jks
+*.keystore
+
+.claude/
+
+# The Last.fm API account page, pasted (cmake/LastfmKey.cmake reads it)
+/last.fm.api

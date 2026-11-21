@@ -1,0 +1,863 @@
+/* mDNS/DNS-SD announce and browse on a background thread, using mjansson/mdns. See
+ * docs/sync-protocol.md, "Discovery".
+ *
+ * We are both responder and browser. One IPv4 socket per multicast-capable interface,
+ * loopback included (each sends out of its own interface and advertises that interface's
+ * address), plus one IPv6 socket on the default interface when IPv6 works. All are bound to
+ * port 5353, so queries we send get multicast answers, which every instance on the link
+ * hears; that is also how two instances in one process see each other
+ * (SO_REUSEADDR/SO_REUSEPORT, which mdns_socket_open_ipv4/6 set). mdns_socket_listen()
+ * hands us both questions, which we answer, and answers, which we collect per packet and
+ * then merge into the peer table.
+ *
+ * Our records, for device "Desk" with device_uid ending in 12345678:
+ *   _kithsong._tcp.local.                   PTR  Desk (12345678)._kithsong._tcp.local.
+ *   Desk (12345678)._kithsong._tcp.local.   SRV  0 0 <port> kithsong-12345678.local.
+ *   Desk (12345678)._kithsong._tcp.local.   TXT  v=2 vmin=2 app=0.9.5 dev=... name=Desk ...
+ *   kithsong-12345678.local.                A    <interface address>, AAAA <global IPv6>
+ * The uid suffix keeps instance and host names unique without probing.
+ *
+ * The thread sleeps in select() until the next scan, announcement or peer expiry, or until
+ * a byte arrives on a loopback "wake" socket (portable, unlike a pipe, which Windows can't
+ * select on); stop and set_group send that byte. The sockets themselves are msock.c's.
+ *
+ * Staying visible. Every scan browses and also announces our records again, so others keep
+ * us online even when their queries don't reach us, and two packets a scan can be lost on
+ * Wi-Fi before a peer drops us. Interfaces are re-listed at every scan, and all sockets
+ * reopened when they changed (e.g. a phone moving between networks). A socket can also go
+ * deaf with its interface unchanged: a sleep or a Wi-Fi reconnect that keeps the address
+ * can leave it out of the multicast group (a membership belongs to the interface as it
+ * was), so nothing arrives and we answer nobody. Our own packets loop back to us
+ * (IP_MULTICAST_LOOP), so a socket that heard nothing at all, not even its own browse, for
+ * 1.5 scan intervals, or that failed to send, is reopened. Discovery starts even with no
+ * socket open (no network yet) and opens them once there is one.
+ *
+ * Android: the frontend must hold a WifiManager.MulticastLock, or incoming multicast is
+ * filtered. */
+#ifndef _WIN32
+#define _DEFAULT_SOURCE /* inet_ntop */
+#endif
+
+#include "kithcore/discovery.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#endif
+
+#include <mbedtls/sha256.h>
+
+#include "discovery/discovery_test.h"
+#include "discovery/local_addr.h"
+#include "discovery/msock.h"
+#include "mdns.h"
+#include "util/hex.h"
+#include "util/platform.h"
+
+#define SERVICE "_kithsong._tcp.local."
+#define DNS_SD "_services._dns-sd._udp.local."
+
+enum {
+  NAME_MAX_BYTES = 63,   /* of the device name we announce */
+  LABEL_NAME_BYTES = 52, /* of the name in the instance label: 63 minus " (12345678)" */
+  SHORT_UID = 8,
+  DNS_NAME_LEN = 256,
+  KIND_LEN = 16,
+  ADDR_LEN = 64,
+  RX_MAX = 8, /* services and hosts collected from one packet */
+  TXT_MAX = 16,
+  TXT_COUNT = 8, /* the records we send: v, dev, name, kind, grp, host, vmin, app */
+  APP_LEN = 32,
+  SEND_BYTES = 2048,
+  RECV_BYTES = 9216,    /* the largest mDNS packet (RFC 6762) */
+  REANNOUNCE_MS = 1000 /* announcements go out twice, a second apart (RFC 6762 8.3) */
+};
+
+typedef struct peer {
+  char dev[MC_UID_STRLEN];
+  char name[DNS_NAME_LEN];
+  char host[DNS_NAME_LEN];
+  char kind[KIND_LEN];
+  char grp[MC_GROUP_HASH_STRLEN];
+  int version, min_version;
+  char app[APP_LEN];
+  char instance[DNS_NAME_LEN];
+  char address[ADDR_LEN];
+  uint16_t port;
+  uint64_t seen_ms;      /* last heard */
+  uint64_t addr_seen_ms; /* last heard at this address */
+} peer;
+
+/* A service instance as described by the packet being read. */
+typedef struct rx_service {
+  char instance[DNS_NAME_LEN];
+  int goodbye;
+  int has_srv;
+  uint16_t port;
+  char target[DNS_NAME_LEN];
+  int has_txt;
+  char dev[MC_UID_STRLEN];
+  char name[DNS_NAME_LEN];
+  char host[DNS_NAME_LEN];
+  char kind[KIND_LEN];
+  char grp[MC_GROUP_HASH_STRLEN];
+  int version, min_version;
+  char app[APP_LEN];
+} rx_service;
+
+typedef struct rx_host {
+  char name[DNS_NAME_LEN];
+  int has_a, has_aaaa;
+  struct in_addr a;
+  struct in6_addr aaaa;
+} rx_host;
+
+struct mc_discovery {
+  /* Fixed at start. */
+  char device_uid[MC_UID_STRLEN];
+  char host[NAME_MAX_BYTES + 1];
+  char kind[KIND_LEN];
+  char instance[DNS_NAME_LEN];
+  char hostname[DNS_NAME_LEN];
+  uint16_t port;
+  char txt_v[12], txt_vmin[12], txt_app[APP_LEN];
+  uint64_t interval_ms;
+  mc_peer_cb cb;
+  void *user;
+  mc_thread thread;
+  int wsa; /* WSAStartup succeeded */
+
+  mc_mutex lock;
+  /* Under lock. */
+  int stop;
+  int group_changed;
+  char next_grp[MC_GROUP_HASH_STRLEN];
+  int name_changed;
+  char next_name[NAME_MAX_BYTES + 1];
+  int deafen;   /* tests: mc_discovery_test_deafen() */
+  int network_changed; /* mc_discovery_network_changed() */
+  int reopened; /* tests: mc_discovery_test_reopened() */
+
+  /* Discovery thread only (and start, before the thread exists). */
+  char grp[MC_GROUP_HASH_STRLEN];
+  char name[NAME_MAX_BYTES + 1]; /* TXT "name" */
+  mc_msocks ms; /* the sockets, and this device's addresses */
+  peer *peers;
+  int npeers;
+  /* The packet being read. */
+  const mc_msock *cur;
+  rx_service rx[RX_MAX];
+  int nrx;
+  rx_host rxh[RX_MAX];
+  int nrxh;
+  struct sockaddr_storage rx_from;
+  size_t rx_from_len;
+  uint32_t sendbuf[SEND_BYTES / 4]; /* mdns wants 32-bit aligned buffers */
+  uint32_t recvbuf[RECV_BYTES / 4];
+};
+
+/* --- Small helpers -------------------------------------------------------------------- */
+
+static int lower(int c) {
+  return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c;
+}
+
+/* DNS names compare case-insensitively (ASCII only). */
+static int name_eq(const char *a, const char *b) {
+  for (; *a && *b; a++, b++)
+    if (lower((unsigned char)*a) != lower((unsigned char)*b)) return 0;
+  return *a == *b;
+}
+
+/* "<label>._kithsong._tcp.local." */
+static int is_instance(const char *name) {
+  size_t n = strlen(name), s = strlen(SERVICE);
+  return n > s + 1 && name[n - s - 1] == '.' && name_eq(name + n - s, SERVICE);
+}
+
+/* Length of s cut to at most max bytes without splitting a UTF-8 sequence. */
+static size_t utf8_cut(const char *s, size_t max) {
+  size_t n = strlen(s);
+  if (n <= max) return n;
+  n = max;
+  while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+  return n;
+}
+
+static void copy_str(char *dst, size_t cap, const char *src, size_t len) {
+  if (len >= cap) len = cap - 1;
+  memcpy(dst, src, len);
+  dst[len] = '\0';
+}
+
+static int valid_group_hash(const char *h) {
+  if (!h || !*h) return 1;
+  for (int i = 0; i < 16; i++)
+    if (!((h[i] >= '0' && h[i] <= '9') || (h[i] >= 'a' && h[i] <= 'f'))) return 0;
+  return h[16] == '\0';
+}
+
+static int valid_kind(const char *kind) {
+  return kind && (!strcmp(kind, "desktop") || !strcmp(kind, "phone"));
+}
+
+/* --- Our records ---------------------------------------------------------------------- */
+
+typedef struct records {
+  mdns_record_t ptr, srv, a, aaaa;
+  mdns_record_t txt[TXT_COUNT];
+  int has_a, has_aaaa;
+} records;
+
+static mdns_string_t mstr(const char *s) {
+  mdns_string_t m;
+  m.str = s;
+  m.length = strlen(s);
+  return m;
+}
+
+static mdns_record_t txt_record(const mc_discovery *d, const char *key, const char *value) {
+  mdns_record_t r;
+  memset(&r, 0, sizeof r);
+  r.name = mstr(d->instance);
+  r.type = MDNS_RECORDTYPE_TXT;
+  r.data.txt.key = mstr(key);
+  r.data.txt.value = mstr(value);
+  return r;
+}
+
+/* The records as sent from socket s: its A record is that socket's interface address. */
+static void make_records(const mc_discovery *d, const mc_msock *s, records *r) {
+  memset(r, 0, sizeof *r);
+  r->ptr.name = mstr(SERVICE);
+  r->ptr.type = MDNS_RECORDTYPE_PTR;
+  r->ptr.data.ptr.name = mstr(d->instance);
+
+  r->srv.name = mstr(d->instance);
+  r->srv.type = MDNS_RECORDTYPE_SRV;
+  r->srv.data.srv.port = d->port;
+  r->srv.data.srv.name = mstr(d->hostname);
+
+  /* A socket not tied to one interface advertises the first non-loopback address. */
+  struct in_addr a4 = s->addr4;
+  for (int i = 0; a4.s_addr == htonl(INADDR_ANY) && i < d->ms.naddrs4; i++)
+    if ((ntohl(d->ms.addrs4[i].s_addr) >> 24) != 127) a4 = d->ms.addrs4[i];
+  if (a4.s_addr != htonl(INADDR_ANY)) {
+    r->a.name = mstr(d->hostname);
+    r->a.type = MDNS_RECORDTYPE_A;
+    r->a.data.a.addr.sin_family = AF_INET;
+    r->a.data.a.addr.sin_addr = a4;
+    r->has_a = 1;
+  }
+  if (d->ms.has_addr6) {
+    r->aaaa.name = mstr(d->hostname);
+    r->aaaa.type = MDNS_RECORDTYPE_AAAA;
+    r->aaaa.data.aaaa.addr.sin6_family = AF_INET6;
+    r->aaaa.data.aaaa.addr.sin6_addr = d->ms.addr6;
+    r->has_aaaa = 1;
+  }
+
+  r->txt[0] = txt_record(d, "v", d->txt_v);
+  r->txt[1] = txt_record(d, "dev", d->device_uid);
+  r->txt[2] = txt_record(d, "name", d->name);
+  r->txt[3] = txt_record(d, "kind", d->kind);
+  r->txt[4] = txt_record(d, "grp", d->grp);
+  r->txt[5] = txt_record(d, "host", d->host);
+  r->txt[6] = txt_record(d, "vmin", d->txt_vmin);
+  r->txt[7] = txt_record(d, "app", d->txt_app);
+}
+
+/* Collects the records that accompany an answer: SRV if wanted, then A, AAAA and TXT. */
+static size_t extras(const records *r, int with_srv, int with_a, int with_aaaa,
+                     mdns_record_t *out) {
+  size_t n = 0;
+  if (with_srv) out[n++] = r->srv;
+  if (with_a && r->has_a) out[n++] = r->a;
+  if (with_aaaa && r->has_aaaa) out[n++] = r->aaaa;
+  for (int i = 0; i < TXT_COUNT; i++) out[n++] = r->txt[i];
+  return n;
+}
+
+typedef enum send_mode { SEND_ANNOUNCE, SEND_GOODBYE } send_mode;
+
+static void announce(mc_discovery *d, send_mode mode) {
+  for (int i = 0; i < d->ms.nsocks; i++) {
+    mc_msock *s = &d->ms.socks[i];
+    records r;
+    mdns_record_t extra[4 + TXT_COUNT];
+    make_records(d, s, &r);
+    size_t n = extras(&r, 1, 1, 1, extra);
+    int ret;
+    if (mode == SEND_ANNOUNCE)
+      ret = mdns_announce_multicast(s->fd, d->sendbuf, sizeof d->sendbuf, r.ptr, NULL, 0, extra, n);
+    else
+      ret = mdns_goodbye_multicast(s->fd, d->sendbuf, sizeof d->sendbuf, r.ptr, NULL, 0, extra, n);
+    if (ret < 0) s->send_failed = 1;
+  }
+}
+
+static void browse(mc_discovery *d) {
+  for (int i = 0; i < d->ms.nsocks; i++)
+    if (mdns_query_send(d->ms.socks[i].fd, MDNS_RECORDTYPE_PTR, MDNS_STRING_CONST(SERVICE),
+                        d->sendbuf, sizeof d->sendbuf, 0) < 0)
+      d->ms.socks[i].send_failed = 1;
+}
+
+/* Answers a question about our service type, instance or host name, unicast if the
+ * question asked for that. */
+static void answer_question(mc_discovery *d, const struct sockaddr *from, size_t addrlen,
+                            uint16_t query_id, uint16_t rtype, uint16_t rclass,
+                            const char *qname) {
+  int any = rtype == MDNS_RECORDTYPE_ANY;
+  records r;
+  mdns_record_t answer, extra[4 + TXT_COUNT];
+  size_t n;
+  make_records(d, d->cur, &r);
+  if (name_eq(qname, DNS_SD) && (rtype == MDNS_RECORDTYPE_PTR || any)) {
+    memset(&answer, 0, sizeof answer);
+    answer.name = mstr(DNS_SD);
+    answer.type = MDNS_RECORDTYPE_PTR;
+    answer.data.ptr.name = mstr(SERVICE);
+    n = 0;
+  } else if (name_eq(qname, SERVICE) && (rtype == MDNS_RECORDTYPE_PTR || any)) {
+    answer = r.ptr;
+    n = extras(&r, 1, 1, 1, extra);
+  } else if (name_eq(qname, d->instance) &&
+             (rtype == MDNS_RECORDTYPE_SRV || rtype == MDNS_RECORDTYPE_TXT || any)) {
+    /* mdns can't send TXT as the answer itself; TXT then rides along as additional. */
+    answer = r.srv;
+    n = extras(&r, 0, 1, 1, extra);
+  } else if (name_eq(qname, d->hostname) && (rtype == MDNS_RECORDTYPE_A || any) && r.has_a) {
+    answer = r.a;
+    n = extras(&r, 0, 0, 1, extra);
+  } else if (name_eq(qname, d->hostname) && (rtype == MDNS_RECORDTYPE_AAAA || any) &&
+             r.has_aaaa) {
+    answer = r.aaaa;
+    n = extras(&r, 0, 1, 0, extra);
+  } else {
+    return;
+  }
+  if (rclass & MDNS_UNICAST_RESPONSE)
+    mdns_query_answer_unicast(d->cur->fd, from, addrlen, d->sendbuf, sizeof d->sendbuf,
+                              query_id, (mdns_record_type_t)rtype, qname, strlen(qname), answer,
+                              NULL, 0, extra, n);
+  else
+    mdns_query_answer_multicast(d->cur->fd, d->sendbuf, sizeof d->sendbuf, answer, NULL, 0,
+                                extra, n);
+}
+
+/* --- Reading answers ------------------------------------------------------------------ */
+
+static rx_service *rx_service_for(mc_discovery *d, const char *instance) {
+  if (!*instance) return NULL;
+  for (int i = 0; i < d->nrx; i++)
+    if (name_eq(d->rx[i].instance, instance)) return &d->rx[i];
+  if (d->nrx == RX_MAX) return NULL;
+  rx_service *r = &d->rx[d->nrx++];
+  memset(r, 0, sizeof *r);
+  copy_str(r->instance, sizeof r->instance, instance, strlen(instance));
+  r->version = r->min_version = -1;
+  return r;
+}
+
+static rx_host *rx_host_for(mc_discovery *d, const char *name, int create) {
+  for (int i = 0; i < d->nrxh; i++)
+    if (name_eq(d->rxh[i].name, name)) return &d->rxh[i];
+  if (!create || d->nrxh == RX_MAX) return NULL;
+  rx_host *h = &d->rxh[d->nrxh++];
+  memset(h, 0, sizeof *h);
+  copy_str(h->name, sizeof h->name, name, strlen(name));
+  return h;
+}
+
+static int key_is(const mdns_record_txt_t *t, const char *key) {
+  return t->key.length == strlen(key) && memcmp(t->key.str, key, t->key.length) == 0;
+}
+
+/* A non-negative decimal, else -1. */
+static int txt_int(const char *v, size_t vlen) {
+  int n = vlen ? 0 : -1;
+  for (size_t k = 0; k < vlen && n >= 0; k++)
+    n = v[k] >= '0' && v[k] <= '9' && n < 10000 ? n * 10 + (v[k] - '0') : -1;
+  return n;
+}
+
+static void read_txt(rx_service *r, const void *data, size_t size, size_t off, size_t len) {
+  mdns_record_txt_t txt[TXT_MAX];
+  size_t n = mdns_record_parse_txt(data, size, off, len, txt, TXT_MAX);
+  r->has_txt = 1;
+  for (size_t i = 0; i < n; i++) {
+    const char *v = txt[i].value.str ? txt[i].value.str : "";
+    size_t vlen = txt[i].value.length;
+    if (key_is(&txt[i], "dev")) {
+      if (vlen < MC_UID_STRLEN) copy_str(r->dev, sizeof r->dev, v, vlen);
+    } else if (key_is(&txt[i], "name")) {
+      copy_str(r->name, sizeof r->name, v, vlen);
+    } else if (key_is(&txt[i], "kind")) {
+      copy_str(r->kind, sizeof r->kind, v, vlen);
+    } else if (key_is(&txt[i], "host")) {
+      copy_str(r->host, sizeof r->host, v, vlen);
+    } else if (key_is(&txt[i], "grp")) {
+      if (vlen < MC_GROUP_HASH_STRLEN) copy_str(r->grp, sizeof r->grp, v, vlen);
+    } else if (key_is(&txt[i], "v")) {
+      r->version = txt_int(v, vlen);
+    } else if (key_is(&txt[i], "vmin")) {
+      r->min_version = txt_int(v, vlen);
+    } else if (key_is(&txt[i], "app")) {
+      copy_str(r->app, sizeof r->app, v, vlen);
+    }
+  }
+}
+
+static void read_name(const void *data, size_t size, size_t off, char out[DNS_NAME_LEN]) {
+  mdns_string_t s = mdns_string_extract(data, size, &off, out, DNS_NAME_LEN - 1);
+  out[s.str ? s.length : 0] = '\0';
+}
+
+static int on_record(int sock, const struct sockaddr *from, size_t addrlen,
+                     mdns_entry_type_t entry, uint16_t query_id, uint16_t rtype, uint16_t rclass,
+                     uint32_t ttl, const void *data, size_t size, size_t name_offset,
+                     size_t name_length, size_t record_offset, size_t record_length,
+                     void *user) {
+  (void)sock;
+  (void)name_length;
+  mc_discovery *d = user;
+  char name[DNS_NAME_LEN], target[DNS_NAME_LEN];
+  read_name(data, size, name_offset, name);
+  if (!d->rx_from_len && addrlen <= sizeof d->rx_from) {
+    memcpy(&d->rx_from, from, addrlen);
+    d->rx_from_len = addrlen;
+  }
+
+  if (entry == MDNS_ENTRYTYPE_QUESTION) {
+    answer_question(d, from, addrlen, query_id, rtype, rclass, name);
+    return 0;
+  }
+
+  /* A goodbye is the same records with TTL 0. */
+  rx_service *r;
+  rx_host *h;
+  if (rtype == MDNS_RECORDTYPE_PTR && name_eq(name, SERVICE)) {
+    mdns_string_t t = mdns_record_parse_ptr(data, size, record_offset, record_length, target,
+                                            sizeof target - 1);
+    target[t.str ? t.length : 0] = '\0';
+    if (is_instance(target) && (r = rx_service_for(d, target)) && ttl == 0) r->goodbye = 1;
+  } else if (rtype == MDNS_RECORDTYPE_SRV && is_instance(name) &&
+             (r = rx_service_for(d, name))) {
+    mdns_record_srv_t srv = mdns_record_parse_srv(data, size, record_offset, record_length,
+                                                  target, sizeof target - 1);
+    if (!srv.name.str) return 0;
+    r->has_srv = 1;
+    r->port = srv.port;
+    copy_str(r->target, sizeof r->target, srv.name.str, srv.name.length);
+    if (ttl == 0) r->goodbye = 1;
+  } else if (rtype == MDNS_RECORDTYPE_TXT && is_instance(name) &&
+             (r = rx_service_for(d, name))) {
+    read_txt(r, data, size, record_offset, record_length);
+    if (ttl == 0) r->goodbye = 1;
+  } else if (rtype == MDNS_RECORDTYPE_A && ttl && (h = rx_host_for(d, name, 1))) {
+    struct sockaddr_in a;
+    mdns_record_parse_a(data, size, record_offset, record_length, &a);
+    h->a = a.sin_addr;
+    h->has_a = a.sin_addr.s_addr != htonl(INADDR_ANY);
+  } else if (rtype == MDNS_RECORDTYPE_AAAA && ttl && (h = rx_host_for(d, name, 1))) {
+    struct sockaddr_in6 a6;
+    mdns_record_parse_aaaa(data, size, record_offset, record_length, &a6);
+    h->aaaa = a6.sin6_addr;
+    h->has_aaaa = mc_msocks_usable_ipv6(&a6.sin6_addr);
+  }
+  return 0;
+}
+
+/* The address to reach service r at: its host's A record, else AAAA, else the address the
+ * packet came from. */
+static void rx_address(mc_discovery *d, const rx_service *r, char out[ADDR_LEN]) {
+  out[0] = '\0';
+  const rx_host *h = r->target[0] ? rx_host_for(d, r->target, 0) : NULL;
+  if (h && h->has_a) {
+    inet_ntop(AF_INET, &h->a, out, ADDR_LEN);
+  } else if (h && h->has_aaaa) {
+    inet_ntop(AF_INET6, &h->aaaa, out, ADDR_LEN);
+  } else if (d->rx_from_len) {
+    const struct sockaddr *sa = (const struct sockaddr *)&d->rx_from;
+    if (sa->sa_family == AF_INET) {
+      struct sockaddr_in in;
+      memcpy(&in, sa, sizeof in);
+      inet_ntop(AF_INET, &in.sin_addr, out, ADDR_LEN);
+    } else if (sa->sa_family == AF_INET6) {
+      struct sockaddr_in6 in6;
+      memcpy(&in6, sa, sizeof in6);
+      inet_ntop(AF_INET6, &in6.sin6_addr, out, ADDR_LEN);
+      size_t n = strlen(out);
+      if (in6.sin6_scope_id && n + 12 < ADDR_LEN)
+        snprintf(out + n, ADDR_LEN - n, "%%%u", (unsigned)in6.sin6_scope_id);
+    }
+  }
+}
+
+/* --- Peer table ----------------------------------------------------------------------- */
+
+static void notify(mc_discovery *d, const peer *p, int online) {
+  mc_peer_info info;
+  info.device_uid = p->dev;
+  info.name = p->name;
+  info.kind = p->kind;
+  info.host = p->host;
+  info.group_hash = p->grp;
+  info.version = p->version;
+  info.min_version = p->min_version;
+  info.app = p->app;
+  info.address = p->address;
+  info.port = p->port;
+  d->cb(&info, online, d->user);
+}
+
+static int find_peer(const mc_discovery *d, const rx_service *r) {
+  for (int i = 0; i < d->npeers; i++) {
+    if (r->has_txt && r->dev[0] ? !strcmp(d->peers[i].dev, r->dev)
+                                : name_eq(d->peers[i].instance, r->instance))
+      return i;
+  }
+  return -1;
+}
+
+static void drop_peer(mc_discovery *d, int i) {
+  peer gone = d->peers[i];
+  d->peers[i] = d->peers[--d->npeers];
+  notify(d, &gone, 0);
+}
+
+static int set_field(char *dst, size_t cap, const char *src) {
+  if (!strcmp(dst, src)) return 0;
+  copy_str(dst, cap, src, strlen(src));
+  return 1;
+}
+
+/* Merges what the packet just read said about each service into the peer table. */
+static void merge_packet(mc_discovery *d) {
+  uint64_t now = mc_mono_ms();
+  for (int k = 0; k < d->nrx; k++) {
+    const rx_service *r = &d->rx[k];
+    if (r->has_txt && r->dev[0] ? !strcmp(r->dev, d->device_uid)
+                                : name_eq(r->instance, d->instance))
+      continue; /* our own */
+    int i = find_peer(d, r);
+    if (r->goodbye) {
+      if (i >= 0) drop_peer(d, i);
+      continue;
+    }
+    /* A kind this version doesn't know (the retired Wear OS app's "watch") is no device it
+     * can sync or pair with. */
+    if (r->has_txt && !valid_kind(r->kind)) {
+      if (i >= 0) drop_peer(d, i);
+      continue;
+    }
+    int changed = 0;
+    if (i < 0) {
+      if (!r->has_txt || !r->dev[0] || !r->has_srv) continue; /* not enough to report */
+      peer *grown = realloc(d->peers, (size_t)(d->npeers + 1) * sizeof *grown);
+      if (!grown) continue;
+      d->peers = grown;
+      i = d->npeers++;
+      memset(&d->peers[i], 0, sizeof d->peers[i]);
+      copy_str(d->peers[i].dev, sizeof d->peers[i].dev, r->dev, strlen(r->dev));
+      changed = 1;
+    }
+    peer *p = &d->peers[i];
+    if (r->has_txt) {
+      changed |= set_field(p->name, sizeof p->name, r->name);
+      changed |= set_field(p->kind, sizeof p->kind, r->kind);
+      changed |= set_field(p->host, sizeof p->host, r->host);
+      changed |= set_field(p->grp, sizeof p->grp, r->grp);
+      changed |= p->version != r->version || p->min_version != r->min_version;
+      p->version = r->version;
+      p->min_version = r->min_version;
+      changed |= set_field(p->app, sizeof p->app, r->app);
+    }
+    if (r->has_srv && r->port != p->port) {
+      p->port = r->port;
+      changed = 1;
+    }
+    set_field(p->instance, sizeof p->instance, r->instance);
+    /* A peer on several interfaces answers with a different address on each. Stick with
+     * the one we have until it's been silent for a scan interval, rather than flapping. */
+    char addr[ADDR_LEN];
+    rx_address(d, r, addr);
+    if (addr[0] && !strcmp(addr, p->address)) {
+      p->addr_seen_ms = now;
+    } else if (addr[0] && (!p->address[0] || now - p->addr_seen_ms > d->interval_ms)) {
+      set_field(p->address, sizeof p->address, addr);
+      p->addr_seen_ms = now;
+      changed = 1;
+    }
+    p->seen_ms = now;
+    if (changed) notify(d, p, 1);
+  }
+}
+
+/* Drops peers not heard for two scan intervals; returns when the next one would expire. */
+static uint64_t expire_peers(mc_discovery *d, uint64_t now) {
+  uint64_t next = UINT64_MAX;
+  for (int i = d->npeers - 1; i >= 0; i--) {
+    uint64_t due = d->peers[i].seen_ms + 2 * d->interval_ms;
+    if (due <= now)
+      drop_peer(d, i);
+    else if (due < next)
+      next = due;
+  }
+  return next;
+}
+
+/* --- Thread --------------------------------------------------------------------------- */
+
+/* A packet has arrived on s: answers what it asks, and merges what it says. */
+static void on_packet(void *user, mc_msock *s) {
+  mc_discovery *d = user;
+  d->cur = s;
+  d->nrx = d->nrxh = 0;
+  d->rx_from_len = 0;
+  mdns_socket_listen(s->fd, d->recvbuf, sizeof d->recvbuf, on_record, d);
+  merge_packet(d);
+}
+
+/* Reopens each socket that has heard nothing for 1.5 scan intervals, although it browsed
+ * (and loops its own packets back), or that failed to send. */
+static void reopen_deaf(mc_discovery *d, uint64_t now) {
+  int n = mc_msocks_reopen_deaf(&d->ms, now, d->interval_ms + d->interval_ms / 2);
+  if (!n) return;
+  mc_mutex_lock(&d->lock);
+  d->reopened += n;
+  mc_mutex_unlock(&d->lock);
+}
+
+/* For tests: leaves the multicast group on every socket, so they hear nothing. */
+static void deafen(mc_discovery *d) {
+  for (int i = 0; i < d->ms.nsocks; i++) {
+    const mc_msock *s = &d->ms.socks[i];
+    if (s->ipv6) {
+      struct ipv6_mreq req;
+      memset(&req, 0, sizeof req);
+      req.ipv6mr_multiaddr.s6_addr[0] = 0xff;
+      req.ipv6mr_multiaddr.s6_addr[1] = 0x02;
+      req.ipv6mr_multiaddr.s6_addr[15] = 0xfb;
+      setsockopt(s->fd, IPPROTO_IPV6, IPV6_LEAVE_GROUP, (const char *)&req, sizeof req);
+    } else {
+      struct ip_mreq req;
+      memset(&req, 0, sizeof req);
+      req.imr_multiaddr.s_addr = htonl((224u << 24) | 251u);
+      req.imr_interface = s->addr4;
+      setsockopt(s->fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, (const char *)&req, sizeof req);
+    }
+  }
+}
+
+static void run(void *arg) {
+  mc_discovery *d = arg;
+  uint64_t now = mc_mono_ms();
+  announce(d, SEND_ANNOUNCE);
+  browse(d);
+  uint64_t next_scan = now + d->interval_ms, reannounce = now + REANNOUNCE_MS;
+  for (;;) {
+    mc_mutex_lock(&d->lock);
+    int stop = d->stop, changed = d->group_changed || d->name_changed, deaf = d->deafen;
+    int network = d->network_changed;
+    if (d->group_changed) memcpy(d->grp, d->next_grp, sizeof d->grp);
+    if (d->name_changed) memcpy(d->name, d->next_name, sizeof d->name);
+    d->group_changed = d->name_changed = d->deafen = d->network_changed = 0;
+    mc_mutex_unlock(&d->lock);
+    if (stop) break;
+    if (deaf) deafen(d);
+
+    now = mc_mono_ms();
+    if (network) {
+      /* Every socket anew, then a scan at once. */
+      if (!mc_msocks_refresh(&d->ms)) {
+        int n = mc_msocks_reopen_deaf(&d->ms, now, 0);
+        mc_mutex_lock(&d->lock);
+        d->reopened += n;
+        mc_mutex_unlock(&d->lock);
+      }
+      changed = 1;
+      next_scan = now;
+    }
+    if (now >= next_scan) {
+      if (mc_msocks_refresh(&d->ms))
+        changed = 1;
+      else
+        reopen_deaf(d, now);
+      browse(d);
+      /* Again every scan, so that staying online doesn't hang on hearing others' queries.
+       * Sockets that just changed announce twice below instead. */
+      if (!changed) announce(d, SEND_ANNOUNCE);
+      next_scan = now + d->interval_ms;
+    }
+    if (changed) {
+      announce(d, SEND_ANNOUNCE);
+      reannounce = now + REANNOUNCE_MS;
+    } else if (reannounce && now >= reannounce) {
+      announce(d, SEND_ANNOUNCE);
+      reannounce = 0;
+    }
+    uint64_t deadline = expire_peers(d, now);
+    if (next_scan < deadline) deadline = next_scan;
+    if (reannounce && reannounce < deadline) deadline = reannounce;
+    mc_msocks_wait(&d->ms, deadline > now ? deadline - now : 0, on_packet, d);
+  }
+  announce(d, SEND_GOODBYE);
+}
+
+/* --- API ------------------------------------------------------------------------------ */
+
+static void discovery_free(mc_discovery *d) {
+  mc_msocks_close(&d->ms);
+  free(d->peers);
+  mc_mutex_destroy(&d->lock);
+#ifdef _WIN32
+  if (d->wsa) WSACleanup();
+#endif
+  free(d);
+}
+
+mc_status mc_discovery_start(const char *device_uid, const char *device_name, const char *kind,
+                             const char *group_hash, uint16_t port, int scan_interval_s,
+                             mc_peer_cb cb, void *user, mc_discovery **out) {
+  if (out) *out = NULL;
+  if (!device_uid || !*device_uid || strlen(device_uid) >= MC_UID_STRLEN || !device_name ||
+      !valid_kind(kind) || !valid_group_hash(group_hash) || !port || scan_interval_s < 0 ||
+      !cb || !out)
+    return MC_ERR_INVALID_ARG;
+  mc_discovery *d = calloc(1, sizeof *d);
+  if (!d) return MC_ERR_NOMEM;
+  d->ms.wake_fd = -1;
+  mc_mutex_init(&d->lock);
+#ifdef _WIN32
+  WSADATA wsa;
+  if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+    discovery_free(d);
+    return MC_ERR_NET;
+  }
+  d->wsa = 1;
+#endif
+
+  strcpy(d->device_uid, device_uid);
+  copy_str(d->name, sizeof d->name, device_name, utf8_cut(device_name, NAME_MAX_BYTES));
+  char host[256];
+  if (mc_hostname(host, sizeof host) == MC_OK)
+    copy_str(d->host, sizeof d->host, host, utf8_cut(host, NAME_MAX_BYTES));
+  strcpy(d->kind, kind);
+  if (group_hash) strcpy(d->grp, group_hash);
+  d->port = port;
+  snprintf(d->txt_v, sizeof d->txt_v, "%d", MC_DISCOVERY_VERSION);
+  snprintf(d->txt_vmin, sizeof d->txt_vmin, "%d", MC_DISCOVERY_MIN_VERSION);
+  copy_str(d->txt_app, sizeof d->txt_app, mc_version(), strlen(mc_version()));
+  int interval_s = scan_interval_s ? scan_interval_s : MC_DISCOVERY_DEFAULT_INTERVAL_S;
+  d->interval_ms = (uint64_t)interval_s * 1000;
+  d->cb = cb;
+  d->user = user;
+
+  /* "<name> (<uid tail>)": one DNS label, so no dots or control characters. */
+  size_t uid_len = strlen(device_uid);
+  const char *tail = device_uid + (uid_len > SHORT_UID ? uid_len - SHORT_UID : 0);
+  char label[NAME_MAX_BYTES + 1];
+  size_t n = utf8_cut(d->name, LABEL_NAME_BYTES);
+  for (size_t i = 0; i < n; i++) {
+    unsigned char c = (unsigned char)d->name[i];
+    label[i] = c == '.' ? '-' : c < 0x20 ? ' ' : (char)c;
+  }
+  label[n] = '\0';
+  snprintf(d->instance, sizeof d->instance, "%s (%s)." SERVICE, n ? label : "Kithsong", tail);
+  snprintf(d->hostname, sizeof d->hostname, "kithsong-%s.local.", tail);
+
+  /* With no network yet there may be no socket at all; every scan tries again. */
+  mc_msocks_open(&d->ms);
+  mc_status st = mc_thread_start(&d->thread, run, d);
+  if (st != MC_OK) {
+    discovery_free(d);
+    return st;
+  }
+  *out = d;
+  return MC_OK;
+}
+
+mc_status mc_discovery_set_group(mc_discovery *disc, const char *group_hash) {
+  if (!disc || !valid_group_hash(group_hash)) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&disc->lock);
+  strcpy(disc->next_grp, group_hash ? group_hash : "");
+  disc->group_changed = 1;
+  mc_mutex_unlock(&disc->lock);
+  mc_msocks_wake(&disc->ms);
+  return MC_OK;
+}
+
+mc_status mc_discovery_set_name(mc_discovery *disc, const char *device_name) {
+  if (!disc || !device_name) return MC_ERR_INVALID_ARG;
+  mc_mutex_lock(&disc->lock);
+  copy_str(disc->next_name, sizeof disc->next_name, device_name,
+           utf8_cut(device_name, NAME_MAX_BYTES));
+  disc->name_changed = 1;
+  mc_mutex_unlock(&disc->lock);
+  mc_msocks_wake(&disc->ms);
+  return MC_OK;
+}
+
+void mc_discovery_stop(mc_discovery *disc) {
+  if (!disc) return;
+  mc_mutex_lock(&disc->lock);
+  disc->stop = 1;
+  mc_mutex_unlock(&disc->lock);
+  mc_msocks_wake(&disc->ms);
+  mc_thread_join(&disc->thread);
+  discovery_free(disc);
+}
+
+void mc_discovery_network_changed(mc_discovery *disc) {
+  if (!disc) return;
+  mc_mutex_lock(&disc->lock);
+  disc->network_changed = 1;
+  mc_mutex_unlock(&disc->lock);
+  mc_msocks_wake(&disc->ms);
+}
+
+void mc_discovery_test_deafen(mc_discovery *disc) {
+  mc_mutex_lock(&disc->lock);
+  disc->deafen = 1;
+  mc_mutex_unlock(&disc->lock);
+  mc_msocks_wake(&disc->ms);
+}
+
+int mc_discovery_test_reopened(mc_discovery *disc) {
+  mc_mutex_lock(&disc->lock);
+  int n = disc->reopened;
+  mc_mutex_unlock(&disc->lock);
+  return n;
+}
+
+mc_status mc_discovery_group_hash(const char *group_uid, char out[MC_GROUP_HASH_STRLEN]) {
+  if (!group_uid || !*group_uid || !out) return MC_ERR_INVALID_ARG;
+  unsigned char digest[32];
+  if (mbedtls_sha256((const unsigned char *)group_uid, strlen(group_uid), digest, 0) != 0)
+    return MC_ERR_IO;
+  mc_hex(digest, 8, out);
+  return MC_OK;
+}
+
+int mc_local_addresses(char (*out)[MC_LOCAL_ADDR_STRLEN], int max) {
+  struct in_addr v4[MC_MSOCKS_MAX];
+  struct in6_addr v6;
+  int n4 = 0, has6 = 0, n = 0;
+  mc_msocks_list_addresses(v4, MC_MSOCKS_MAX, &n4, &v6, &has6);
+  for (int i = 0; i < n4 && n < max; i++) {
+    if ((ntohl(v4[i].s_addr) >> 24) == 127) continue; /* loopback reaches no one else */
+    if (inet_ntop(AF_INET, &v4[i], out[n], MC_LOCAL_ADDR_STRLEN)) n++;
+  }
+  if (has6 && n < max && inet_ntop(AF_INET6, &v6, out[n], MC_LOCAL_ADDR_STRLEN)) n++;
+  return n;
+}

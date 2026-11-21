@@ -1,0 +1,111 @@
+/* Scrobbling: telling Last.fm, or a service with the same API such as Libre.fm, what's
+ * being played.
+ *
+ * The account is the sync group's: signing in on one device signs in every member once they
+ * sync, and signing out signs them all out. It's kept in sync.db (with the service it's on),
+ * and stays when the device leaves its group. Each device scrobbles its own plays. They're
+ * queued in sync.db, so plays made offline are sent when the service can be reached again;
+ * plays made while signed out aren't kept.
+ *
+ * The player says when a play counts (MC_PLAYER_EVENT_PLAYED); the frontend passes it on
+ * with mc_scrobbler_scrobble(), and each new track with mc_scrobbler_now_playing(). A worker
+ * thread looks the track up and does the rest. Plays of tracks under 30 seconds, or with no
+ * artist, aren't scrobbled, as Last.fm asks. Nor are the tracks of an album flagged
+ * no_scrobble (edit.h), which aren't sent as now playing either; a play still queued when the
+ * flag is set doesn't go.
+ *
+ * Unlike most handles, a scrobbler may be used from any thread.
+ */
+#ifndef KITHCORE_SCROBBLER_H
+#define KITHCORE_SCROBBLER_H
+
+#include "kithcore/kithcore.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct mc_scrobbler mc_scrobbler;
+
+/* Last.fm's addresses: the service scrobbled to until another is set. */
+#define MC_SCROBBLER_LASTFM_API_URL "https://ws.audioscrobbler.com/2.0/"
+#define MC_SCROBBLER_LASTFM_AUTH_URL "https://www.last.fm/api/auth/"
+/* Libre.fm's addresses, for mc_scrobbler_set_service(). It takes any API key and secret, so
+ * these placeholders (shaped like Last.fm's, 32 hex digits) do. */
+#define MC_SCROBBLER_LIBREFM_API_URL "https://libre.fm/2.0/"
+#define MC_SCROBBLER_LIBREFM_AUTH_URL "https://libre.fm/api/auth/"
+#define MC_SCROBBLER_LIBREFM_API_KEY "6b697468736f6e676b697468736f6e67"
+#define MC_SCROBBLER_LIBREFM_API_SECRET "6c696272652e666d6c696272652e666d"
+
+/* Starts scrobbling plays from library lib for this device, whose sync.db is in config_dir
+ * (the per-device config dir, as for mc_sync_new()). lib must stay open while the scrobbler
+ * exists, but is only read here: the scrobbler opens its own connections. */
+mc_status mc_scrobbler_new(mc_library *lib, const char *config_dir, mc_scrobbler **out);
+/* Queues plays not yet queued, then stops. A call to the service in progress is cut short
+ * (within about a second; its plays stay queued), so this doesn't wait out a slow network.
+ * Stop any sign-in first (mc_scrobbler_auth_cancel(), then wait for its thread): the
+ * scrobbler mustn't be in use elsewhere while it's freed. NULL is a no-op. */
+void mc_scrobbler_free(mc_scrobbler *sc);
+
+/* track_uid has started playing. Best effort: sent once, if signed in and online. */
+mc_status mc_scrobbler_now_playing(mc_scrobbler *sc, const char *track_uid);
+/* A play of track_uid counts (see mc_player_take_played()); started_ms is when it began,
+ * in wall clock ms. Queued and sent when it can be. */
+mc_status mc_scrobbler_scrobble(mc_scrobbler *sc, const char *track_uid, int64_t started_ms);
+
+/* Signing in, in the user's browser. Both block on the network, so call them off the UI
+ * thread. mc_scrobbler_auth_begin() gets a token from the service and returns the page
+ * (free with mc_free()) where the user approves it. mc_scrobbler_auth_finish() then turns
+ * the token into a session: MC_ERR_AUTH until the user has approved it, so poll it every few
+ * seconds until MC_OK, or give up (the token lasts an hour). On MC_OK the account is saved,
+ * and reaches the rest of the group when it next syncs. MC_ERR_AUTH from begin means the
+ * service refused the API key, or the build has none for Last.fm. */
+mc_status mc_scrobbler_auth_begin(mc_scrobbler *sc, char **out_url);
+mc_status mc_scrobbler_auth_finish(mc_scrobbler *sc);
+/* Gives up on the sign-in under way: from any thread, a mc_scrobbler_auth_begin() or
+ * mc_scrobbler_auth_finish() in progress on another one stops within about a second with
+ * MC_ERR_NET, and so does every later mc_scrobbler_auth_finish() for its token. The next
+ * mc_scrobbler_auth_begin() starts afresh. */
+void mc_scrobbler_auth_cancel(mc_scrobbler *sc);
+/* Signs out, here and across the group. Queued plays wait for the next sign-in. */
+mc_status mc_scrobbler_sign_out(mc_scrobbler *sc);
+
+/* Which service to scrobble to. NULLs (or "") mean Last.fm's addresses and the build's
+ * Last.fm API key and secret; a service that wants its own key takes it here. Any service
+ * signs in as Last.fm does, on the auth_url page in the browser. Changing it signs out,
+ * since a session belongs to the service and key that made it. Synced like the account.
+ * MC_ERR_INVALID_ARG for an address that isn't http:// or https://. */
+mc_status mc_scrobbler_set_service(mc_scrobbler *sc, const char *api_url, const char *auth_url,
+                                   const char *api_key, const char *api_secret);
+
+/* The kind of service, as Settings shows it. */
+typedef enum mc_scrobbler_service {
+  MC_SCROBBLER_SERVICE_LASTFM,
+  MC_SCROBBLER_SERVICE_LIBREFM, /* by its API address, whatever the key */
+  MC_SCROBBLER_SERVICE_OTHER,
+} mc_scrobbler_service;
+
+typedef struct mc_scrobbler_status {
+  char *username;     /* NULL when signed out */
+  char *api_url;      /* the service's */
+  char *auth_url;     /* where its users approve a sign-in */
+  char *service_name; /* "Last.fm", "Libre.fm", or another's host name (from api_url) */
+  mc_scrobbler_service service;
+  int pending;        /* plays queued here and not yet sent */
+  int has_key;        /* 0 when the service has no API key: Last.fm in a build without one,
+                       * where signing in fails with MC_ERR_AUTH; say so instead */
+  mc_status last_error; /* of the last call to the service: MC_ERR_AUTH when it refused the
+                         * session (sign in again), MC_ERR_NET when it couldn't be reached.
+                         * MC_ERR_AUTH with username NULL: it said the session has ended, as
+                         * when access is revoked there, so this signed out across the group */
+} mc_scrobbler_status;
+
+/* A snapshot; cheap. Release with mc_scrobbler_status_clear(). */
+mc_status mc_scrobbler_status_get(mc_scrobbler *sc, mc_scrobbler_status *out);
+void mc_scrobbler_status_clear(mc_scrobbler_status *status);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

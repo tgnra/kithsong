@@ -1,0 +1,1701 @@
+#include "library/library_internal.h"
+#include "util/log.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "library/delete_internal.h"
+#include "library/edit_internal.h"
+#include "search/search_internal.h"
+#include "sync/rows.h"
+#include "util/db_open.h"
+#include "util/platform.h"
+#include "util/text.h"
+#include "util/uid.h"
+
+extern const unsigned char mc_schema_v1_sql[];
+
+/* Migration i takes the database from user_version i to i + 1. Append only. */
+static const char *const k_migrations[] = {
+  (const char *)mc_schema_v1_sql,
+  /* v2: singles. Tracks that aren't part of an album live in one "<artist> Singles" album
+   * per artist (kind = 'singles'), so each track keeps its own year and release id. Undone
+   * by v12, but for the columns. */
+  "ALTER TABLE albums ADD COLUMN kind TEXT NOT NULL DEFAULT 'album';"
+  "ALTER TABLE tracks ADD COLUMN year INTEGER;"
+  "ALTER TABLE tracks ADD COLUMN mb_albumid TEXT;"
+  "CREATE INDEX albums_singles ON albums (artist_uid) WHERE kind = 'singles';",
+  /* v3: date added and play counts. Tracks imported before this have no added_ms. Plays are
+   * counted per device (one row per track and node, only ever written by that node), so
+   * syncing never loses plays made on two devices; the total is the sum. */
+  "ALTER TABLE tracks ADD COLUMN added_ms INTEGER;"
+  "CREATE TABLE track_plays ("
+  "  uid        TEXT PRIMARY KEY,"
+  "  track_uid  TEXT NOT NULL REFERENCES tracks (uid) ON DELETE CASCADE,"
+  "  node_uid   TEXT NOT NULL,"
+  "  play_count INTEGER NOT NULL DEFAULT 0,"
+  "  UNIQUE (track_uid, node_uid)"
+  ") WITHOUT ROWID;",
+  /* v4: sync data moves out to sync.db, so the unused peers table goes. files.sha256 is the
+   * SHA-256 (hex) of the file's bytes, recorded when sync transfers or verifies it. The
+   * library's own identity, meta.library_uid, is created in C at open (see load_meta_uid). */
+  "DROP TABLE peers;"
+  "ALTER TABLE files ADD COLUMN sha256 TEXT;",
+  /* v5: album groups, playlists of albums. Entries are ordered by fractional index like
+   * playlist_entries, so concurrent edits on two devices merge the same way. */
+  "CREATE TABLE album_groups ("
+  "  uid  TEXT PRIMARY KEY,"
+  "  name TEXT NOT NULL"
+  ") WITHOUT ROWID;"
+  "CREATE TABLE album_group_entries ("
+  "  uid       TEXT PRIMARY KEY,"
+  "  group_uid TEXT NOT NULL REFERENCES album_groups (uid) ON DELETE CASCADE,"
+  "  album_uid TEXT NOT NULL REFERENCES albums (uid) ON DELETE CASCADE,"
+  "  position  TEXT NOT NULL"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX album_group_entries_order ON album_group_entries (group_uid, position, uid);"
+  "CREATE INDEX album_group_entries_album ON album_group_entries (album_uid);",
+  /* v6: smart lists and last played. A smart list is a playlist or album group defined by a
+   * rule (JSON, see docs/schema.md) that's evaluated each time it's listed. Like play_count,
+   * last_played_ms is per device; a track's last play is the newest over its rows. */
+  "ALTER TABLE track_plays ADD COLUMN last_played_ms INTEGER;"
+  "CREATE TABLE smart_lists ("
+  "  uid     TEXT PRIMARY KEY,"
+  "  name    TEXT NOT NULL,"
+  "  subject TEXT NOT NULL,"
+  "  rule    TEXT NOT NULL"
+  ") WITHOUT ROWID;",
+  /* v7: recents, what was last opened. A row's uid is the opened item's own uid, so opening
+   * one item on two devices writes the same row and sync keeps the newest open. */
+  "CREATE TABLE recents ("
+  "  uid       TEXT PRIMARY KEY,"
+  "  kind      TEXT NOT NULL,"
+  "  opened_ms INTEGER NOT NULL"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX recents_opened ON recents (opened_ms);",
+  /* v8: duplicate merging (sync/merge.c). The same artist, album or track imported on two
+   * devices is one: aliases maps each merged-away uid to the smallest uid of its class, and
+   * merge_keys holds the MusicBrainz ids (and, until v12, singles albums' artists) ever
+   * logged for each uid, which decide the classes. Both are derived from the changelog on
+   * every device, so they are never logged; meta.merge_seq is how far the changelog has been
+   * read. */
+  "CREATE TABLE aliases ("
+  "  uid       TEXT PRIMARY KEY,"
+  "  entity    TEXT NOT NULL,"
+  "  canonical TEXT NOT NULL"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX aliases_canonical ON aliases (canonical);"
+  "CREATE TABLE merge_keys ("
+  "  entity TEXT NOT NULL,"
+  "  field  TEXT NOT NULL,"
+  "  value  TEXT NOT NULL,"
+  "  uid    TEXT NOT NULL,"
+  "  PRIMARY KEY (entity, field, value, uid)"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX merge_keys_uid ON merge_keys (uid);",
+  /* v9: replacing a track's file. An import that swaps a track's original for a better file
+   * (tagger.h, "Duplicates") gives the track a new file_rev (a uid; NULL until the first
+   * swap). It is logged, so every device learns of the swap. files.file_rev is the file_rev
+   * a file was made from: a received copy or transcode whose file_rev differs from its
+   * track's is stale, and sync replaces it (transfer.c). Not logged: files are per device. */
+  "ALTER TABLE tracks ADD COLUMN file_rev TEXT;"
+  "ALTER TABLE files ADD COLUMN file_rev TEXT;",
+  /* v10: example smart lists, so a library has some to open before there's an editor. Their
+   * uids are fixed, so every device makes the same rows: they aren't logged (migrations
+   * never are, see migrate), and a later rename, reshuffle or delete logs against the uid
+   * every device already has. A rule with no matches just lists nothing, as on an empty
+   * library. */
+  "INSERT OR IGNORE INTO smart_lists (uid, name, subject, rule) VALUES"
+  " ('5e1ec7ed-0000-4000-8000-000000000001', 'Recently added', 'tracks',"
+  "  '{\"v\":1,\"match\":{\"field\":\"added\",\"op\":\"not_empty\"},"
+  "\"order\":[{\"field\":\"added\",\"dir\":\"desc\"}],\"limit\":100}'),"
+  " ('5e1ec7ed-0000-4000-8000-000000000002', 'Most played', 'tracks',"
+  "  '{\"v\":1,\"match\":{\"field\":\"plays\",\"op\":\">\",\"value\":0},"
+  "\"order\":[{\"field\":\"plays\",\"dir\":\"desc\"},{\"field\":\"last_played\",\"dir\":\"desc\"}],"
+  "\"limit\":100}'),"
+  " ('5e1ec7ed-0000-4000-8000-000000000003', 'Never played', 'tracks',"
+  "  '{\"v\":1,\"match\":{\"field\":\"plays\",\"op\":\"=\",\"value\":0},"
+  "\"order\":[{\"field\":\"random\",\"seed\":1}],\"limit\":100}'),"
+  " ('5e1ec7ed-0000-4000-8000-000000000004', 'Recently added albums', 'albums',"
+  "  '{\"v\":1,\"match\":{\"field\":\"added\",\"op\":\"not_empty\"},"
+  "\"order\":[{\"field\":\"added\",\"dir\":\"desc\"}],\"limit\":24}'),"
+  " ('5e1ec7ed-0000-4000-8000-000000000005', 'Random albums', 'albums',"
+  "  '{\"v\":1,\"match\":{\"field\":\"singles\",\"op\":\"is\",\"value\":false},"
+  "\"order\":[{\"field\":\"random\",\"seed\":1}],\"limit\":24}');",
+  /* v11: files.source_sha256 is the SHA-256 (hex) of the bytes a file was imported from,
+   * before the import tagged its copy, so importing that file again is recognised as
+   * importing what the library has (tagger.h, "Duplicates"). NULL for files imported before
+   * this, and for files already in the library folder when they were imported. Not logged:
+   * files are per device; sync sends it with an original (sync-protocol.md, "Files"). */
+  "ALTER TABLE files ADD COLUMN source_sha256 TEXT;",
+  /* v12: no singles albums. A lone track is filed under the release it's from, like any
+   * album track, or under no album at all; albums of one track are singles by count (see
+   * ALBUM_IS_SINGLE), not by kind. Nothing is moved or rewritten: albums made as singles
+   * albums before stay, as ordinary albums titled "<artist> Singles". albums.kind stays too
+   * but is no longer read or logged, so its triggers and index go. */
+  "DROP INDEX IF EXISTS albums_singles;"
+  "DROP TRIGGER IF EXISTS mc_log_ins_albums_kind;"
+  "DROP TRIGGER IF EXISTS mc_log_upd_albums_kind;",
+  /* v13: artist credits. A track or album credited "A feat. B" is each one's: artist_credit
+   * is the credit as shown (NULL: the artist's own name), artist_uid stays the first artist,
+   * and track_artists / album_artists list them all in order. A row's uid comes from its
+   * owner and position (mc_credit_uid), so every device fills in the same rows here, and the
+   * same rows when two devices credit one track. Credits already there stay whole: each
+   * track and album keeps its one artist (docs/schema.md). */
+  "ALTER TABLE tracks ADD COLUMN artist_credit TEXT;"
+  "ALTER TABLE albums ADD COLUMN artist_credit TEXT;"
+  "CREATE TABLE track_artists ("
+  "  uid        TEXT PRIMARY KEY,"
+  "  track_uid  TEXT NOT NULL REFERENCES tracks (uid) ON DELETE CASCADE,"
+  "  artist_uid TEXT NOT NULL REFERENCES artists (uid) ON DELETE CASCADE,"
+  "  position   INTEGER NOT NULL,"
+  "  joinphrase TEXT NOT NULL DEFAULT ''"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX track_artists_track ON track_artists (track_uid, position);"
+  "CREATE INDEX track_artists_artist ON track_artists (artist_uid);"
+  "CREATE TABLE album_artists ("
+  "  uid        TEXT PRIMARY KEY,"
+  "  album_uid  TEXT NOT NULL REFERENCES albums (uid) ON DELETE CASCADE,"
+  "  artist_uid TEXT NOT NULL REFERENCES artists (uid) ON DELETE CASCADE,"
+  "  position   INTEGER NOT NULL,"
+  "  joinphrase TEXT NOT NULL DEFAULT ''"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX album_artists_album ON album_artists (album_uid, position);"
+  "CREATE INDEX album_artists_artist ON album_artists (artist_uid);"
+  "INSERT INTO track_artists (uid, track_uid, artist_uid, position)"
+  " SELECT mc_credit_uid(uid, 0), uid, artist_uid, 0 FROM tracks"
+  " WHERE artist_uid IN (SELECT uid FROM artists);"
+  "INSERT INTO album_artists (uid, album_uid, artist_uid, position)"
+  " SELECT mc_credit_uid(uid, 0), uid, artist_uid, 0 FROM albums"
+  " WHERE artist_uid IN (SELECT uid FROM artists);",
+  /* v14: the recycle bin (kithcore/delete.h): deletes made on this device that no other
+   * device has heard of yet, so they can still be taken back. seq_first..seq_last are the
+   * changelog rows the delete logged. This device's own: never logged. (IF NOT EXISTS: tests
+   * that wind user_version back keep their tables.) */
+  "CREATE TABLE IF NOT EXISTS recycle_bin ("
+  "  id         INTEGER PRIMARY KEY,"
+  "  deleted_ms INTEGER NOT NULL,"
+  "  kind       TEXT NOT NULL,"
+  "  items      TEXT NOT NULL,"
+  "  title      TEXT,"
+  "  artist     TEXT,"
+  "  tracks     INTEGER NOT NULL,"
+  "  seq_first  INTEGER NOT NULL,"
+  "  seq_last   INTEGER NOT NULL,"
+  "  rows       TEXT NOT NULL"
+  ");",
+  /* v15: an album's flags (kithcore/edit.h), what its tags can't say: no_scrobble keeps its
+   * tracks from being scrobbled, mix makes it a continuous mix, found as an album and not by
+   * its tracks. Never written to files. */
+  "ALTER TABLE albums ADD COLUMN no_scrobble INTEGER NOT NULL DEFAULT 0;"
+  "ALTER TABLE albums ADD COLUMN mix INTEGER NOT NULL DEFAULT 0;",
+  /* v16: albums.mix is now the user's choice, 1 or -1, and 0 leaves it to the album's length
+   * (MC_ALBUM_IS_MIX). The 1s already there were chosen, so no row changes, and nothing here
+   * flags anything: each device works detected mixes out from synced rows. The version is for
+   * older apps, which would take -1 for a mix, and for mix_file_loose(). */
+  "SELECT 1;",
+  /* v17: the cover the user chose for an album (kithcore/edit.h), as its SHA-256. Import and
+   * downloads leave such a cover alone, and sync brings it to devices that have another. */
+  "ALTER TABLE albums ADD COLUMN art_chosen TEXT;",
+  /* v18: the play log (kithcore/library.h): a row for each time a track was started, where
+   * track_plays only keeps a count. Like track_plays each row is one device's, and it is
+   * written once and never changed, so sync can't lose or clash over one, and it's logged
+   * whole, as one change (mc_changelog_whole_row). context_uid isn't a reference: the history
+   * stays when the album or playlist goes. (IF NOT EXISTS: tests that wind user_version back
+   * keep their tables.) */
+  "CREATE TABLE IF NOT EXISTS play_events ("
+  "  uid         TEXT PRIMARY KEY,"
+  "  track_uid   TEXT NOT NULL REFERENCES tracks (uid) ON DELETE CASCADE,"
+  "  node_uid    TEXT NOT NULL,"
+  "  started_ms  INTEGER NOT NULL,"
+  "  listened_ms INTEGER NOT NULL,"
+  "  ended       TEXT NOT NULL,"
+  "  context     TEXT NOT NULL,"
+  "  context_uid TEXT"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX IF NOT EXISTS play_events_started ON play_events (started_ms, uid);"
+  "CREATE INDEX IF NOT EXISTS play_events_track ON play_events (track_uid);",
+  /* v19: audio analysis tables, for a feature since removed. They stay so every library has
+   * the same schema and older peers' track_analysis rows still sync; nothing reads them, and
+   * only deletes and sync write them. analysis_failed was per device, never logged. (IF NOT
+   * EXISTS: tests that wind user_version back keep their tables.) */
+  "CREATE TABLE IF NOT EXISTS track_analysis ("
+  "  uid              TEXT PRIMARY KEY,"
+  "  track_uid        TEXT NOT NULL REFERENCES tracks (uid) ON DELETE CASCADE,"
+  "  source           INTEGER NOT NULL,"
+  "  file_rev         TEXT,"
+  "  analysis_version INTEGER NOT NULL,"
+  "  features         BLOB NOT NULL,"
+  "  lufs             REAL,"
+  "  lra              REAL,"
+  "  true_peak        REAL"
+  ") WITHOUT ROWID;"
+  "CREATE INDEX IF NOT EXISTS track_analysis_track ON track_analysis (track_uid);"
+  "CREATE TABLE IF NOT EXISTS analysis_failed ("
+  "  file_uid         TEXT PRIMARY KEY REFERENCES files (uid) ON DELETE CASCADE,"
+  "  size_bytes       INTEGER,"
+  "  mtime_ms         INTEGER,"
+  "  analysis_version INTEGER NOT NULL"
+  ") WITHOUT ROWID;",
+  /* v20: the version vector (mc_changelog_version_vector()) without reading the whole
+   * changelog. (IF NOT EXISTS: tests that wind user_version back keep their tables.) */
+  "CREATE INDEX IF NOT EXISTS changelog_origin ON changelog (origin_uid, hlc);",
+  /* v21: files that failed a check and keep their rows: originals imported here, which a check
+   * never deletes (mc_file_check in sync/transfer.h). This device's own, as files is. The size
+   * and time are the row's at the time, so a row given a new file since isn't held to it. (IF
+   * NOT EXISTS: tests that wind user_version back keep their tables.) */
+  "CREATE TABLE IF NOT EXISTS file_failed ("
+  "  file_uid   TEXT PRIMARY KEY REFERENCES files (uid) ON DELETE CASCADE,"
+  "  state      INTEGER NOT NULL,"
+  "  size_bytes INTEGER,"
+  "  mtime_ms   INTEGER"
+  ") WITHOUT ROWID;",
+};
+#define MC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
+
+/* Columns whose changes are logged for sync. Keep in step with the latest schema. */
+static const char *const k_artist_cols[] = {"name", "sort_name", "mb_artistid", NULL};
+static const char *const k_album_cols[] = {"title", "artist_uid", "year", "original_year",
+                                           "disc_total", "mb_albumid", "mb_releasegroupid",
+                                           "art_hash", "artist_credit", "no_scrobble", "mix",
+                                           "art_chosen", NULL};
+/* Only ever set by hand (a detected mix is worked out, never stored), so a new row's 0 says
+ * nothing: logged, it would beat a flag set earlier on a duplicate of the album once sync
+ * merges the two (merge.h). */
+static const char *const k_album_flags[] = {"no_scrobble", "mix", NULL};
+static const char *const k_track_cols[] = {"album_uid", "artist_uid", "title", "track_no",
+                                           "disc_no", "duration_ms", "genre", "mb_trackid",
+                                           "mb_releasetrackid", "year", "mb_albumid", "added_ms",
+                                           "file_rev", "artist_credit", NULL};
+static const char *const k_track_artist_cols[] = {"track_uid", "artist_uid", "position",
+                                                  "joinphrase", NULL};
+static const char *const k_album_artist_cols[] = {"album_uid", "artist_uid", "position",
+                                                  "joinphrase", NULL};
+static const char *const k_play_cols[] = {"track_uid", "node_uid", "play_count", "last_played_ms",
+                                          NULL};
+/* Logged as one change, in this order, which can only be added to (mc_changelog_whole_row). */
+static const char *const k_play_event_cols[] = {"track_uid", "node_uid", "started_ms", "listened_ms",
+                                                "ended", "context", "context_uid", NULL};
+static const char *const k_playlist_cols[] = {"name", NULL};
+static const char *const k_entry_cols[] = {"playlist_uid", "track_uid", "position", NULL};
+static const char *const k_group_cols[] = {"name", NULL};
+static const char *const k_group_entry_cols[] = {"group_uid", "album_uid", "position", NULL};
+static const char *const k_smart_cols[] = {"name", "subject", "rule", NULL};
+static const char *const k_recent_cols[] = {"kind", "opened_ms", NULL};
+static const char *const k_analysis_cols[] = {"track_uid", "source", "file_rev",
+                                              "analysis_version", "features", "lufs", "lra",
+                                              "true_peak", NULL};
+
+static const mc_changelog_table k_tracked[] = {
+  {"artists", "uid", k_artist_cols, NULL},
+  {"albums", "uid", k_album_cols, k_album_flags},
+  {"tracks", "uid", k_track_cols, NULL},
+  {"track_artists", "uid", k_track_artist_cols, NULL},
+  {"album_artists", "uid", k_album_artist_cols, NULL},
+  {"track_plays", "uid", k_play_cols, NULL},
+  {"play_events", "uid", k_play_event_cols, mc_changelog_whole_row},
+  {"playlists", "uid", k_playlist_cols, NULL},
+  {"playlist_entries", "uid", k_entry_cols, NULL},
+  {"album_groups", "uid", k_group_cols, NULL},
+  {"album_group_entries", "uid", k_group_entry_cols, NULL},
+  {"smart_lists", "uid", k_smart_cols, NULL},
+  {"recents", "uid", k_recent_cols, NULL},
+  {"track_analysis", "uid", k_analysis_cols, NULL},
+};
+
+/* --- Schema --- */
+
+static mc_status exec(mc_library *lib, const char *sql) {
+  return sqlite3_exec(lib->db, sql, NULL, NULL, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+}
+
+static int user_version(sqlite3 *db) {
+  sqlite3_stmt *stmt;
+  int version = -1;
+  if (sqlite3_prepare_v2(db, "PRAGMA user_version", -1, &stmt, NULL) != SQLITE_OK) return -1;
+  if (sqlite3_step(stmt) == SQLITE_ROW) version = sqlite3_column_int(stmt, 0);
+  sqlite3_finalize(stmt);
+  return version;
+}
+
+/* *from: the version the database was at. */
+static mc_status migrate(mc_library *lib, int *from) {
+  int version = *from = user_version(lib->db);
+  if (version < 0) return MC_ERR_DB;
+  if (version > MC_SCHEMA_VERSION) return MC_ERR_FORMAT; /* written by a newer app */
+
+  /* Rows a migration writes aren't logged: every device runs the same migration, and the
+   * triggers left by the last open would log them before node_uid is loaded. */
+  lib->applying_remote = 1;
+  mc_status st = MC_OK;
+  for (int v = version; v < MC_SCHEMA_VERSION && st == MC_OK; v++) {
+    char bump[64];
+    snprintf(bump, sizeof bump, "PRAGMA user_version = %d", v + 1);
+    if (exec(lib, "BEGIN IMMEDIATE") != MC_OK) {
+      st = MC_ERR_DB;
+    } else if (exec(lib, k_migrations[v]) != MC_OK || exec(lib, bump) != MC_OK) {
+      exec(lib, "ROLLBACK");
+      st = MC_ERR_DB;
+    } else if (exec(lib, "COMMIT") != MC_OK) {
+      st = MC_ERR_DB;
+    }
+  }
+  lib->applying_remote = 0;
+  return st;
+}
+
+/* mc_shuffle_key(seed, uid): a stable pseudo-random sort key, so a list ordered by it is
+ * shuffled the same way every time for the same seed. FNV-1a over the uid, mixed with the
+ * seed by splitmix64's finalizer. */
+static void sql_shuffle_key(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+  (void)argc;
+  uint64_t h = 14695981039346656037u;
+  const unsigned char *s = sqlite3_value_text(argv[1]);
+  for (; s && *s; s++) h = (h ^ *s) * 1099511628211u;
+  h ^= (uint64_t)sqlite3_value_int64(argv[0]) + 0x9e3779b97f4a7c15u;
+  h = (h ^ (h >> 30)) * 0xbf58476d1ce4e5b9u;
+  h = (h ^ (h >> 27)) * 0x94d049bb133111ebu;
+  h ^= h >> 31;
+  sqlite3_result_int64(ctx, (sqlite3_int64)(h >> 1));
+}
+
+static void sql_name_key(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+  (void)argc;
+  char *key = mc_name_key((const char *)sqlite3_value_text(argv[0]));
+  if (key) sqlite3_result_text(ctx, key, -1, free);
+  else sqlite3_result_null(ctx);
+}
+
+/* mc_credit_uid(owner, position): an artist credit row's uid (mc_uid_derive()). */
+static void sql_credit_uid(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+  (void)argc;
+  const char *owner = (const char *)sqlite3_value_text(argv[0]);
+  char uid[MC_UID_STRLEN];
+  if (owner && mc_uid_derive(owner, sqlite3_value_int(argv[1]), uid) == MC_OK)
+    sqlite3_result_text(ctx, uid, -1, SQLITE_TRANSIENT);
+  else
+    sqlite3_result_null(ctx);
+}
+
+/* Rows a peer with a newer schema logged here are kept but not applied (see "Applying rows"
+ * in docs/sync-protocol.md). Once a migration gives this library their table or column, the
+ * changelog is applied to them as if they had just arrived, so a device upgrading late
+ * catches up with what newer peers already wrote. Migrations that add something logged list
+ * here which changelog rows that is, by the version they take the database to. */
+static const struct {
+  int version;
+  const char *rows;
+} k_newly_known[] = {
+  {13, "entity IN ('track_artists', 'album_artists')"
+       " OR (entity IN ('tracks', 'albums') AND field = 'artist_credit')"},
+  {15, "entity = 'albums' AND field IN ('no_scrobble', 'mix')"},
+  {17, "entity = 'albums' AND field = 'art_chosen'"},
+  {18, "entity = 'play_events'"},
+  {19, "entity = 'track_analysis'"},
+};
+
+/* A loose track long enough to be a mix has no album row to be one on (mc_mix_file_tracks()).
+ * Past the migrations, since these rows are logged: a device paired later has no migration to
+ * run, and gets them from the changelog. Once, on upgrading to v16: from then on an import
+ * files such a track under an album itself, and a track with no album may be the user's. */
+static mc_status mix_file_loose(mc_library *lib, int from) {
+  if (from >= 16 || from == 0) return MC_OK; /* a new library has no tracks */
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  if ((st = mc_mix_file_tracks(lib, "t.duration_ms >= " MC_SQL_NUM(MC_MIX_MIN_MS), NULL)) == MC_OK)
+    st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
+}
+
+static mc_status apply_newly_known(mc_library *lib, int from) {
+  mc_status st = MC_OK;
+  for (size_t i = 0; st == MC_OK && i < sizeof k_newly_known / sizeof k_newly_known[0]; i++) {
+    if (from >= k_newly_known[i].version || from == 0) continue; /* a new library has no rows */
+    mc_rows_target tg;
+    mc_rows_target_library(lib, &tg);
+    mc_rows_applier *a = NULL;
+    if ((st = mc_rows_applier_new(&tg, &a)) == MC_OK) st = mc_rows_reapply(a, k_newly_known[i].rows);
+    mc_rows_applier_free(a);
+  }
+  return st;
+}
+
+/* --- Identity --- */
+
+/* A uid as mc_uid_new() writes it: 36 characters, lowercase hex and hyphens. */
+static int is_uid(const char *s) {
+  for (int i = 0; i < MC_UID_STRLEN - 1; i++) {
+    int hyphen = i == 8 || i == 13 || i == 18 || i == 23;
+    char c = s[i];
+    if (hyphen ? c != '-' : !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return 0;
+  }
+  return s[MC_UID_STRLEN - 1] == '\0';
+}
+
+/* Reads a uid from meta into out: MC_ERR_NOT_FOUND if the key is absent, MC_ERR_FORMAT if
+ * the value isn't a uid. */
+static mc_status read_meta_uid(mc_library *lib, const char *key, char out[MC_UID_STRLEN]) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, "SELECT value FROM meta WHERE key = ?1", -1, &stmt, NULL) !=
+      SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+  mc_status st = MC_ERR_DB;
+  int rc = sqlite3_step(stmt);
+  if (rc == SQLITE_ROW) {
+    const unsigned char *v = sqlite3_column_text(stmt, 0);
+    if (v && strlen((const char *)v) == MC_UID_STRLEN - 1) {
+      memcpy(out, v, MC_UID_STRLEN);
+      st = MC_OK;
+    } else {
+      st = MC_ERR_FORMAT;
+    }
+  } else if (rc == SQLITE_DONE) {
+    st = MC_ERR_NOT_FOUND;
+  }
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+static mc_status write_meta(mc_library *lib, const char *key, const char *value) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", -1,
+                         &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, value, -1, SQLITE_STATIC);
+  mc_status st = sqlite3_step(stmt) == SQLITE_DONE ? MC_OK : MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+/* Loads a uid kept in meta, generating it the first time: node_uid (this device's identity
+ * in the changelog) and library_uid (which library this is, so sync never mixes two). */
+static mc_status load_meta_uid(mc_library *lib, const char *key, char out[MC_UID_STRLEN]) {
+  mc_status st = read_meta_uid(lib, key, out);
+  if (st != MC_ERR_NOT_FOUND) return st;
+  if ((st = mc_uid_new(out)) != MC_OK) return st;
+  return write_meta(lib, key, out);
+}
+
+/* --- Public API --- */
+
+/* meta keys written only by versions up to v0.9.4, for features since removed. Nothing reads
+ * them; open deletes them. */
+#define OLD_META_WHERE                                                                        \
+  " FROM meta WHERE key LIKE 'artist\\_refresh%' ESCAPE '\\' OR key IN ('merge_source',"     \
+  " 'merge_wait', 'merge_with', 'merge_name', 'merge_restored', 'merge_restore_sync',"        \
+  " 'merge_restored_name')"
+
+static void drop_old_meta(mc_library *lib) {
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, "SELECT 1" OLD_META_WHERE, -1, &stmt, NULL) != SQLITE_OK) return;
+  int found = sqlite3_step(stmt) == SQLITE_ROW;
+  sqlite3_finalize(stmt);
+  if (found) exec(lib, "DELETE" OLD_META_WHERE);
+}
+
+static mc_status library_open(const char *dir, int background, mc_library **out) {
+  if (!dir || !*dir || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+
+  mc_library *lib = calloc(1, sizeof *lib);
+  if (!lib) return MC_ERR_NOMEM;
+  mc_hlc_init(&lib->hlc, mc_wall_ms, 0);
+  lib->log.hlc = &lib->hlc;
+  lib->log.node_uid = lib->node_uid;
+  lib->log.applying_remote = &lib->applying_remote;
+
+  /* Keep the folder without a trailing separator, so joining paths is uniform. */
+  size_t len = strlen(dir);
+  while (len > 1 && (dir[len - 1] == '/' || dir[len - 1] == '\\')) len--;
+  char *db_path = malloc(len + sizeof MC_LIBRARY_DB_NAME + 1);
+  lib->dir = malloc(len + 1);
+  mc_status st = MC_ERR_NOMEM;
+  if (!db_path || !lib->dir) goto fail;
+  memcpy(lib->dir, dir, len);
+  lib->dir[len] = '\0';
+  snprintf(db_path, len + sizeof MC_LIBRARY_DB_NAME + 1, "%s%c" MC_LIBRARY_DB_NAME, lib->dir,
+           MC_PATH_SEP);
+
+  if ((st = mc_mkdirs(lib->dir)) != MC_OK) goto fail;
+  st = MC_ERR_DB;
+  int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX;
+  int rc = mc_db_open(db_path, &lib->db, flags);
+  free(db_path);
+  db_path = NULL;
+  if (rc != SQLITE_OK) goto fail;
+
+  sqlite3_busy_timeout(lib->db, 5000);
+  if ((st = exec(lib, "PRAGMA journal_mode = WAL;"
+                      "PRAGMA synchronous = NORMAL;"
+                      "PRAGMA foreign_keys = ON;"
+                      "PRAGMA trusted_schema = OFF;")) != MC_OK)
+    goto fail;
+  if ((st = mc_changelog_register(lib->db, &lib->log)) != MC_OK) goto fail;
+  if ((st = mc_delete_register(lib->db)) != MC_OK) goto fail;
+  if (sqlite3_create_function(lib->db, "mc_shuffle_key", 2,
+                              SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL,
+                              sql_shuffle_key, NULL, NULL) != SQLITE_OK ||
+      sqlite3_create_function(lib->db, "mc_credit_uid", 2,
+                              SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL,
+                              sql_credit_uid, NULL, NULL) != SQLITE_OK ||
+      sqlite3_create_function(lib->db, "mc_smart_name", 2, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
+                              mc_smart_sql_shown_name, NULL, NULL) != SQLITE_OK ||
+      sqlite3_create_function(lib->db, "mc_name_key", 1,
+                              SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL,
+                              sql_name_key, NULL, NULL) != SQLITE_OK) {
+    st = MC_ERR_DB;
+    goto fail;
+  }
+  int from;
+  if ((st = migrate(lib, &from)) != MC_OK) goto fail;
+  if ((st = mc_changelog_install_triggers(lib->db, k_tracked,
+                                          sizeof k_tracked / sizeof k_tracked[0])) != MC_OK)
+    goto fail;
+  /* Not fatal: they stay until the next open. */
+  drop_old_meta(lib);
+  if ((st = load_meta_uid(lib, "node_uid", lib->node_uid)) != MC_OK) goto fail;
+  if ((st = load_meta_uid(lib, "library_uid", lib->library_uid)) != MC_OK) goto fail;
+  mc_hlc_init(&lib->hlc, mc_wall_ms, mc_changelog_max_hlc(lib->db));
+  /* Not fatal: the library opens as it is, the rows wait for their next change. */
+  if (apply_newly_known(lib, from) != MC_OK)
+    mc_log("kithcore: library open: couldn't apply rows newer peers logged: %s\n",
+            sqlite3_errmsg(lib->db));
+  /* Not fatal either: they stay singles, and can still be made mixes by hand. */
+  if (mix_file_loose(lib, from) != MC_OK)
+    mc_log("kithcore: library open: couldn't file long loose tracks: %s\n",
+            sqlite3_errmsg(lib->db));
+  if (background) mc_edit_recover(lib);
+
+  *out = lib;
+  return MC_OK;
+
+fail:
+  if (lib->db) mc_log("kithcore: library open failed: %s\n", sqlite3_errmsg(lib->db));
+  free(db_path);
+  mc_library_close(lib);
+  return st;
+}
+
+mc_status mc_library_open(const char *dir, mc_library **out) {
+  return library_open(dir, 1, out);
+}
+
+mc_status mc_library_open_internal(const char *dir, mc_library **out) {
+  return library_open(dir, 0, out);
+}
+
+void mc_library_close(mc_library *lib) {
+  if (!lib) return;
+  mc_search_free(lib->search);
+  sqlite3_close_v2(lib->db);
+  free(lib->dir);
+  free(lib);
+}
+
+char *mc_library_relpath(const mc_library *lib, const char *abs) {
+  size_t n = strlen(lib->dir);
+  if (strlen(abs) <= n + 1 || (abs[n] != '/' && abs[n] != '\\')) return NULL;
+  char *prefix = malloc(n + 1);
+  if (!prefix) return NULL;
+  memcpy(prefix, abs, n);
+  prefix[n] = '\0';
+  int inside = mc_same_path(prefix, lib->dir);
+  free(prefix);
+  if (!inside) return NULL;
+
+  char *rel = mc_strdup(abs + n + 1);
+  if (rel)
+    for (char *p = rel; *p; p++)
+      if (*p == '\\') *p = '/';
+  return rel;
+}
+
+char *mc_library_abspath(const mc_library *lib, const char *rel) {
+  size_t n = strlen(lib->dir), m = strlen(rel);
+  char *abs = malloc(n + m + 2);
+  if (!abs) return NULL;
+  memcpy(abs, lib->dir, n);
+  abs[n] = MC_PATH_SEP;
+  memcpy(abs + n + 1, rel, m + 1);
+  for (char *p = abs + n + 1; *p; p++)
+    if (*p == '/') *p = MC_PATH_SEP;
+  return abs;
+}
+
+mc_status mc_library_begin_write(mc_library *lib) {
+  if (mc_changelog_begin_write(lib->db, &lib->hlc) != MC_OK) return MC_ERR_DB;
+  /* Another connection may have rotated the node uid since this one opened. */
+  char node[MC_UID_STRLEN];
+  mc_status st = read_meta_uid(lib, "node_uid", node);
+  if (st != MC_OK) {
+    exec(lib, "ROLLBACK");
+    return st;
+  }
+  memcpy(lib->node_uid, node, MC_UID_STRLEN);
+  return MC_OK;
+}
+
+mc_status mc_library_commit(mc_library *lib) {
+  return exec(lib, "COMMIT");
+}
+
+void mc_library_rollback(mc_library *lib) {
+  exec(lib, "ROLLBACK");
+}
+
+int mc_library_schema_latest(void) {
+  return MC_SCHEMA_VERSION;
+}
+
+int mc_library_schema_version(const mc_library *lib) {
+  return user_version(lib->db);
+}
+
+const char *mc_library_dir(const mc_library *lib) {
+  return lib->dir;
+}
+
+const char *mc_library_node_uid(const mc_library *lib) {
+  return lib->node_uid;
+}
+
+const char *mc_library_uid(const mc_library *lib) {
+  /* Reread: another connection may have adopted a group's library uid in pairing
+   * (mc_library_adopt_uid()). Kept as it was if it can't be read. */
+  mc_library *l = (mc_library *)lib;
+  char uid[MC_UID_STRLEN];
+  if (read_meta_uid(l, "library_uid", uid) == MC_OK) memcpy(l->library_uid, uid, MC_UID_STRLEN);
+  return lib->library_uid;
+}
+
+mc_status mc_library_reload_ids(mc_library *lib) {
+  if (!lib) return MC_ERR_INVALID_ARG;
+  char node[MC_UID_STRLEN], uid[MC_UID_STRLEN];
+  mc_status st = read_meta_uid(lib, "node_uid", node);
+  if (st == MC_OK) st = read_meta_uid(lib, "library_uid", uid);
+  if (st != MC_OK) return st;
+  memcpy(lib->node_uid, node, MC_UID_STRLEN);
+  memcpy(lib->library_uid, uid, MC_UID_STRLEN);
+  return MC_OK;
+}
+
+mc_status mc_library_rotate_node_uid(mc_library *lib) {
+  if (!lib) return MC_ERR_INVALID_ARG;
+  char fresh[MC_UID_STRLEN];
+  mc_status st = mc_uid_new(fresh);
+  if (st != MC_OK) return st;
+  /* Not tracked: meta never syncs. Older changelog rows keep the old uid as their origin. */
+  if ((st = write_meta(lib, "node_uid", fresh)) != MC_OK) return st;
+  memcpy(lib->node_uid, fresh, MC_UID_STRLEN);
+  return MC_OK;
+}
+
+mc_status mc_library_adopt_uid(mc_library *lib, const char *library_uid) {
+  if (!lib || !library_uid || !is_uid(library_uid)) return MC_ERR_INVALID_ARG;
+  if (strcmp(library_uid, lib->library_uid) == 0) return MC_OK;
+
+  /* Count under the write lock, so an import on another connection can't slip in. */
+  if (exec(lib, "BEGIN IMMEDIATE") != MC_OK) return MC_ERR_DB;
+  int64_t tracks = -1;
+  mc_status st = mc_library_count(lib, MC_ENTITY_TRACKS, &tracks);
+  if (st == MC_OK && tracks > 0) st = MC_ERR_LIBRARY_MISMATCH;
+  if (st == MC_OK) st = write_meta(lib, "library_uid", library_uid);
+  if (st == MC_OK) st = exec(lib, "COMMIT");
+  if (st != MC_OK) {
+    exec(lib, "ROLLBACK");
+    return st;
+  }
+  memcpy(lib->library_uid, library_uid, MC_UID_STRLEN);
+  return MC_OK;
+}
+
+mc_status mc_library_meta_get(mc_library *lib, const char *key, char *out, size_t cap) {
+  if (!lib || !key || !out || !cap) return MC_ERR_INVALID_ARG;
+  out[0] = '\0';
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, "SELECT value FROM meta WHERE key = ?1", -1, &stmt, NULL) !=
+      SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+  int rc = sqlite3_step(stmt);
+  mc_status st = rc == SQLITE_ROW ? MC_OK : rc == SQLITE_DONE ? MC_ERR_NOT_FOUND : MC_ERR_DB;
+  if (st == MC_OK) {
+    const char *v = (const char *)sqlite3_column_text(stmt, 0);
+    snprintf(out, cap, "%s", v ? v : "");
+  }
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+mc_status mc_library_meta_set(mc_library *lib, const char *key, const char *value) {
+  if (!lib || !key) return MC_ERR_INVALID_ARG;
+  if (value) return write_meta(lib, key, value);
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, "DELETE FROM meta WHERE key = ?1", -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+  mc_status st = sqlite3_step(stmt) == SQLITE_DONE ? MC_OK : MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+const char *mc_library_errmsg(const mc_library *lib) {
+  return sqlite3_errmsg(lib->db);
+}
+
+static char *column_dup(sqlite3_stmt *stmt, int col) {
+  const unsigned char *s = sqlite3_column_text(stmt, col);
+  return s ? mc_strdup((const char *)s) : NULL;
+}
+
+/* Copies a uid column into dst, leaving it "" if the column is NULL or too long. */
+static void copy_uid(char dst[MC_UID_STRLEN], sqlite3_stmt *stmt, int col) {
+  const unsigned char *s = sqlite3_column_text(stmt, col);
+  if (s && strlen((const char *)s) < MC_UID_STRLEN) strcpy(dst, (const char *)s);
+}
+
+static int grow(void **items, int count, int *cap, size_t size) {
+  if (count < *cap) return 1;
+  int grown = *cap ? *cap * 2 : 16;
+  void *p = realloc(*items, (size_t)grown * size);
+  if (!p) return 0;
+  *items = p;
+  *cap = grown;
+  return 1;
+}
+
+mc_status mc_library_read_albums(mc_library *lib, sqlite3_stmt *stmt, mc_album_list **out) {
+  *out = NULL;
+  mc_album_list *list = calloc(1, sizeof *list);
+  mc_status st = list ? MC_OK : MC_ERR_NOMEM;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_album_info *a = &list->items[list->count++];
+    memset(a, 0, sizeof *a);
+    const unsigned char *uid = sqlite3_column_text(stmt, 0);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(a->uid, (const char *)uid);
+    a->title = column_dup(stmt, 1);
+    a->artist = column_dup(stmt, 2);
+    a->year = sqlite3_column_int(stmt, 3);
+    a->is_singles = sqlite3_column_int(stmt, 4);
+    a->has_art = sqlite3_column_int(stmt, 5);
+    const unsigned char *file = sqlite3_column_text(stmt, 6);
+    if (file) {
+      char *abs = mc_library_abspath(lib, (const char *)file);
+      char *sep = abs ? strrchr(abs, MC_PATH_SEP) : NULL;
+      if (sep) *sep = '\0';
+      a->folder = abs;
+    }
+    copy_uid(a->artist_uid, stmt, 7);
+    a->mix = sqlite3_column_int(stmt, 8);
+    if (sqlite3_column_count(stmt) > 10) { /* an artist's albums */
+      a->track_count = sqlite3_column_int(stmt, 9);
+      a->credited_count = sqlite3_column_int(stmt, 10);
+    }
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_album_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+mc_status mc_library_list_albums(mc_library *lib, mc_album_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  static const char sql[] =
+    ALBUM_COLS " FROM albums a" ALBUM_JOINS " WHERE NOT " ALBUM_IS_SINGLE " ORDER BY " ALBUM_ORDER;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  return mc_library_read_albums(lib, stmt, out);
+}
+
+void mc_album_list_free(mc_album_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i].title);
+    free(list->items[i].artist);
+    free(list->items[i].folder);
+  }
+  free(list->items);
+  free(list);
+}
+
+mc_status mc_library_read_tracks(mc_library *lib, sqlite3_stmt *stmt, mc_track_list **out) {
+  *out = NULL;
+  mc_track_list *list = calloc(1, sizeof *list);
+  mc_status st = list ? MC_OK : MC_ERR_NOMEM;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_track_info *t = &list->items[list->count++];
+    memset(t, 0, sizeof *t);
+    const unsigned char *uid = sqlite3_column_text(stmt, 0);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(t->uid, (const char *)uid);
+    t->title = column_dup(stmt, 1);
+    t->track_no = sqlite3_column_int(stmt, 2);
+    t->disc_no = sqlite3_column_int(stmt, 3);
+    t->duration_ms = sqlite3_column_int(stmt, 4);
+    const unsigned char *file = sqlite3_column_text(stmt, 5);
+    if (file) t->path = mc_library_abspath(lib, (const char *)file);
+    t->artist = column_dup(stmt, 6);
+    t->album = column_dup(stmt, 7);
+    /* The cover sits in the album folder, which is where the track's file is. */
+    if (t->path && sqlite3_column_int(stmt, 8)) {
+      t->cover_dir = mc_strdup(t->path);
+      char *sep = t->cover_dir ? strrchr(t->cover_dir, MC_PATH_SEP) : NULL;
+      if (sep) *sep = '\0';
+    }
+    copy_uid(t->artist_uid, stmt, 9);
+    t->year = sqlite3_column_int(stmt, 10);
+    copy_uid(t->album_uid, stmt, 11);
+    if (sqlite3_column_count(stmt) > 12) copy_uid(t->entry_uid, stmt, 12);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_track_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+/* Runs sql, a TRACK_COLS query with key as its one parameter, into a track list. */
+static mc_status list_tracks(mc_library *lib, const char *sql, const char *key, mc_track_list **out) {
+  if (!lib || !key || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  if (sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC) != SQLITE_OK) {
+    sqlite3_finalize(stmt);
+    return MC_ERR_DB;
+  }
+  return mc_library_read_tracks(lib, stmt, out);
+}
+
+mc_status mc_library_list_track(mc_library *lib, const char *track_uid, mc_track_list **out) {
+  static const char sql[] = TRACK_COLS " FROM tracks t" TRACK_JOINS " WHERE t.uid = ?";
+  return list_tracks(lib, sql, track_uid, out);
+}
+
+mc_status mc_library_list_album_tracks(mc_library *lib, const char *album_uid, mc_track_list **out) {
+  static const char sql[] =
+    TRACK_COLS " FROM tracks t" TRACK_JOINS " WHERE t.album_uid = ?"
+    " ORDER BY coalesce(t.disc_no, 0), t.track_no IS NULL, t.track_no, t.title COLLATE NOCASE";
+  return list_tracks(lib, sql, album_uid, out);
+}
+
+mc_status mc_library_get_track(mc_library *lib, const char *track_uid, mc_track_list **out) {
+  static const char sql[] = TRACK_COLS " FROM tracks t" TRACK_JOINS " WHERE t.uid = ?";
+  mc_status st = list_tracks(lib, sql, track_uid, out);
+  if (st == MC_OK && !(*out)->count) {
+    mc_track_list_free(*out);
+    *out = NULL;
+    st = MC_ERR_NOT_FOUND;
+  }
+  return st;
+}
+
+mc_status mc_library_list_albums_tracks(mc_library *lib, const char *const *album_uids, int count,
+                                        mc_track_list **out) {
+  if (!lib || !out || count < 0 || (count && !album_uids)) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  mc_track_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  int cap = 0;
+  for (int a = 0; a < count; a++) {
+    mc_track_list *album = NULL;
+    mc_status st = mc_library_list_album_tracks(lib, album_uids[a], &album);
+    for (int i = 0; st == MC_OK && i < album->count; i++) {
+      mc_track_info *t = &album->items[i];
+      if (!t->path) continue;
+      if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+        st = MC_ERR_NOMEM;
+        break;
+      }
+      list->items[list->count++] = *t;
+      memset(t, 0, sizeof *t); /* the list owns its strings now */
+    }
+    mc_track_list_free(album);
+    if (st != MC_OK) {
+      mc_track_list_free(list);
+      return st;
+    }
+  }
+  *out = list;
+  return MC_OK;
+}
+
+mc_status mc_library_list_playlist_tracks(mc_library *lib, const char *playlist_uid, mc_track_list **out) {
+  static const char sql[] =
+    TRACK_COLS ", e.uid FROM playlist_entries e JOIN tracks t ON t.uid = e.track_uid" TRACK_JOINS
+    " WHERE e.playlist_uid = ? ORDER BY e.position, e.uid";
+  return list_tracks(lib, sql, playlist_uid, out);
+}
+
+void mc_track_list_free(mc_track_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i].title);
+    free(list->items[i].path);
+    free(list->items[i].artist);
+    free(list->items[i].album);
+    free(list->items[i].cover_dir);
+  }
+  free(list->items);
+  free(list);
+}
+
+mc_status mc_library_list_playlists(mc_library *lib, unsigned flags, mc_playlist_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* A track is playable here if it has a file here: the test TRACK_COLS's path makes. */
+  static const char sql[] =
+    "SELECT p.uid, p.name, (SELECT count(*) FROM playlist_entries e WHERE e.playlist_uid = p.uid),"
+    " (SELECT count(*) FROM playlist_entries e WHERE e.playlist_uid = p.uid"
+    "   AND EXISTS (SELECT 1 FROM files f WHERE f.track_uid = e.track_uid))"
+    " FROM playlists p ORDER BY p.name COLLATE NOCASE, p.uid";
+
+  mc_playlist_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    int entries = sqlite3_column_int(stmt, 2), playable = sqlite3_column_int(stmt, 3);
+    /* An empty one is kept: it's waiting for tracks, not missing them. */
+    if ((flags & MC_LIST_PLAYABLE) && entries > 0 && playable == 0) {
+      list->hidden++;
+      continue;
+    }
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_playlist_info *p = &list->items[list->count++];
+    memset(p, 0, sizeof *p);
+    const unsigned char *uid = sqlite3_column_text(stmt, 0);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(p->uid, (const char *)uid);
+    p->name = column_dup(stmt, 1);
+    p->track_count = entries;
+    p->playable_count = playable;
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_playlist_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_playlist_list_free(mc_playlist_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) free(list->items[i].name);
+  free(list->items);
+  free(list);
+}
+
+#define ARTIST_ORDER " ORDER BY coalesce(ar.sort_name, ar.name) COLLATE NOCASE, ar.name COLLATE NOCASE, ar.uid"
+
+/* A file of artist ar's picture's album (see mc_artist_info.cover_dir): of their first own
+ * album with art and a file here, by year then title, as the album listings take the folder
+ * (ALBUM_COLS); NULL if there's none. */
+#define ARTIST_COVER_FILE \
+  "(SELECT (SELECT f.path FROM tracks t JOIN files f ON f.track_uid = t.uid WHERE t.album_uid = a.uid LIMIT 1)" \
+  " FROM albums a WHERE a.artist_uid = ar.uid AND a.art_hash IS NOT NULL AND NOT " ALBUM_IS_SINGLE \
+  "  AND EXISTS (SELECT 1 FROM tracks t JOIN files f ON f.track_uid = t.uid WHERE t.album_uid = a.uid)" \
+  " ORDER BY a.year, a.title COLLATE NOCASE, a.uid LIMIT 1)"
+
+/* Runs sql (uid, name, sort name, album count, ARTIST_COVER_FILE, then a track count if it has
+ * six columns) into a list. */
+static mc_status list_artists(mc_library *lib, const char *sql, mc_artist_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  mc_artist_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_artist_info *a = &list->items[list->count++];
+    memset(a, 0, sizeof *a);
+    const unsigned char *uid = sqlite3_column_text(stmt, 0);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(a->uid, (const char *)uid);
+    a->name = column_dup(stmt, 1);
+    a->sort_name = column_dup(stmt, 2);
+    a->album_count = sqlite3_column_int(stmt, 3);
+    const unsigned char *file = sqlite3_column_text(stmt, 4);
+    if (file) {
+      char *abs = mc_library_abspath(lib, (const char *)file);
+      char *sep = abs ? strrchr(abs, MC_PATH_SEP) : NULL;
+      if (sep) *sep = '\0';
+      a->cover_dir = abs;
+    }
+    if (sqlite3_column_count(stmt) > 5) a->track_count = sqlite3_column_int(stmt, 5);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_artist_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out) {
+  /* Artists nothing refers to any more are left out, as the albums and tracks views do. An
+   * album artist of only singles is listed, with no albums, for its singles; an artist only
+   * featured on tracks, for those. */
+  static const char sql[] =
+    "SELECT ar.uid, ar.name, coalesce(ar.sort_name, ar.name),"
+    " (SELECT count(*) FROM albums a WHERE a.uid IN (" CREDITED_ALBUMS("ar.uid") ")"
+    "  AND NOT " ALBUM_IS_SINGLE "), " ARTIST_COVER_FILE
+    " FROM artists ar"
+    " WHERE EXISTS (SELECT 1 FROM albums a WHERE a.artist_uid = ar.uid)"
+    "  OR EXISTS (SELECT 1 FROM tracks t WHERE t.artist_uid = ar.uid)"
+    "  OR EXISTS (SELECT 1 FROM track_artists c WHERE c.artist_uid = ar.uid AND c.position > 0)"
+    "  OR EXISTS (SELECT 1 FROM album_artists c WHERE c.artist_uid = ar.uid AND c.position > 0)"
+    ARTIST_ORDER;
+  return list_artists(lib, sql, out);
+}
+
+mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out) {
+  /* Counted once for every artist rather than per artist, over (artist, album) and (artist,
+   * track) pairs as CREDITED_ALBUMS and CREDITED_TRACKS have them: a track with no artist of
+   * its own is its album's, which no index finds. */
+  static const char sql[] =
+    "SELECT ar.uid, ar.name, coalesce(ar.sort_name, ar.name), coalesce(na.albums, 0), " ARTIST_COVER_FILE
+    ", coalesce(nt.n, 0) FROM artists ar"
+    " LEFT JOIN (SELECT c.uid, count(*) AS n,"
+    "   count(CASE WHEN NOT " ALBUM_IS_SINGLE " THEN 1 END) AS albums"
+    "  FROM (SELECT artist_uid AS uid, uid AS album_uid FROM albums WHERE artist_uid IS NOT NULL"
+    "   UNION SELECT artist_uid, album_uid FROM album_artists WHERE position > 0) c"
+    "  JOIN albums a ON a.uid = c.album_uid"
+    "  WHERE EXISTS (SELECT 1 FROM tracks t JOIN files f ON f.track_uid = t.uid WHERE t.album_uid = a.uid)"
+    "  GROUP BY c.uid) na ON na.uid = ar.uid"
+    " LEFT JOIN (SELECT c.uid, count(*) AS n"
+    "  FROM (SELECT coalesce(t.artist_uid, al.artist_uid) AS uid, t.uid AS track_uid FROM tracks t"
+    "    LEFT JOIN albums al ON al.uid = t.album_uid"
+    "   UNION SELECT artist_uid, track_uid FROM track_artists WHERE position > 0"
+    "   UNION SELECT aa.artist_uid, t.uid FROM tracks t"
+    "    JOIN album_artists aa ON aa.album_uid = t.album_uid AND aa.position > 0"
+    "    WHERE t.artist_uid IS NULL) c"
+    "  WHERE EXISTS (SELECT 1 FROM files f WHERE f.track_uid = c.track_uid)"
+    "  GROUP BY c.uid) nt ON nt.uid = ar.uid"
+    " WHERE na.n > 0 OR nt.n > 0" ARTIST_ORDER;
+  return list_artists(lib, sql, out);
+}
+
+mc_status mc_library_list_genres(mc_library *lib, mc_genre_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  mc_genre_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt;
+  mc_status st = sqlite3_prepare_v2(lib->db,
+                                    "SELECT min(trim(genre)) AS name FROM tracks WHERE trim(genre) <> ''"
+                                    " GROUP BY lower(trim(genre)) ORDER BY name COLLATE NOCASE",
+                                    -1, &stmt, NULL) == SQLITE_OK
+                   ? MC_OK
+                   : MC_ERR_DB;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    char *name = column_dup(stmt, 0);
+    if (!name || !grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      free(name);
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    list->items[list->count++] = name;
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_genre_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_genre_list_free(mc_genre_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) free(list->items[i]);
+  free(list->items);
+  free(list);
+}
+
+void mc_artist_list_free(mc_artist_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i].name);
+    free(list->items[i].sort_name);
+    free(list->items[i].cover_dir);
+  }
+  free(list->items);
+  free(list);
+}
+
+mc_status mc_library_list_artist_albums(mc_library *lib, const char *artist_uid, mc_album_list **out) {
+  if (!lib || !artist_uid || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* c counts the tracks of just the albums the artist is on (by the artist indexes). An album
+   * credited to them with no tracks has no c row, and counts as all theirs. Singles, one
+   * track, are mc_library_list_artist_singles()'s. */
+  static const char sql[] =
+    "WITH mine (uid) AS (" CREDITED_ALBUMS("?1") "), cr (uid) AS (" CREDITED_TRACKS("?1") ")"
+    ALBUM_COLS ", coalesce(c.n, 0), coalesce(c.credited, 0) FROM albums a" ALBUM_JOINS
+    " LEFT JOIN (SELECT t.album_uid, count(*) AS n,"
+    "   count(CASE WHEN t.uid IN (SELECT uid FROM cr) THEN 1 END) AS credited"
+    "  FROM tracks t"
+    "  WHERE t.album_uid IN (SELECT album_uid FROM tracks WHERE uid IN (SELECT uid FROM cr)"
+    "   UNION SELECT uid FROM mine)"
+    "  GROUP BY t.album_uid) c ON c.album_uid = a.uid"
+    " WHERE (c.credited > 0 OR a.uid IN (SELECT uid FROM mine)) AND NOT " ALBUM_IS_SINGLE
+    " ORDER BY max(a.uid IN (SELECT uid FROM mine), coalesce(c.credited * 1.0 / c.n, 0)) DESC,"
+    "  a.year, a.title COLLATE NOCASE, a.uid";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  if (sqlite3_bind_text(stmt, 1, artist_uid, -1, SQLITE_STATIC) != SQLITE_OK) {
+    sqlite3_finalize(stmt);
+    return MC_ERR_DB;
+  }
+  return mc_library_read_albums(lib, stmt, out);
+}
+
+mc_status mc_library_list_artist_tracks(mc_library *lib, const char *artist_uid, mc_track_list **out) {
+  /* Their own tracks, those they're featured on, and those with no artist on their albums,
+   * each by its index. A mix is found as its album, as in search. */
+  static const char sql[] =
+    TRACK_COLS " FROM tracks t" TRACK_JOINS
+    " WHERE t.uid IN (" CREDITED_TRACKS("?1") ") AND NOT " TRACK_IN_MIX
+    " ORDER BY t.title COLLATE NOCASE, al.title COLLATE NOCASE, coalesce(t.disc_no, 0), t.track_no, t.uid";
+  return list_tracks(lib, sql, artist_uid, out);
+}
+
+mc_status mc_library_list_artist_singles(mc_library *lib, const char *artist_uid, mc_track_list **out) {
+  /* Their tracks and their albums' tracks, each by its index, that are alone on their album
+   * or have none. */
+  static const char sql[] =
+    TRACK_COLS " FROM tracks t" TRACK_JOINS
+    " WHERE t.uid IN (" CREDITED_TRACKS("?1")
+    "  UNION SELECT t2.uid FROM tracks t2 WHERE t2.album_uid IN (" CREDITED_ALBUMS("?1") "))"
+    " AND (t.album_uid IS NULL OR (SELECT count(*) FROM tracks st WHERE st.album_uid = t.album_uid) = 1)"
+    " AND NOT " TRACK_IN_MIX
+    " ORDER BY coalesce(t.year, al.year), t.title COLLATE NOCASE, t.uid";
+  return list_tracks(lib, sql, artist_uid, out);
+}
+
+mc_status mc_library_list_credit(mc_library *lib, const char *uid, mc_credit_list **out) {
+  if (!lib || !uid || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* Whose credit it is: the album's for a track with no artist of its own. */
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db,
+                         "SELECT 0, CASE WHEN t.artist_uid IS NULL AND al.uid IS NOT NULL"
+                         " THEN al.uid ELSE t.uid END, t.artist_uid IS NULL AND al.uid IS NOT NULL"
+                         " FROM tracks t LEFT JOIN albums al ON al.uid = t.album_uid WHERE t.uid = ?1"
+                         " UNION ALL SELECT 1, uid, 1 FROM albums WHERE uid = ?1",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  char owner[MC_UID_STRLEN] = "";
+  int album = 0, rc = sqlite3_step(stmt);
+  if (rc == SQLITE_ROW) {
+    copy_uid(owner, stmt, 1);
+    album = sqlite3_column_int(stmt, 2);
+  }
+  sqlite3_finalize(stmt);
+  if (rc == SQLITE_DONE) return MC_ERR_NOT_FOUND;
+  if (rc != SQLITE_ROW) return MC_ERR_DB;
+
+  /* The first artist is artist_uid, whatever row 0 says (see CREDITED_TRACKS). */
+  static const char *const sql[] = {
+    "SELECT ar.uid, ar.name, c.joinphrase FROM ("
+    " SELECT 0 AS position, o.artist_uid AS artist_uid, coalesce((SELECT joinphrase FROM"
+    "  track_artists WHERE track_uid = o.uid AND position = 0), '') AS joinphrase"
+    "  FROM tracks o WHERE o.uid = ?1"
+    " UNION ALL SELECT position, artist_uid, joinphrase FROM track_artists"
+    "  WHERE track_uid = ?1 AND position > 0) c"
+    " JOIN artists ar ON ar.uid = c.artist_uid ORDER BY c.position",
+    "SELECT ar.uid, ar.name, c.joinphrase FROM ("
+    " SELECT 0 AS position, o.artist_uid AS artist_uid, coalesce((SELECT joinphrase FROM"
+    "  album_artists WHERE album_uid = o.uid AND position = 0), '') AS joinphrase"
+    "  FROM albums o WHERE o.uid = ?1"
+    " UNION ALL SELECT position, artist_uid, joinphrase FROM album_artists"
+    "  WHERE album_uid = ?1 AND position > 0) c"
+    " JOIN artists ar ON ar.uid = c.artist_uid ORDER BY c.position",
+  };
+  mc_credit_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql[album], -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  if (st == MC_OK) sqlite3_bind_text(stmt, 1, owner, -1, SQLITE_STATIC);
+  int cap = 0;
+  rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_credit_artist *c = &list->items[list->count++];
+    memset(c, 0, sizeof *c);
+    copy_uid(c->uid, stmt, 0);
+    c->name = column_dup(stmt, 1);
+    const unsigned char *join = sqlite3_column_text(stmt, 2);
+    c->join = mc_strdup(join ? (const char *)join : "");
+    if (!c->name || !c->join) st = MC_ERR_NOMEM;
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_credit_list_free(list);
+    return st;
+  }
+  /* The last has nothing after it, whatever a stale row says. */
+  if (list->count) list->items[list->count - 1].join[0] = '\0';
+  *out = list;
+  return MC_OK;
+}
+
+void mc_credit_list_free(mc_credit_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i].name);
+    free(list->items[i].join);
+  }
+  free(list->items);
+  free(list);
+}
+
+mc_status mc_library_list_album_groups(mc_library *lib, unsigned flags, mc_album_group_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* Smart album groups live in smart_lists, so this table holds only the manual ones. An
+   * album is here if any of its tracks has a file here. */
+  static const char sql[] =
+    "SELECT g.uid, g.name,"
+    " (SELECT count(DISTINCT e.album_uid) FROM album_group_entries e WHERE e.group_uid = g.uid),"
+    " (SELECT count(DISTINCT e.album_uid) FROM album_group_entries e WHERE e.group_uid = g.uid"
+    "   AND EXISTS (SELECT 1 FROM tracks t JOIN files f ON f.track_uid = t.uid WHERE t.album_uid = e.album_uid))"
+    " FROM album_groups g ORDER BY g.name COLLATE NOCASE, g.uid";
+
+  mc_album_group_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    int albums = sqlite3_column_int(stmt, 2), playable = sqlite3_column_int(stmt, 3);
+    /* An empty one is kept, as an empty playlist is. */
+    if ((flags & MC_LIST_PLAYABLE) && albums > 0 && playable == 0) {
+      list->hidden++;
+      continue;
+    }
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_album_group_info *g = &list->items[list->count++];
+    memset(g, 0, sizeof *g);
+    const unsigned char *uid = sqlite3_column_text(stmt, 0);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(g->uid, (const char *)uid);
+    g->name = column_dup(stmt, 1);
+    g->album_count = albums;
+    g->playable_count = playable;
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_album_group_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_album_group_list_free(mc_album_group_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) free(list->items[i].name);
+  free(list->items);
+  free(list);
+}
+
+mc_status mc_library_list_album_group_albums(mc_library *lib, const char *group_uid, mc_album_list **out) {
+  if (!lib || !group_uid || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, "SELECT 1 FROM album_groups WHERE uid = ?1", -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, group_uid, -1, SQLITE_STATIC);
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  if (rc == SQLITE_DONE) return MC_ERR_NOT_FOUND;
+  if (rc != SQLITE_ROW) return MC_ERR_DB;
+  /* An album two devices added at once has two entries: it's listed once, at the first. */
+  static const char sql[] = ALBUM_COLS " FROM albums a" ALBUM_JOINS
+    " JOIN (SELECT album_uid, min(position) AS pos FROM album_group_entries WHERE group_uid = ?1"
+    "  GROUP BY album_uid) e ON e.album_uid = a.uid"
+    " ORDER BY e.pos, a.uid";
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  sqlite3_bind_text(stmt, 1, group_uid, -1, SQLITE_STATIC);
+  return mc_library_read_albums(lib, stmt, out);
+}
+
+mc_status mc_library_count(mc_library *lib, mc_entity entity, int64_t *out) {
+  static const char *const sql[] = {
+    [MC_ENTITY_ARTISTS] = "SELECT count(*) FROM artists",
+    [MC_ENTITY_ALBUMS] = "SELECT count(*) FROM albums",
+    [MC_ENTITY_TRACKS] = "SELECT count(*) FROM tracks",
+    [MC_ENTITY_FILES] = "SELECT count(*) FROM files",
+    [MC_ENTITY_PLAYLISTS] = "SELECT count(*) FROM playlists",
+  };
+  if (!lib || !out || (unsigned)entity >= sizeof sql / sizeof sql[0]) return MC_ERR_INVALID_ARG;
+
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql[entity], -1, &stmt, NULL) != SQLITE_OK) return MC_ERR_DB;
+  mc_status st = MC_ERR_DB;
+  if (sqlite3_step(stmt) == SQLITE_ROW) {
+    *out = sqlite3_column_int64(stmt, 0);
+    st = MC_OK;
+  }
+  sqlite3_finalize(stmt);
+  return st;
+}
+
+mc_status mc_library_record_play(mc_library *lib, const char *track_uid) {
+  if (!lib || !track_uid) return MC_ERR_INVALID_ARG;
+  char uid[MC_UID_STRLEN];
+  mc_status st = mc_uid_new(uid);
+  if (st != MC_OK || (st = mc_library_begin_write(lib)) != MC_OK) return st;
+  /* Only this device's row, so plays on two devices never write the same field. */
+  static const char sql[] =
+    "INSERT INTO track_plays (uid, track_uid, node_uid, play_count, last_played_ms)"
+    " VALUES (?1, ?2, ?3, 1, ?4)"
+    " ON CONFLICT (track_uid, node_uid) DO UPDATE"
+    " SET play_count = play_count + 1, last_played_ms = excluded.last_played_ms";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    mc_library_rollback(lib);
+    return MC_ERR_DB;
+  }
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, track_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 3, lib->node_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 4, (sqlite3_int64)lib->hlc.wall_ms());
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  st = rc == SQLITE_DONE ? MC_OK : (rc & 0xff) == SQLITE_CONSTRAINT ? MC_ERR_NOT_FOUND : MC_ERR_DB;
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
+}
+
+/* play_events.context and .ended, indexed by mc_play_context and mc_play_end. By name, so a
+ * row can be read as it is, and a value added later is one more name. */
+static const char *const k_play_contexts[] = {"unknown", "manual", "album", "playlist",
+                                              "album_group", "artist", "shuffle", "device"};
+static const char *const k_play_ends[] = {"unknown", "finished", "skipped", "stopped", "replaced", "failed"};
+#define COUNT_OF(a) ((int)(sizeof (a) / sizeof (a)[0]))
+
+/* name's index in names, or 0 (unknown) for a name from a newer version. */
+static int play_name_index(const char *const *names, int count, const char *name) {
+  for (int i = 0; name && i < count; i++)
+    if (!strcmp(names[i], name)) return i;
+  return 0;
+}
+
+mc_status mc_library_log_play(mc_library *lib, const mc_play_event *e) {
+  if (!lib || !e || !e->track_uid[0] || (int)e->context < 0 || (int)e->context >= COUNT_OF(k_play_contexts) ||
+      (int)e->end < 0 || (int)e->end >= COUNT_OF(k_play_ends))
+    return MC_ERR_INVALID_ARG;
+  char uid[MC_UID_STRLEN];
+  mc_status st = mc_uid_new(uid);
+  if (st != MC_OK || (st = mc_library_begin_write(lib)) != MC_OK) return st;
+  static const char sql[] =
+    "INSERT INTO play_events (uid, track_uid, node_uid, started_ms, listened_ms, ended, context, context_uid)"
+    " VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    mc_library_rollback(lib);
+    return MC_ERR_DB;
+  }
+  sqlite3_bind_text(stmt, 1, uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 2, e->track_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 3, lib->node_uid, -1, SQLITE_STATIC);
+  sqlite3_bind_int64(stmt, 4, (sqlite3_int64)e->started_ms);
+  sqlite3_bind_int64(stmt, 5, (sqlite3_int64)e->listened_ms);
+  sqlite3_bind_text(stmt, 6, k_play_ends[e->end], -1, SQLITE_STATIC);
+  sqlite3_bind_text(stmt, 7, k_play_contexts[e->context], -1, SQLITE_STATIC);
+  if (e->context_uid[0]) sqlite3_bind_text(stmt, 8, e->context_uid, -1, SQLITE_STATIC);
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  st = rc == SQLITE_DONE ? MC_OK : (rc & 0xff) == SQLITE_CONSTRAINT ? MC_ERR_NOT_FOUND : MC_ERR_DB;
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
+}
+
+mc_status mc_library_list_play_events(mc_library *lib, int64_t from_ms, int64_t to_ms, mc_play_log **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  static const char sql[] =
+    "SELECT uid, node_uid, track_uid, started_ms, listened_ms, ended, context, context_uid"
+    " FROM play_events WHERE started_ms >= ?1 AND started_ms < ?2 ORDER BY started_ms, uid";
+  mc_play_log *log = calloc(1, sizeof *log);
+  if (!log) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  if (st == MC_OK) {
+    sqlite3_bind_int64(stmt, 1, (sqlite3_int64)from_ms);
+    sqlite3_bind_int64(stmt, 2, (sqlite3_int64)to_ms);
+  }
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&log->items, log->count, &cap, sizeof *log->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_play_log_item *it = &log->items[log->count++];
+    memset(it, 0, sizeof *it);
+    copy_uid(it->uid, stmt, 0);
+    copy_uid(it->node_uid, stmt, 1);
+    copy_uid(it->event.track_uid, stmt, 2);
+    it->event.started_ms = sqlite3_column_int64(stmt, 3);
+    it->event.listened_ms = sqlite3_column_int64(stmt, 4);
+    it->event.end = (mc_play_end)play_name_index(k_play_ends, COUNT_OF(k_play_ends),
+                                                 (const char *)sqlite3_column_text(stmt, 5));
+    it->event.context = (mc_play_context)play_name_index(k_play_contexts, COUNT_OF(k_play_contexts),
+                                                         (const char *)sqlite3_column_text(stmt, 6));
+    copy_uid(it->event.context_uid, stmt, 7);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_play_log_free(log);
+    return st;
+  }
+  *out = log;
+  return MC_OK;
+}
+
+void mc_play_log_free(mc_play_log *log) {
+  if (!log) return;
+  free(log->items);
+  free(log);
+}
+
+/* recents.kind, indexed by mc_recent_kind; the same names as sync profile items, for the kinds
+ * that are one. By name, and with nothing checking them, so an older app takes a new one in and
+ * lists without it. */
+static const char *const k_recent_kinds[] = {"album", "artist", "playlist", "album_group"};
+#define RECENT_KIND_COUNT ((int)(sizeof k_recent_kinds / sizeof k_recent_kinds[0]))
+
+/* Runs a write to recents in a transaction of its own, binding text parameters p1 and p2
+ * (unless NULL) and now as ?3 if it has one. MC_ERR_NOT_FOUND if it changed no row. */
+static mc_status write_recents(mc_library *lib, const char *sql, const char *p1, const char *p2) {
+  mc_status st = mc_library_begin_write(lib);
+  if (st != MC_OK) return st;
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    mc_library_rollback(lib);
+    return MC_ERR_DB;
+  }
+  if (p1) sqlite3_bind_text(stmt, 1, p1, -1, SQLITE_STATIC);
+  if (p2) sqlite3_bind_text(stmt, 2, p2, -1, SQLITE_STATIC);
+  /* The open's time is the wall-clock part of a fresh hlc, just before the one that logs it.
+   * An open on any device that has seen this one then gets a later time as well as a later
+   * hlc, so sync's newest change by hlc is also the newest open, even when clocks disagree. */
+  if (sqlite3_bind_parameter_count(stmt) >= 3)
+    sqlite3_bind_int64(stmt, 3, (sqlite3_int64)mc_hlc_physical_ms(mc_hlc_now(&lib->hlc)));
+  int rc = sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+  st = rc != SQLITE_DONE ? MC_ERR_DB : sqlite3_changes(lib->db) ? MC_OK : MC_ERR_NOT_FOUND;
+  if (st == MC_OK) st = mc_library_commit(lib);
+  if (st != MC_OK) mc_library_rollback(lib);
+  return st;
+}
+
+mc_status mc_library_record_opened(mc_library *lib, mc_recent_kind kind, const char *uid) {
+  if (!lib || !uid || (unsigned)kind >= RECENT_KIND_COUNT) return MC_ERR_INVALID_ARG;
+  static const char sql[] =
+    "INSERT INTO recents (uid, kind, opened_ms) SELECT ?1, ?2, ?3"
+    " WHERE CASE ?2"
+    "  WHEN 'album' THEN EXISTS (SELECT 1 FROM albums WHERE uid = ?1)"
+    "  WHEN 'artist' THEN EXISTS (SELECT 1 FROM artists WHERE uid = ?1)"
+    "  WHEN 'playlist' THEN EXISTS (SELECT 1 FROM playlists WHERE uid = ?1)"
+    "   OR EXISTS (SELECT 1 FROM smart_lists WHERE uid = ?1 AND subject = 'tracks')"
+    "  WHEN 'album_group' THEN EXISTS (SELECT 1 FROM album_groups WHERE uid = ?1)"
+    "   OR EXISTS (SELECT 1 FROM smart_lists WHERE uid = ?1 AND subject = 'albums')"
+    " END"
+    " ON CONFLICT (uid) DO UPDATE SET kind = excluded.kind, opened_ms = excluded.opened_ms";
+  return write_recents(lib, sql, uid, k_recent_kinds[kind]);
+}
+
+mc_status mc_library_remove_recent(mc_library *lib, const char *uid) {
+  if (!lib || !uid) return MC_ERR_INVALID_ARG;
+  return write_recents(lib, "DELETE FROM recents WHERE uid = ?1", uid, NULL);
+}
+
+mc_status mc_library_clear_recents(mc_library *lib) {
+  if (!lib) return MC_ERR_INVALID_ARG;
+  mc_status st = write_recents(lib, "DELETE FROM recents", NULL, NULL);
+  return st == MC_ERR_NOT_FOUND ? MC_OK : st;
+}
+
+mc_status mc_library_list_recents(mc_library *lib, int limit, unsigned flags, mc_recent_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* Each kind joins only its own table, so an entry whose item is gone, or of a kind this
+   * version doesn't know, matches nothing and is left out. */
+  static const char sql[] =
+    "SELECT r.kind, r.uid, r.opened_ms, coalesce(al.title, ar.name, p.name, g.name, mc_smart_name(s.uid, s.name)),"
+    " coalesce(al.artist_credit, aar.name), s.uid IS NOT NULL,"
+    " (p.uid IS NULL OR NOT EXISTS (SELECT 1 FROM playlist_entries e WHERE e.playlist_uid = p.uid)"
+    "  OR EXISTS (SELECT 1 FROM playlist_entries e JOIN files f ON f.track_uid = e.track_uid"
+    "  WHERE e.playlist_uid = p.uid))"
+    " AND (g.uid IS NULL OR NOT EXISTS (SELECT 1 FROM album_group_entries e WHERE e.group_uid = g.uid)"
+    "  OR EXISTS (SELECT 1 FROM album_group_entries e JOIN tracks t ON t.album_uid = e.album_uid"
+    "  JOIN files f ON f.track_uid = t.uid WHERE e.group_uid = g.uid))"
+    " FROM recents r"
+    " LEFT JOIN albums al ON r.kind = 'album' AND al.uid = r.uid"
+    " LEFT JOIN artists aar ON aar.uid = al.artist_uid"
+    " LEFT JOIN artists ar ON r.kind = 'artist' AND ar.uid = r.uid"
+    " LEFT JOIN playlists p ON r.kind = 'playlist' AND p.uid = r.uid"
+    " LEFT JOIN album_groups g ON r.kind = 'album_group' AND g.uid = r.uid"
+    " LEFT JOIN smart_lists s ON s.uid = r.uid AND s.subject ="
+    "  CASE r.kind WHEN 'playlist' THEN 'tracks' WHEN 'album_group' THEN 'albums' END"
+    " WHERE coalesce(al.uid, ar.uid, p.uid, g.uid, s.uid) IS NOT NULL"
+    " ORDER BY r.opened_ms DESC, r.uid DESC LIMIT ?1";
+
+  mc_recent_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  /* Leaving items out means the limit is counted here rather than in SQL. */
+  int playable_only = (flags & MC_LIST_PLAYABLE) != 0;
+  if (st == MC_OK) sqlite3_bind_int(stmt, 1, limit > 0 && !playable_only ? limit : -1);
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (limit <= 0 || list->count < limit) && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const char *kind = (const char *)sqlite3_column_text(stmt, 0);
+    int k = 0;
+    while (k < RECENT_KIND_COUNT && strcmp(kind, k_recent_kinds[k])) k++;
+    if (playable_only && (k == MC_RECENT_PLAYLIST || k == MC_RECENT_ALBUM_GROUP)) {
+      int listed = sqlite3_column_int(stmt, 6);
+      if (sqlite3_column_int(stmt, 5))
+        st = mc_smart_listed_here(lib, (const char *)sqlite3_column_text(stmt, 1), &listed);
+      if (st != MC_OK) break;
+      if (!listed) continue;
+    }
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_recent_info *r = &list->items[list->count++];
+    memset(r, 0, sizeof *r);
+    r->kind = (mc_recent_kind)k;
+    const unsigned char *uid = sqlite3_column_text(stmt, 1);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(r->uid, (const char *)uid);
+    r->opened_ms = sqlite3_column_int64(stmt, 2);
+    r->name = column_dup(stmt, 3);
+    r->artist = column_dup(stmt, 4);
+    r->is_smart = sqlite3_column_int(stmt, 5);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE && rc != SQLITE_ROW) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_recent_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_recent_list_free(mc_recent_list *list) {
+  if (!list) return;
+  for (int i = 0; i < list->count; i++) {
+    free(list->items[i].name);
+    free(list->items[i].artist);
+  }
+  free(list->items);
+  free(list);
+}
+
+mc_status mc_library_list_played(mc_library *lib, int64_t since_ms, mc_played_list **out) {
+  if (!lib || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  /* A track's plays first, over its rows (one per device), so a track played on two devices
+   * counts once. */
+  static const char sql[] =
+    "WITH played AS (SELECT track_uid, sum(play_count) AS plays, max(coalesce(last_played_ms, 0)) AS last"
+    "  FROM track_plays WHERE play_count > 0 GROUP BY track_uid)"
+    " SELECT 0, t.album_uid, count(*), sum(p.last >= ?1), sum(p.plays), max(p.last)"
+    "  FROM played p JOIN tracks t ON t.uid = p.track_uid"
+    "  WHERE t.album_uid IS NOT NULL GROUP BY t.album_uid"
+    " UNION ALL"
+    " SELECT 1, e.playlist_uid, count(*), sum(p.last >= ?1), sum(p.plays), max(p.last)"
+    "  FROM played p JOIN (SELECT DISTINCT playlist_uid, track_uid FROM playlist_entries) e"
+    "  ON e.track_uid = p.track_uid GROUP BY e.playlist_uid";
+
+  mc_played_list *list = calloc(1, sizeof *list);
+  if (!list) return MC_ERR_NOMEM;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = sqlite3_prepare_v2(lib->db, sql, -1, &stmt, NULL) == SQLITE_OK ? MC_OK : MC_ERR_DB;
+  if (st == MC_OK) sqlite3_bind_int64(stmt, 1, since_ms);
+  int cap = 0, rc = SQLITE_DONE;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    if (!grow((void **)&list->items, list->count, &cap, sizeof *list->items)) {
+      st = MC_ERR_NOMEM;
+      break;
+    }
+    mc_played_info *p = &list->items[list->count++];
+    memset(p, 0, sizeof *p);
+    p->kind = sqlite3_column_int(stmt, 0) ? MC_RECENT_PLAYLIST : MC_RECENT_ALBUM;
+    const unsigned char *uid = sqlite3_column_text(stmt, 1);
+    if (uid && strlen((const char *)uid) < MC_UID_STRLEN) strcpy(p->uid, (const char *)uid);
+    p->tracks_played = sqlite3_column_int(stmt, 2);
+    p->tracks_since = sqlite3_column_int(stmt, 3);
+    p->plays = sqlite3_column_int64(stmt, 4);
+    p->last_played_ms = sqlite3_column_int64(stmt, 5);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(stmt);
+  if (st != MC_OK) {
+    mc_played_list_free(list);
+    return st;
+  }
+  *out = list;
+  return MC_OK;
+}
+
+void mc_played_list_free(mc_played_list *list) {
+  if (!list) return;
+  free(list->items);
+  free(list);
+}
+
+const mc_changelog_table *mc_library_tracked(size_t *count) {
+  *count = sizeof k_tracked / sizeof k_tracked[0];
+  return k_tracked;
+}

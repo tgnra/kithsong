@@ -1,0 +1,30 @@
+title = "Kithsong"
+description = "A local-only music player that keeps your library perfectly organised and synced across your devices"
+base_url = "https://kithso.ng"
+language = "en"
+github = "https://github.com/tgnra/kithsong"
+# An image shown instead of the title text, e.g. "/logo.svg" from static/, and optionally
+# one for the dark theme. Their alt text is the title.
+logo = "/logo.svg"
+logo_dark = "/logo-dark.svg"
+
+# The home page's download links, in this order. download.js makes the visitor's own
+# platform (windows, linux or android) the main button. Replace each href with the
+# store page once the app is listed there.
+[[downloads]]
+platform = "windows"
+name = "Windows"
+store = "Microsoft Store"
+href = "https://apps.microsoft.com/detail/9PFD50NWXCT5"
+
+[[downloads]]
+platform = "linux"
+name = "Linux"
+store = "Flatpak"
+href = "/docs/install/"
+
+[[downloads]]
+platform = "android"
+name = "Android"
+store = "Closed Test"
+href = "/docs/install/"

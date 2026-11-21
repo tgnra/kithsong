@@ -1,0 +1,783 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
+
+#include "net/socket.h"
+#include "util/log.h"
+
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "util/platform.h"
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+
+typedef SOCKET sock_t;
+#define BAD_SOCK INVALID_SOCKET
+#define close_sock closesocket
+#define SEND_FLAGS 0
+static int sock_error(void) {
+  return WSAGetLastError();
+}
+#define WOULD_BLOCK(e) ((e) == WSAEWOULDBLOCK)
+#define CONNECTING(e) ((e) == WSAEWOULDBLOCK || (e) == WSAEINPROGRESS)
+#define RETRY_ACCEPT(e) ((e) == WSAEWOULDBLOCK || (e) == WSAECONNRESET || (e) == WSAEINTR)
+typedef int io_len; /* send() and recv() take and return int */
+#define IO_MAX INT_MAX
+
+#else
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+typedef int sock_t;
+#define BAD_SOCK (-1)
+#define close_sock close
+#ifdef MSG_NOSIGNAL
+#define SEND_FLAGS MSG_NOSIGNAL /* a closed peer is an error, not SIGPIPE */
+#else
+#define SEND_FLAGS 0 /* SO_NOSIGPIPE is set per socket instead */
+#endif
+static int sock_error(void) {
+  return errno;
+}
+#define WOULD_BLOCK(e) ((e) == EAGAIN || (e) == EWOULDBLOCK || (e) == EINTR)
+#define CONNECTING(e) ((e) == EINPROGRESS || (e) == EINTR)
+#define RETRY_ACCEPT(e) \
+  ((e) == EAGAIN || (e) == EWOULDBLOCK || (e) == EINTR || (e) == ECONNABORTED || (e) == EPROTO)
+typedef size_t io_len;
+#define IO_MAX ((size_t)SSIZE_MAX)
+#endif
+
+struct mc_socket {
+  sock_t fd;
+  char peer[INET6_ADDRSTRLEN + 8]; /* "[addr]:port" */
+};
+
+struct mc_listener {
+  sock_t fds[2]; /* IPv4, then IPv6 if available */
+  int nfds;
+  uint16_t port;
+  /* mc_listener_stop() sends a datagram to this loopback socket, which accept also waits
+   * on. The same trick works on both platforms, unlike a pipe. */
+  sock_t wake;
+  struct sockaddr_in wake_addr;
+  mc_mutex lock;
+  int stopped;
+};
+
+/* --- Setup --- */
+
+#ifdef _WIN32
+static INIT_ONCE g_wsa_once = INIT_ONCE_STATIC_INIT;
+static int g_wsa_ok;
+
+static BOOL CALLBACK wsa_startup(PINIT_ONCE once, PVOID param, PVOID *ctx) {
+  (void)once;
+  (void)param;
+  (void)ctx;
+  WSADATA data;
+  g_wsa_ok = WSAStartup(MAKEWORD(2, 2), &data) == 0;
+  return TRUE;
+}
+
+mc_status mc_socket_init(void) {
+  InitOnceExecuteOnce(&g_wsa_once, wsa_startup, NULL, NULL);
+  return g_wsa_ok ? MC_OK : MC_ERR_NET;
+}
+#else
+mc_status mc_socket_init(void) {
+  return MC_OK;
+}
+#endif
+
+/* --- Helpers --- */
+
+/* Non-blocking, not inherited by child processes, and no SIGPIPE where that's per socket. */
+static int prepare(sock_t fd) {
+#ifdef _WIN32
+  u_long on = 1;
+  if (ioctlsocket(fd, (long)FIONBIO, &on) != 0) return -1;
+  SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, 0);
+#else
+  int flags = fcntl(fd, F_GETFL);
+  if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) return -1;
+  fcntl(fd, F_SETFD, FD_CLOEXEC);
+#ifdef SO_NOSIGPIPE
+  int one = 1;
+  setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
+#endif
+  return 0;
+}
+
+/* Milliseconds left until deadline: -1 for no deadline, 0 once it has passed. */
+static int remaining(uint64_t deadline, int timeout_ms) {
+  if (timeout_ms < 0) return -1;
+  uint64_t now = mc_mono_ms();
+  if (now >= deadline) return 0;
+  uint64_t left = deadline - now;
+  return left > INT_MAX ? INT_MAX : (int)left;
+}
+
+static uint64_t deadline_of(int timeout_ms) {
+  return timeout_ms < 0 ? 0 : mc_mono_ms() + (uint64_t)timeout_ms;
+}
+
+/* How long a send or receive waits at a time. On Windows, select() doesn't wake when
+ * another thread shuts the socket down (mc_socket_shutdown()), so the wait is cut short
+ * and the next send() or recv() sees the shutdown. Elsewhere poll() wakes by itself. */
+static int slice(int left) {
+#ifdef _WIN32
+  if (left < 0 || left > 100) return 100;
+#endif
+  return left;
+}
+
+/* Waits until one of fds can be read (or written, with want_write) or has failed, for up
+ * to timeout_ms (-1: forever). Returns its index, -1 on timeout, -2 on error. Errors and
+ * hang-ups count as ready, so the next call on that socket reports them. */
+static int wait_ready(const sock_t *fds, int n, int want_write, int timeout_ms) {
+#ifdef _WIN32
+  /* select() rather than WSAPoll(), which misses failed connects on older Windows 10. */
+  fd_set rd, wr, ex;
+  FD_ZERO(&rd);
+  FD_ZERO(&wr);
+  FD_ZERO(&ex);
+  for (int i = 0; i < n; i++) {
+    if (want_write)
+      FD_SET(fds[i], &wr);
+    else
+      FD_SET(fds[i], &rd);
+    FD_SET(fds[i], &ex); /* where Windows reports a failed connect */
+  }
+  struct timeval tv = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+  int rc = select(0, &rd, &wr, &ex, timeout_ms < 0 ? NULL : &tv);
+  if (rc == 0) return -1;
+  if (rc < 0) return -2;
+  for (int i = 0; i < n; i++)
+    if (FD_ISSET(fds[i], &rd) || FD_ISSET(fds[i], &wr) || FD_ISSET(fds[i], &ex)) return i;
+  return -1;
+#else
+  struct pollfd pf[4];
+  if (n > 4) return -2;
+  for (int i = 0; i < n; i++) {
+    pf[i].fd = fds[i];
+    pf[i].events = want_write ? POLLOUT : POLLIN;
+    pf[i].revents = 0;
+  }
+  int rc = poll(pf, (nfds_t)n, timeout_ms);
+  if (rc == 0) return -1;
+  if (rc < 0) return errno == EINTR ? -1 : -2; /* callers loop on their deadline */
+  for (int i = 0; i < n; i++)
+    if (pf[i].revents) return i;
+  return -1;
+#endif
+}
+
+static void describe_peer(const struct sockaddr *sa, char *out, size_t cap) {
+  char host[INET6_ADDRSTRLEN] = "?";
+  unsigned port = 0;
+  if (sa->sa_family == AF_INET) {
+    const struct sockaddr_in *in = (const struct sockaddr_in *)sa;
+    inet_ntop(AF_INET, &in->sin_addr, host, sizeof host);
+    port = ntohs(in->sin_port);
+    snprintf(out, cap, "%s:%u", host, port);
+  } else if (sa->sa_family == AF_INET6) {
+    const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)sa;
+    inet_ntop(AF_INET6, &in6->sin6_addr, host, sizeof host);
+    port = ntohs(in6->sin6_port);
+    snprintf(out, cap, "[%s]:%u", host, port);
+  } else {
+    snprintf(out, cap, "?");
+  }
+}
+
+static mc_status wrap(sock_t fd, const struct sockaddr *peer, mc_socket **out) {
+  mc_socket *s = calloc(1, sizeof *s);
+  if (!s) {
+    close_sock(fd);
+    return MC_ERR_NOMEM;
+  }
+  int one = 1;
+  /* Frames are small and request/response; don't let Nagle hold them back. */
+  setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof one);
+  s->fd = fd;
+  describe_peer(peer, s->peer, sizeof s->peer);
+  *out = s;
+  return MC_OK;
+}
+
+/* --- Listener --- */
+
+/* A listening socket on address (port included). */
+static sock_t listen_at(const struct sockaddr *address, socklen_t len) {
+  sock_t fd = socket(address->sa_family, SOCK_STREAM, IPPROTO_TCP);
+  if (fd == BAD_SOCK) return BAD_SOCK;
+  int one = 1;
+  /* A separate IPv4 socket takes the v4 traffic, so an IPv6 one is v6 only everywhere. */
+  if (address->sa_family == AF_INET6) setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&one, sizeof one);
+#ifndef _WIN32
+  /* Lets a fixed port be reused straight after a restart. On Windows this option would let
+   * another process steal the port, and the default already behaves. */
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+#endif
+  if (prepare(fd) != 0 || bind(fd, address, len) != 0 || listen(fd, SOMAXCONN) != 0) {
+    close_sock(fd);
+    return BAD_SOCK;
+  }
+  return fd;
+}
+
+static sock_t listen_on(int family, uint16_t port) {
+  struct sockaddr_storage ss;
+  memset(&ss, 0, sizeof ss);
+  socklen_t len;
+  if (family == AF_INET6) {
+    struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&ss;
+    in6->sin6_family = AF_INET6;
+    in6->sin6_addr = in6addr_any;
+    in6->sin6_port = htons(port);
+    len = sizeof *in6;
+  } else {
+    struct sockaddr_in *in = (struct sockaddr_in *)&ss;
+    in->sin_family = AF_INET;
+    in->sin_addr.s_addr = htonl(INADDR_ANY);
+    in->sin_port = htons(port);
+    len = sizeof *in;
+  }
+  return listen_at((struct sockaddr *)&ss, len);
+}
+
+/* The listener's wake-up socket: see struct mc_listener. */
+static int open_wake(mc_listener *l) {
+  l->wake = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (l->wake == BAD_SOCK || prepare(l->wake) != 0) return -1;
+  memset(&l->wake_addr, 0, sizeof l->wake_addr);
+  l->wake_addr.sin_family = AF_INET;
+  l->wake_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  socklen_t len = sizeof l->wake_addr;
+  if (bind(l->wake, (struct sockaddr *)&l->wake_addr, len) != 0 ||
+      getsockname(l->wake, (struct sockaddr *)&l->wake_addr, &len) != 0)
+    return -1;
+  return 0;
+}
+
+mc_status mc_listener_open(uint16_t port, mc_listener **out) {
+  if (!out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  mc_status st = mc_socket_init();
+  if (st != MC_OK) return st;
+
+  mc_listener *l = calloc(1, sizeof *l);
+  if (!l) return MC_ERR_NOMEM;
+  l->fds[0] = l->fds[1] = l->wake = BAD_SOCK;
+  mc_mutex_init(&l->lock);
+
+  /* IPv4 first, so that an ephemeral port can then be claimed for IPv6 too. */
+  l->fds[0] = listen_on(AF_INET, port);
+  if (l->fds[0] == BAD_SOCK) goto fail;
+  l->nfds = 1;
+  struct sockaddr_in bound;
+  socklen_t len = sizeof bound;
+  if (getsockname(l->fds[0], (struct sockaddr *)&bound, &len) != 0) goto fail;
+  l->port = ntohs(bound.sin_port);
+  /* No IPv6, or the port is taken there: carry on with IPv4 alone. */
+  l->fds[1] = listen_on(AF_INET6, l->port);
+  if (l->fds[1] != BAD_SOCK) l->nfds = 2;
+
+  if (open_wake(l) != 0) goto fail;
+
+  *out = l;
+  return MC_OK;
+
+fail:
+  mc_log("kithcore: listen on port %u failed (error %d)\n", (unsigned)port,
+          sock_error());
+  mc_listener_close(l);
+  return MC_ERR_NET;
+}
+
+mc_status mc_listener_open_on(const char *address, uint16_t port, mc_listener **out) {
+  if (!address || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  mc_status st = mc_socket_init();
+  if (st != MC_OK) return st;
+  char service[8];
+  snprintf(service, sizeof service, "%u", (unsigned)port);
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV | AI_PASSIVE;
+  if (getaddrinfo(address, service, &hints, &res) != 0 || !res) return MC_ERR_INVALID_ARG;
+
+  mc_listener *l = calloc(1, sizeof *l);
+  if (!l) {
+    freeaddrinfo(res);
+    return MC_ERR_NOMEM;
+  }
+  l->fds[0] = l->fds[1] = l->wake = BAD_SOCK;
+  mc_mutex_init(&l->lock);
+  l->fds[0] = listen_at(res->ai_addr, (socklen_t)res->ai_addrlen);
+  freeaddrinfo(res);
+  if (l->fds[0] == BAD_SOCK) goto fail;
+  l->nfds = 1;
+  struct sockaddr_storage bound;
+  socklen_t len = sizeof bound;
+  if (getsockname(l->fds[0], (struct sockaddr *)&bound, &len) != 0) goto fail;
+  l->port = ntohs(bound.ss_family == AF_INET6 ? ((struct sockaddr_in6 *)&bound)->sin6_port
+                                               : ((struct sockaddr_in *)&bound)->sin_port);
+  if (open_wake(l) != 0) goto fail;
+  *out = l;
+  return MC_OK;
+
+fail:
+  mc_log("kithcore: listen on %s port %u failed (error %d)\n", address, (unsigned)port,
+          sock_error());
+  mc_listener_close(l);
+  return MC_ERR_NET;
+}
+
+uint16_t mc_listener_port(const mc_listener *l) {
+  return l->port;
+}
+
+int mc_listener_stopped(mc_listener *l) {
+  mc_mutex_lock(&l->lock);
+  int stopped = l->stopped;
+  mc_mutex_unlock(&l->lock);
+  return stopped;
+}
+
+void mc_listener_stop(mc_listener *l) {
+  mc_mutex_lock(&l->lock);
+  l->stopped = 1;
+  mc_mutex_unlock(&l->lock);
+  char byte = 0;
+  sendto(l->wake, &byte, 1, 0, (const struct sockaddr *)&l->wake_addr, sizeof l->wake_addr);
+}
+
+mc_status mc_listener_accept(mc_listener *l, int timeout_ms, mc_socket **out) {
+  if (!l || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  uint64_t deadline = deadline_of(timeout_ms);
+  sock_t fds[3];
+  int n = 0;
+  for (int i = 0; i < l->nfds; i++) fds[n++] = l->fds[i];
+  fds[n++] = l->wake;
+
+  for (;;) {
+    if (mc_listener_stopped(l)) return MC_OK;
+    int left = remaining(deadline, timeout_ms);
+    if (left == 0) return MC_OK;
+    int ready = wait_ready(fds, n, 0, left);
+    if (ready == -2) return MC_ERR_NET;
+    if (ready < 0) continue; /* timed out or interrupted; the deadline check decides */
+    if (fds[ready] == l->wake) {
+      char drain[16];
+      while (recv(l->wake, drain, sizeof drain, 0) > 0) {
+      }
+      continue;
+    }
+    struct sockaddr_storage peer;
+    socklen_t len = sizeof peer;
+    sock_t c = accept(fds[ready], (struct sockaddr *)&peer, &len);
+    if (c == BAD_SOCK) {
+      int e = sock_error();
+      if (RETRY_ACCEPT(e)) continue; /* the client gave up between poll and accept */
+      return MC_ERR_NET;
+    }
+    if (prepare(c) != 0) {
+      close_sock(c);
+      return MC_ERR_NET;
+    }
+    return wrap(c, (struct sockaddr *)&peer, out);
+  }
+}
+
+void mc_listener_close(mc_listener *l) {
+  if (!l) return;
+  for (int i = 0; i < 2; i++)
+    if (l->fds[i] != BAD_SOCK) close_sock(l->fds[i]);
+  if (l->wake != BAD_SOCK) close_sock(l->wake);
+  mc_mutex_destroy(&l->lock);
+  free(l);
+}
+
+/* --- Connections --- */
+
+/* One connect attempt to one address: MC_OK, or MC_ERR_NET with fd closed. */
+static mc_status connect_one(const struct addrinfo *ai, uint64_t deadline, int timeout_ms,
+                             sock_t *out) {
+  sock_t fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+  if (fd == BAD_SOCK) return MC_ERR_NET;
+  if (prepare(fd) != 0) goto fail;
+  if (connect(fd, ai->ai_addr, (socklen_t)ai->ai_addrlen) != 0) {
+    if (!CONNECTING(sock_error())) goto fail;
+    for (;;) {
+      int left = remaining(deadline, timeout_ms);
+      if (left == 0) goto fail;
+      int ready = wait_ready(&fd, 1, 1, left);
+      if (ready == -2) goto fail;
+      if (ready == 0) break;
+    }
+    int err = 0;
+    socklen_t len = sizeof err;
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (char *)&err, &len) != 0 || err != 0) goto fail;
+  }
+  *out = fd;
+  return MC_OK;
+
+fail:
+  close_sock(fd);
+  return MC_ERR_NET;
+}
+
+/* --- Name lookup ---
+ *
+ * getaddrinfo() has no timeout of its own, and a network with broken DNS can hold it for
+ * half a minute or more (each server's timeout, times its attempts). So a name is looked up
+ * on a thread of its own, which the caller stops waiting for at its deadline: one given up
+ * on runs on detached, then frees what it found and itself. Every platform's getaddrinfo()
+ * is safe to call from any thread. (The HTTP client is bounded separately: curl looks names
+ * up on a thread of its own in every build, and isn't made to wait for one; see http.c.) */
+
+uint32_t mc_socket_test_lookup_delay_ms;
+
+/* How many of a name's addresses mc_socket_probe() tries (wait_ready's limit). */
+#define PROBE_MAX 4
+
+typedef struct lookup {
+  mc_mutex lock;
+  mc_cond done_cond;
+  int done, abandoned; /* under lock */
+  int rc;
+  struct addrinfo *res;
+  struct addrinfo hints;
+  char service[8];
+  char host[]; /* NUL-terminated */
+} lookup;
+
+static void lookup_free(lookup *l) {
+  mc_cond_destroy(&l->done_cond);
+  mc_mutex_destroy(&l->lock);
+  free(l);
+}
+
+static void lookup_main(void *arg) {
+  lookup *l = arg;
+  if (mc_socket_test_lookup_delay_ms) mc_sleep_ms(mc_socket_test_lookup_delay_ms);
+  struct addrinfo *res = NULL;
+  int rc = getaddrinfo(l->host, l->service, &l->hints, &res);
+  mc_mutex_lock(&l->lock);
+  l->rc = rc;
+  l->res = res;
+  l->done = 1;
+  int abandoned = l->abandoned;
+  mc_cond_broadcast(&l->done_cond);
+  mc_mutex_unlock(&l->lock);
+  if (abandoned) { /* else the caller owns l from here on */
+    if (res) freeaddrinfo(res);
+    lookup_free(l);
+  }
+}
+
+/* getaddrinfo(), giving up (non-zero) at deadline unless timeout_ms is MC_SOCKET_FOREVER, or
+ * once cancelled (NULL: never; asked every 100 ms) says so. Address literals are taken at
+ * once, without a thread. */
+static int resolve(const char *host, const char *service, const struct addrinfo *hints,
+                   uint64_t deadline, int timeout_ms, int (*cancelled)(void *user), void *user,
+                   struct addrinfo **res) {
+  *res = NULL;
+  struct addrinfo numeric = *hints;
+  numeric.ai_flags |= AI_NUMERICHOST;
+  if (getaddrinfo(host, service, &numeric, res) == 0) return 0;
+  *res = NULL;
+  if (timeout_ms < 0) return getaddrinfo(host, service, hints, res);
+
+  size_t len = strlen(host) + 1;
+  lookup *l = calloc(1, sizeof *l + len);
+  if (!l) return EAI_MEMORY;
+  memcpy(l->host, host, len);
+  snprintf(l->service, sizeof l->service, "%s", service);
+  l->hints = *hints;
+  mc_mutex_init(&l->lock);
+  mc_cond_init(&l->done_cond);
+  mc_thread thread;
+  if (mc_thread_start(&thread, lookup_main, l) != MC_OK) {
+    lookup_free(l);
+    return getaddrinfo(host, service, hints, res); /* unbounded, but better than nothing */
+  }
+  mc_thread_detach(&thread);
+
+  mc_mutex_lock(&l->lock);
+  int left;
+  while (!l->done && (left = remaining(deadline, timeout_ms)) > 0) {
+    if (cancelled) {
+      mc_mutex_unlock(&l->lock);
+      int stop = cancelled(user);
+      mc_mutex_lock(&l->lock);
+      if (stop) break;
+      if (left > 100) left = 100;
+    }
+    if (!l->done) mc_cond_wait_ms(&l->done_cond, &l->lock, (uint32_t)left);
+  }
+  int done = l->done;
+  if (!done) l->abandoned = 1;
+  mc_mutex_unlock(&l->lock);
+  if (!done) return EAI_AGAIN; /* lookup_main() frees l */
+  int rc = l->rc;
+  *res = l->res;
+  lookup_free(l);
+  return rc;
+}
+
+mc_status mc_socket_connect(const char *host, uint16_t port, int timeout_ms, mc_socket **out) {
+  if (!host || !out) return MC_ERR_INVALID_ARG;
+  *out = NULL;
+  mc_status st = mc_socket_init();
+  if (st != MC_OK) return st;
+
+  uint64_t deadline = deadline_of(timeout_ms); /* the lookup's time counts too */
+  char service[8];
+  snprintf(service, sizeof service, "%u", (unsigned)port);
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_protocol = IPPROTO_TCP;
+  hints.ai_flags = AI_NUMERICSERV;
+  if (resolve(host, service, &hints, deadline, timeout_ms, NULL, NULL, &res) != 0 || !res) {
+    if (res) freeaddrinfo(res);
+    return MC_ERR_NET;
+  }
+
+  st = MC_ERR_NET;
+  for (const struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+    sock_t fd;
+    if (connect_one(ai, deadline, timeout_ms, &fd) == MC_OK) {
+      st = wrap(fd, ai->ai_addr, out);
+      break;
+    }
+    if (remaining(deadline, timeout_ms) == 0) break;
+  }
+  freeaddrinfo(res);
+  return st;
+}
+
+mc_status mc_socket_probe(const char *host, uint16_t port, int timeout_ms,
+                          int (*cancelled)(void *user), void *user, char *why, size_t why_len) {
+  if (!host || timeout_ms < 0) return MC_ERR_INVALID_ARG;
+  mc_status st = mc_socket_init();
+  if (st != MC_OK) return st;
+
+  uint64_t deadline = deadline_of(timeout_ms);
+  char service[8];
+  snprintf(service, sizeof service, "%u", (unsigned)port);
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_protocol = IPPROTO_TCP;
+  hints.ai_flags = AI_NUMERICSERV;
+  int rc = resolve(host, service, &hints, deadline, timeout_ms, cancelled, user, &res);
+  if (rc != 0 || !res) {
+    if (res) freeaddrinfo(res);
+    if (!why_len || (cancelled && cancelled(user))) return MC_ERR_NET;
+    if (remaining(deadline, timeout_ms) == 0)
+      snprintf(why, why_len, "looking up %s took over %d ms", host, timeout_ms);
+    else
+      snprintf(why, why_len, "couldn't look up %s (error %d)", host, rc);
+    return MC_ERR_NET;
+  }
+
+  /* Every address at once: the first to accept answers it, so one whose packets are lost
+   * (or that isn't routed at all) can't hold up the others. */
+  sock_t fds[PROBE_MAX];
+  int n = 0, tried = 0;
+  st = MC_ERR_NET;
+  for (const struct addrinfo *ai = res; ai && n < PROBE_MAX && st != MC_OK; ai = ai->ai_next) {
+    sock_t fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (fd == BAD_SOCK) continue;
+    tried++;
+    if (prepare(fd) != 0) {
+      close_sock(fd);
+    } else if (connect(fd, ai->ai_addr, (socklen_t)ai->ai_addrlen) == 0) {
+      st = MC_OK;
+      close_sock(fd);
+    } else if (CONNECTING(sock_error())) {
+      fds[n++] = fd;
+    } else {
+      close_sock(fd);
+    }
+  }
+  freeaddrinfo(res);
+
+  int timed_out = 0;
+  while (st != MC_OK && n > 0) {
+    if (cancelled && cancelled(user)) break;
+    int left = remaining(deadline, timeout_ms);
+    if (left == 0) {
+      timed_out = 1;
+      break;
+    }
+    int i = wait_ready(fds, n, 1, left < 100 ? left : 100); /* asking cancelled in between */
+    if (i == -2) break;
+    if (i < 0) continue;
+    int err = 0;
+    socklen_t len = sizeof err;
+    if (getsockopt(fds[i], SOL_SOCKET, SO_ERROR, (char *)&err, &len) == 0 && err == 0) st = MC_OK;
+    close_sock(fds[i]);
+    fds[i] = fds[--n];
+  }
+  for (int i = 0; i < n; i++) close_sock(fds[i]);
+
+  if (st != MC_OK && why_len && !(cancelled && cancelled(user))) {
+    if (timed_out)
+      snprintf(why, why_len, "no connection to %s within %d ms (%d address%s tried)", host,
+               timeout_ms, tried, tried == 1 ? "" : "es");
+    else
+      snprintf(why, why_len, "couldn't connect to %s (%d address%s tried)", host, tried,
+               tried == 1 ? "" : "es");
+  }
+  return st;
+}
+
+mc_status mc_socket_send_all(mc_socket *s, const void *buf, size_t len, int timeout_ms) {
+  if (!s || (!buf && len)) return MC_ERR_INVALID_ARG;
+  const char *p = buf;
+  uint64_t deadline = deadline_of(timeout_ms);
+  while (len > 0) {
+    io_len chunk = (io_len)(len > IO_MAX ? IO_MAX : len);
+    long n = (long)send(s->fd, p, chunk, SEND_FLAGS);
+    if (n > 0) {
+      p += n;
+      len -= (size_t)n;
+      deadline = deadline_of(timeout_ms); /* the peer is still taking it */
+      continue;
+    }
+    if (n < 0 && WOULD_BLOCK(sock_error())) {
+      int left = remaining(deadline, timeout_ms);
+      if (left == 0 || wait_ready(&s->fd, 1, 1, slice(left)) == -2) return MC_ERR_NET;
+      continue;
+    }
+    return MC_ERR_NET;
+  }
+  return MC_OK;
+}
+
+mc_status mc_socket_recv_exact(mc_socket *s, void *buf, size_t len, int timeout_ms) {
+  if (!s || (!buf && len)) return MC_ERR_INVALID_ARG;
+  char *p = buf;
+  uint64_t deadline = deadline_of(timeout_ms);
+  while (len > 0) {
+    io_len chunk = (io_len)(len > IO_MAX ? IO_MAX : len);
+    long n = (long)recv(s->fd, p, chunk, 0);
+    if (n > 0) {
+      p += n;
+      len -= (size_t)n;
+      deadline = deadline_of(timeout_ms); /* the peer is still there */
+      continue;
+    }
+    if (n < 0 && WOULD_BLOCK(sock_error())) {
+      int left = remaining(deadline, timeout_ms);
+      if (left == 0 || wait_ready(&s->fd, 1, 0, slice(left)) == -2) return MC_ERR_NET;
+      continue;
+    }
+    return MC_ERR_NET; /* 0 is an orderly close mid-message */
+  }
+  return MC_OK;
+}
+
+long mc_socket_recv_some(mc_socket *s, void *buf, size_t len, int timeout_ms) {
+  if (!s || !buf || !len) return -1;
+  uint64_t deadline = deadline_of(timeout_ms);
+  io_len chunk = (io_len)(len > IO_MAX ? IO_MAX : len);
+  for (;;) {
+    long n = (long)recv(s->fd, buf, chunk, 0);
+    if (n > 0) return n;
+    if (n == 0 || !WOULD_BLOCK(sock_error())) return -1; /* 0 is the peer closing */
+    int left = remaining(deadline, timeout_ms);
+    if (left == 0) return 0;
+    if (wait_ready(&s->fd, 1, 0, slice(left)) == -2) return -1;
+  }
+}
+
+int mc_socket_wait_readable(mc_socket *s, int timeout_ms) {
+  uint64_t deadline = deadline_of(timeout_ms);
+  for (;;) {
+    char c; /* asks the socket itself, as wait_ready() can't see a shutdown on Windows */
+    if (recv(s->fd, &c, 1, MSG_PEEK) >= 0 || !WOULD_BLOCK(sock_error())) return 1;
+    int left = remaining(deadline, timeout_ms);
+    if (left == 0) return 0;
+    if (wait_ready(&s->fd, 1, 0, slice(left)) == -2) return 1;
+  }
+}
+
+const char *mc_socket_peer(const mc_socket *s) {
+  return s->peer;
+}
+
+mc_status mc_socket_local_address(const mc_socket *s, char *out, size_t cap) {
+  if (!s || !out || !cap) return MC_ERR_INVALID_ARG;
+  struct sockaddr_storage ss;
+  socklen_t len = sizeof ss;
+  if (getsockname(s->fd, (struct sockaddr *)&ss, &len) != 0) return MC_ERR_NET;
+  const void *addr = ss.ss_family == AF_INET6 ? (const void *)&((struct sockaddr_in6 *)&ss)->sin6_addr
+                                              : (const void *)&((struct sockaddr_in *)&ss)->sin_addr;
+  char text[INET6_ADDRSTRLEN];
+  if (!inet_ntop(ss.ss_family, addr, text, sizeof text)) return MC_ERR_NET;
+  if (strlen(text) >= cap) return MC_ERR_INVALID_ARG;
+  strcpy(out, text);
+  return MC_OK;
+}
+
+void mc_socket_shutdown(mc_socket *s) {
+  if (!s) return;
+#ifdef _WIN32
+  shutdown(s->fd, SD_BOTH);
+#else
+  shutdown(s->fd, SHUT_RDWR);
+#endif
+}
+
+void mc_socket_shutdown_send(mc_socket *s) {
+  if (!s) return;
+#ifdef _WIN32
+  shutdown(s->fd, SD_SEND);
+#else
+  shutdown(s->fd, SHUT_WR);
+#endif
+}
+
+void mc_socket_drain(mc_socket *s, int timeout_ms) {
+  if (!s) return;
+  uint64_t deadline = deadline_of(timeout_ms);
+  char buf[4096];
+  for (;;) {
+    long n = (long)recv(s->fd, buf, sizeof buf, 0);
+    if (n > 0) continue;
+    if (n == 0 || !WOULD_BLOCK(sock_error())) return;
+    int left = remaining(deadline, timeout_ms);
+    if (left == 0 || wait_ready(&s->fd, 1, 0, slice(left)) == -2) return;
+  }
+}
+
+void mc_socket_close(mc_socket *s) {
+  if (!s) return;
+  close_sock(s->fd);
+  free(s);
+}

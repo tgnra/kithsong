@@ -1,0 +1,13 @@
+{
+  "shared": {
+    "hello": "Hello",
+    "only_en": "English only",
+    "greet": { "text": "Hello, {0}", "note": "{0} is a name." },
+    "skip": "S_kip",
+    "items": { "one": "{0:d} item", "other": "{0:d} items" },
+    "no_one": { "other": "{0:d} things" }
+  },
+  "linux": {
+    "linux_only": "Linux"
+  }
+}

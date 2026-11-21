@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dynamic colour: exactly the wallpaper-based surface. -->
+    <color name="window_background">@android:color/system_surface_light</color>
+</resources>

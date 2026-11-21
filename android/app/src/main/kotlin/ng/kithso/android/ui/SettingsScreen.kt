@@ -1,0 +1,338 @@
+package ng.kithso.android.ui
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import android.text.format.Formatter
+import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.add
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import ng.kithso.android.AppSettings
+import ng.kithso.android.KithsongApp
+import ng.kithso.core.NativeCore
+import ng.kithso.android.R
+import coil3.SingletonImageLoader
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * The app's settings. [libraryDir] is the library folder, whose size is shown. In a sync group,
+ * [binCount] is how many deletes the recycle bin holds, under Storage; null leaves it out.
+ */
+@Composable
+fun SettingsScreen(
+    settings: AppSettings,
+    libraryDir: File,
+    bottomPadding: Dp,
+    onLicenses: () -> Unit,
+    onBack: () -> Unit,
+    binCount: Int? = null,
+    onRecycleBin: () -> Unit = {},
+    onRunScrollTest: () -> Unit = {},
+) {
+    val context = LocalContext.current
+    Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            contentPadding = pageSides()
+                .add(WindowInsets(bottom = bottomPadding))
+                .asPaddingValues(),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            item(key = "header") { ScreenHeader(stringResource(R.string.settings), onBack) }
+
+            item(key = "playback") {
+                SettingsHeading(stringResource(R.string.settings_playback))
+                var inOrder by remember { mutableStateOf(settings.albumInOrder) }
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.album_in_order)) },
+                    supportingContent = { Text(stringResource(R.string.album_in_order_text)) },
+                    trailingContent = { Switch(checked = inOrder, onCheckedChange = null) },
+                    modifier = Modifier.toggleable(inOrder, role = Role.Switch) { on ->
+                        settings.albumInOrder = on
+                        inOrder = on
+                    },
+                )
+                var queueTracks by remember { mutableStateOf(settings.queueTracks) }
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.queue_tracks)) },
+                    supportingContent = { Text(stringResource(R.string.queue_tracks_text)) },
+                    trailingContent = { Switch(checked = queueTracks, onCheckedChange = null) },
+                    modifier = Modifier.toggleable(queueTracks, role = Role.Switch) { on ->
+                        settings.queueTracks = on
+                        queueTracks = on
+                    },
+                )
+            }
+
+            item(key = "scrobbling") {
+                SettingsHeading(stringResource(R.string.scrobbling))
+                ScrobblingSettings((context.applicationContext as KithsongApp).scrobbling)
+            }
+
+            // Notifications are the only permission asked for at run time, from API 33.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) item(key = "permissions") {
+                SettingsHeading(stringResource(R.string.settings_permissions))
+                PermissionRow(
+                    Manifest.permission.POST_NOTIFICATIONS,
+                    stringResource(R.string.permission_notifications),
+                    allowed = stringResource(R.string.permission_notifications_allowed),
+                    denied = stringResource(R.string.permission_notifications_denied),
+                    asked = { settings.askedForNotifications },
+                    onAsk = { settings.askedForNotifications = true },
+                )
+            }
+
+            item(key = "storage") {
+                SettingsHeading(stringResource(R.string.settings_storage))
+                val libraryBytes by produceState<Long?>(null) { value = withContext(Dispatchers.IO) { sizeOf(libraryDir) } }
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.storage_library)) },
+                    supportingContent = {
+                        Text(
+                            libraryBytes?.let { stringResource(R.string.storage_library_size, Formatter.formatShortFileSize(context, it)) }
+                                ?: stringResource(R.string.measuring),
+                        )
+                    },
+                )
+                // What was deleted here since the last sync, which can still be restored.
+                if (binCount != null) ListItem(
+                    leadingContent = { Icon(Icons.Delete, contentDescription = null) },
+                    headlineContent = { Text(stringResource(R.string.recycle_bin)) },
+                    supportingContent = {
+                        Text(
+                            if (binCount > 0) pluralStringResource(R.plurals.recycle_bin_summary, binCount, binCount)
+                            else stringResource(R.string.recycle_bin_summary_empty),
+                        )
+                    },
+                    modifier = Modifier.clickable(onClick = onRecycleBin),
+                )
+                var cleared by remember { mutableIntStateOf(0) }
+                val cacheBytes by produceState<Long?>(null, cleared) {
+                    value = withContext(Dispatchers.IO) { SingletonImageLoader.get(context).diskCache?.size ?: 0 }
+                }
+                val scope = rememberCoroutineScope()
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.storage_art_cache)) },
+                    supportingContent = {
+                        Text(
+                            cacheBytes?.let { stringResource(R.string.storage_art_cache_size, Formatter.formatShortFileSize(context, it)) }
+                                ?: stringResource(R.string.measuring),
+                        )
+                    },
+                    trailingContent = {
+                        TextButton(
+                            onClick = {
+                                scope.launch {
+                                    withContext(Dispatchers.IO) { context.clearArtCache() }
+                                    cleared++
+                                }
+                            },
+                            enabled = (cacheBytes ?: 0) > 0,
+                        ) { Text(stringResource(R.string.clear)) }
+                    },
+                )
+            }
+
+            item(key = "testing") { TestingSettings(onRunScrollTest) }
+
+            item(key = "about") {
+                SettingsHeading(stringResource(R.string.settings_about))
+                // Decoration: the row under it says the name. The tile's margin lines it up
+                // with the rows' text.
+                Wordmark(height = 64.dp, description = null, modifier = Modifier.padding(start = 10.dp, top = 4.dp))
+                val version = remember { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
+                // A debug build says so, as it behaves differently: the core is slower, for one.
+                val debug = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+                val versionText = if (debug) R.string.version_debug else R.string.version
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.app_name)) },
+                    supportingContent = { Text(stringResource(versionText, version.orEmpty())) },
+                )
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.core_name)) },
+                    supportingContent = { Text(stringResource(R.string.version, NativeCore.version())) },
+                )
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.licenses)) },
+                    supportingContent = { Text(stringResource(R.string.licenses_text)) },
+                    modifier = Modifier.clickable(onClick = onLicenses),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A full screen's header: a back button calling [onBack], and [title] under it, or beside it
+ * in a short window. [actions] go at the end of the back button's row. A page the tablet
+ * layout's sidebar picked has nothing to go back to, so no back button ([LocalPageChrome]).
+ */
+@Composable
+fun ScreenHeader(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
+    val hasBack = LocalPageChrome.current.back != PageBack.None
+    val back = @Composable {
+        if (hasBack) {
+            IconButton(onClick = onBack, modifier = Modifier.padding(start = 4.dp, top = 4.dp)) {
+                Icon(Icons.ArrowBack, contentDescription = stringResource(R.string.back))
+            }
+        } else {
+            Spacer(Modifier.size(12.dp, 8.dp))
+        }
+    }
+    val heading = @Composable { modifier: Modifier ->
+        Text(
+            title,
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = modifier.semantics { heading() },
+        )
+    }
+    if (isShortWindow()) {
+        Row(
+            Modifier.fillMaxWidth().windowInsetsPadding(pageTop()),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            back()
+            heading(Modifier.weight(1f).padding(start = 8.dp, top = 4.dp))
+            actions()
+        }
+    } else {
+        Column(Modifier.fillMaxWidth().windowInsetsPadding(pageTop())) {
+            Row(Modifier.fillMaxWidth().padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                back()
+                Spacer(Modifier.weight(1f))
+                actions()
+            }
+            heading(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        }
+    }
+}
+
+@Composable
+fun SettingsHeading(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 4.dp).semantics { heading() },
+    )
+}
+
+/**
+ * Whether [permission] is granted, checked again whenever the app comes back to the front
+ * (it may have been changed in the system settings). Tapping asks for it while the system
+ * still allows that, and otherwise opens the app's system settings, where it can be changed.
+ * [asked] is whether it has been asked for before, and [onAsk] notes that it's being asked for.
+ */
+@Composable
+private fun PermissionRow(
+    permission: String,
+    title: String,
+    allowed: String,
+    denied: String,
+    asked: () -> Boolean,
+    onAsk: () -> Unit,
+) {
+    val context = LocalContext.current
+    val activity = LocalActivity.current
+    var granted by remember { mutableStateOf(context.isGranted(permission)) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) granted = context.isGranted(permission)
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    val request = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = { Text(if (granted) allowed else denied) },
+        modifier = Modifier.clickable(onClickLabel = stringResource(if (granted) R.string.open_app_settings else R.string.allow)) {
+            val canAsk = !asked() || activity?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, permission) } == true
+            if (!granted && canAsk) {
+                onAsk()
+                request.launch(permission)
+            } else {
+                context.openAppSettings()
+            }
+        },
+    )
+}
+
+private fun Context.isGranted(permission: String) =
+    ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+/** The system's settings page for this app, where its permissions can be changed. */
+private fun Context.openAppSettings() {
+    startActivity(
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+    )
+}
+
+private fun Context.clearArtCache() {
+    val loader = SingletonImageLoader.get(this)
+    loader.memoryCache?.clear()
+    loader.diskCache?.clear()
+}
+
+private fun sizeOf(dir: File): Long = dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }

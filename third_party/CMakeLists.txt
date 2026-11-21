@@ -1,0 +1,297 @@
+# Third-party dependencies. None are committed: all are fetched at configure time, pinned by
+# URL + SHA-256. This directory only holds our build glue for them.
+# See LICENSES.md at the repo root for the license of each.
+
+include(FetchContent)
+
+# --- Single-file libraries ----------------------------------------------------
+
+# Download only; the targets below are ours.
+FetchContent_Declare(sqlite
+  URL https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip
+  URL_HASH SHA256=aa73d8748095808471deaa8e6f34aa700e37f2f787f4425744f53fdd15a89c40
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+FetchContent_Declare(yyjson
+  URL https://github.com/ibireme/yyjson/archive/refs/tags/0.10.0.tar.gz
+  URL_HASH SHA256=0d901cb2c45c5586e3f3a4245e58c2252d6b24bf4b402723f6179523d389b165
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+FetchContent_Declare(miniaudio
+  URL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.21.tar.gz
+  URL_HASH SHA256=6afb5c231613d2fab4f1c668b7243ff9a7d6d78a7f5a2692c133f026fe508506
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+# dr_libs has no release tags; pinned to a commit.
+FetchContent_Declare(dr_libs
+  URL https://github.com/mackron/dr_libs/archive/ea33eedde32b3a1baa92bb78fc98c4711f890623.tar.gz
+  URL_HASH SHA256=40bec21c1560426978aaf60fad8d5e4b7929caf569deb82f05e77b8c9d10b8fb
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+# stb has no release tags either; pinned to a commit. stb_image 2.30, stb_image_write 1.16.
+FetchContent_Declare(stb
+  URL https://github.com/nothings/stb/archive/f58f558c120e9b32c217290b80bad1a0729fbb2c.tar.gz
+  URL_HASH SHA256=be1a5dad9ac38f42ef8abf00bd7db776101661b77603f832fcc0bae843d82846
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+FetchContent_Declare(mdns
+  URL https://github.com/mjansson/mdns/archive/refs/tags/1.4.3.tar.gz
+  URL_HASH SHA256=be1fd8e35599cb7de179decbd0633c121d11a2dcb9cc193ff5c590bd0d480483
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+# Mozilla CA bundle, a dated snapshot from curl.se/ca. Refresh by bumping the date and hash.
+FetchContent_Declare(cacert
+  URL https://curl.se/ca/cacert-2026-10-20.pem
+  URL_HASH SHA256=796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe
+  DOWNLOAD_NO_EXTRACT ON
+  SOURCE_SUBDIR _none_)
+# miniz: zip reading for importing .zip files (core/src/tagger/unzip.c). The release
+# archive holds the amalgamated miniz.c/miniz.h.
+FetchContent_Declare(miniz
+  URL https://github.com/richgel999/miniz/releases/download/3.0.2/miniz-3.0.2.zip
+  URL_HASH SHA256=ada38db0b703a56d3dd6d57bf84a9c5d664921d870d8fea4db153979fb5332c5
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+FetchContent_MakeAvailable(sqlite yyjson miniaudio dr_libs stb mdns cacert miniz)
+
+add_library(mc_sqlite3 STATIC "${sqlite_SOURCE_DIR}/sqlite3.c")
+target_include_directories(mc_sqlite3 SYSTEM PUBLIC "${sqlite_SOURCE_DIR}")
+target_compile_definitions(mc_sqlite3 PRIVATE
+  SQLITE_DQS=0
+  SQLITE_THREADSAFE=1
+  SQLITE_DEFAULT_MEMSTATUS=0
+  SQLITE_DEFAULT_WAL_SYNCHRONOUS=1
+  SQLITE_LIKE_DOESNT_MATCH_BLOBS
+  SQLITE_OMIT_DEPRECATED
+  SQLITE_OMIT_LOAD_EXTENSION
+  SQLITE_OMIT_SHARED_CACHE
+  SQLITE_ENABLE_FTS5)
+if(UNIX)
+  find_package(Threads REQUIRED)
+  target_link_libraries(mc_sqlite3 PUBLIC Threads::Threads m)
+endif()
+
+add_library(mc_yyjson STATIC "${yyjson_SOURCE_DIR}/src/yyjson.c")
+target_include_directories(mc_yyjson SYSTEM PUBLIC "${yyjson_SOURCE_DIR}/src")
+
+# Audio output and decoding for core/src/playback. miniaudio only does output and format
+# conversion; dr_libs decode. The definitions are public, so every includer sees the same
+# configuration.
+add_library(mc_miniaudio STATIC miniaudio/miniaudio.c)
+target_include_directories(mc_miniaudio SYSTEM PUBLIC "${miniaudio_SOURCE_DIR}")
+target_compile_definitions(mc_miniaudio PUBLIC
+  MA_NO_DECODING MA_NO_ENCODING MA_NO_GENERATION MA_NO_RESOURCE_MANAGER MA_NO_ENGINE
+  MA_NO_NODE_GRAPH MA_ENABLE_ONLY_SPECIFIC_BACKENDS)
+if(WIN32)
+  target_compile_definitions(mc_miniaudio PUBLIC MA_ENABLE_WASAPI)
+elseif(ANDROID)
+  target_compile_definitions(mc_miniaudio PUBLIC MA_ENABLE_AAUDIO MA_ENABLE_OPENSL)
+  target_link_libraries(mc_miniaudio PUBLIC dl m)
+else()
+  # PipeWire serves both through its compatibility layers.
+  target_compile_definitions(mc_miniaudio PUBLIC MA_ENABLE_PULSEAUDIO MA_ENABLE_ALSA)
+  find_package(Threads REQUIRED)
+  target_link_libraries(mc_miniaudio PUBLIC Threads::Threads dl m)
+endif()
+
+add_library(mc_dr_libs STATIC dr_libs/dr_libs.c)
+target_include_directories(mc_dr_libs SYSTEM PUBLIC "${dr_libs_SOURCE_DIR}")
+if(UNIX)
+  target_link_libraries(mc_dr_libs PUBLIC m)
+endif()
+
+# Image decode and encode for playlist cover art (core/src/playlist/playlist_art.c). Built
+# with only JPEG and PNG decoding, no stdio; see stb/stb.c.
+add_library(mc_stb STATIC stb/stb.c)
+target_include_directories(mc_stb SYSTEM PUBLIC "${stb_SOURCE_DIR}")
+if(UNIX)
+  target_link_libraries(mc_stb PUBLIC m)
+endif()
+
+# Zip reading for the importer. Files are opened by core (mc_fopen, so UTF-8 paths work on
+# Windows) and handed over as FILE *; no zip writing, and none of zlib's names, so nothing
+# can clash with another zlib.
+add_library(mc_miniz STATIC "${miniz_SOURCE_DIR}/miniz.c")
+target_include_directories(mc_miniz SYSTEM PUBLIC "${miniz_SOURCE_DIR}")
+target_compile_definitions(mc_miniz PUBLIC
+  MINIZ_NO_ZLIB_COMPATIBLE_NAMES MINIZ_NO_ARCHIVE_WRITING_APIS MINIZ_NO_TIME)
+if(NOT WIN32)
+  # 64-bit file offsets, for zips over 2 GB on 32-bit systems.
+  target_compile_definitions(mc_miniz PRIVATE _LARGEFILE64_SOURCE=1 _FILE_OFFSET_BITS=64)
+endif()
+
+# mDNS/DNS-SD for core/src/discovery. Header-only: every function is static inline. On
+# Windows it needs ws2_32, which core links.
+add_library(mc_mdns INTERFACE)
+target_include_directories(mc_mdns SYSTEM INTERFACE "${mdns_SOURCE_DIR}")
+
+# The CA bundle is embedded and passed to curl with CURLOPT_CAINFO_BLOB, so HTTPS never
+# depends on the OS trust store.
+set(_cacert_pem "${cacert_SOURCE_DIR}/cacert-2026-10-20.pem")
+set(_cacert_c "${CMAKE_CURRENT_BINARY_DIR}/cacert_embed.c")
+add_custom_command(
+  OUTPUT "${_cacert_c}"
+  COMMAND "${CMAKE_COMMAND}"
+    -DINPUT=${_cacert_pem}
+    -DOUTPUT=${_cacert_c}
+    -DSYMBOL=mc_cacert_pem
+    -P "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
+  DEPENDS "${_cacert_pem}" "${PROJECT_SOURCE_DIR}/cmake/EmbedFile.cmake"
+  COMMENT "Embedding CA bundle")
+add_library(mc_cacert STATIC "${_cacert_c}")
+
+# --- Fetched ------------------------------------------------------------------
+
+# TagLib's release tarball does not include its utfcpp submodule.
+FetchContent_Declare(utfcpp
+  URL https://github.com/nemtrif/utfcpp/archive/refs/tags/v4.0.6.tar.gz
+  URL_HASH SHA256=6920a6a5d6a04b9a89b2a89af7132f8acefd46e0c2a7b190350539e9213816c0
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)  # header-only: download, but don't add_subdirectory
+FetchContent_MakeAvailable(utfcpp)
+set(utf8cpp_INCLUDE_DIR "${utfcpp_SOURCE_DIR}/source" CACHE PATH "" FORCE)
+
+set(BUILD_BINDINGS OFF CACHE BOOL "" FORCE)  # we use our own C shim, see core/src/tagger/tag_io.cpp
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WITH_ZLIB OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(taglib
+  URL https://taglib.org/releases/taglib-2.0.2.tar.gz
+  URL_HASH SHA256=0de288d7fe34ba133199fd8512f19cc1100196826eafcb67a33b224ec3a59737
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  EXCLUDE_FROM_ALL SYSTEM)
+
+set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(DISABLE_PACKAGE_CONFIG_AND_INSTALL ON CACHE BOOL "" FORCE)
+FetchContent_Declare(mbedtls
+  URL https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.2/mbedtls-3.6.2.tar.bz2
+  URL_HASH SHA256=8b54fb9bcf4d5a7078028e0520acddefb7900b3e66fec7f7175bb5b7d85ccdca
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  EXCLUDE_FROM_ALL SYSTEM)
+
+FetchContent_MakeAvailable(taglib mbedtls)
+
+# TagLib only exposes install-time include dirs; add the build-tree ones.
+target_include_directories(tag SYSTEM INTERFACE
+  "$<BUILD_INTERFACE:${taglib_SOURCE_DIR}/taglib>"
+  "$<BUILD_INTERFACE:${taglib_SOURCE_DIR}/taglib/toolkit>"
+  "$<BUILD_INTERFACE:${taglib_SOURCE_DIR}/taglib/mpeg>"
+  "$<BUILD_INTERFACE:${taglib_SOURCE_DIR}/taglib/mpeg/id3v2>"
+  "$<BUILD_INTERFACE:${taglib_BINARY_DIR}/taglib>"
+  "$<BUILD_INTERFACE:${taglib_BINARY_DIR}>")
+target_compile_definitions(tag INTERFACE TAGLIB_STATIC)
+# tvariant.cpp counts on <iomanip> bringing in <ostream>, which libc++ no longer does. The
+# Windows toolchain's libc++ refuses it, with every << ambiguous.
+target_compile_options(tag PRIVATE "SHELL:-include ostream")
+
+# curl: HTTP(S) only, mbedTLS backend, no optional system dependencies.
+set(MBEDTLS_INCLUDE_DIR "${mbedtls_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+set(MBEDTLS_LIBRARY mbedtls CACHE STRING "" FORCE)
+set(MBEDX509_LIBRARY mbedx509 CACHE STRING "" FORCE)
+set(MBEDCRYPTO_LIBRARY mbedcrypto CACHE STRING "" FORCE)
+foreach(_opt
+    CURL_USE_MBEDTLS HTTP_ONLY BUILD_STATIC_LIBS CURL_DISABLE_INSTALL
+    CURL_DISABLE_WEBSOCKETS CURL_DISABLE_ALTSVC CURL_DISABLE_NETRC)
+  set(${_opt} ON CACHE BOOL "" FORCE)
+endforeach()
+foreach(_opt
+    BUILD_CURL_EXE CURL_USE_OPENSSL CURL_USE_SCHANNEL CURL_USE_LIBPSL CURL_USE_LIBSSH2
+    USE_LIBIDN2 USE_NGHTTP2 CURL_ZLIB CURL_BROTLI CURL_ZSTD CURL_USE_PKGCONFIG
+    CURL_ENABLE_EXPORT_TARGET BUILD_LIBCURL_DOCS BUILD_MISC_DOCS ENABLE_CURL_MANUAL
+    PICKY_COMPILER BUILD_TESTING)
+  set(${_opt} OFF CACHE BOOL "" FORCE)
+endforeach()
+set(CURL_CA_BUNDLE "none" CACHE STRING "" FORCE)  # we pass the embedded bundle per request
+set(CURL_CA_PATH "none" CACHE STRING "" FORCE)
+FetchContent_Declare(curl
+  URL https://curl.se/download/curl-8.11.1.tar.xz
+  URL_HASH SHA256=c7ca7db48b0909743eaef34250da02c19bc61d4f1dcedd6603f109409536ab56
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  EXCLUDE_FROM_ALL SYSTEM)
+FetchContent_MakeAvailable(curl)
+
+# Opus: libogg and libopus through their own CMake projects; libopusenc and opusfile have
+# none in these releases, so the targets below are ours. Encoding is for transcoded sync
+# copies, decoding for playback. libopus keeps its defaults: the x86 SIMD paths are picked
+# at run time, so the build stays portable to Android and Windows.
+foreach(_opt
+    INSTALL_DOCS INSTALL_PKG_CONFIG_MODULE INSTALL_CMAKE_PACKAGE_MODULE
+    OPUS_BUILD_PROGRAMS OPUS_BUILD_TESTING OPUS_INSTALL_PKG_CONFIG_MODULE
+    OPUS_INSTALL_CMAKE_CONFIG_MODULE)
+  set(${_opt} OFF CACHE BOOL "" FORCE)
+endforeach()
+FetchContent_Declare(ogg
+  URL https://downloads.xiph.org/releases/ogg/libogg-1.3.6.tar.xz
+  URL_HASH SHA256=5c8253428e181840cd20d41f3ca16557a9cc04bad4a3d04cce84808677fa1061
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  EXCLUDE_FROM_ALL SYSTEM)
+FetchContent_Declare(opus
+  URL https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
+  URL_HASH SHA256=65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  EXCLUDE_FROM_ALL SYSTEM)
+FetchContent_Declare(opusenc
+  URL https://downloads.xiph.org/releases/opus/libopusenc-0.2.1.tar.gz
+  URL_HASH SHA256=8298db61a8d3d63e41c1a80705baa8ce9ff3f50452ea7ec1c19a564fe106cbb9
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+FetchContent_Declare(opusfile
+  URL https://downloads.xiph.org/releases/opus/opusfile-0.12.tar.gz
+  URL_HASH SHA256=118d8601c12dd6a44f52423e68ca9083cc9f2bfe72da7a8c1acb22a80ae3550b
+  DOWNLOAD_EXTRACT_TIMESTAMP ON
+  SOURCE_SUBDIR _none_)
+# libopus's run-time CPU check on Arm Windows only builds with MSVC, and every 64-bit Arm CPU has
+# NEON anyway. Turning off "may have" turns the check off; its CMake then presumes NEON but
+# leaves out the definitions that goes with, so they're added below.
+set(_opus_arm_windows OFF)
+if(WIN32 AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+  set(_opus_arm_windows ON)
+  set(OPUS_MAY_HAVE_NEON OFF CACHE BOOL "" FORCE)
+endif()
+FetchContent_MakeAvailable(ogg opus opusenc opusfile)
+if(_opus_arm_windows)
+  target_compile_definitions(opus PRIVATE OPUS_ARM_MAY_HAVE_NEON OPUS_ARM_MAY_HAVE_NEON_INTR)
+endif()
+
+# Its own Speex resampler is built in, under a prefix so it can't clash.
+add_library(mc_opusenc STATIC
+  "${opusenc_SOURCE_DIR}/src/ogg_packer.c"
+  "${opusenc_SOURCE_DIR}/src/opus_header.c"
+  "${opusenc_SOURCE_DIR}/src/opusenc.c"
+  "${opusenc_SOURCE_DIR}/src/picture.c"
+  "${opusenc_SOURCE_DIR}/src/resample.c"
+  "${opusenc_SOURCE_DIR}/src/unicode_support.c")
+target_include_directories(mc_opusenc SYSTEM PUBLIC "${opusenc_SOURCE_DIR}/include")
+# RESAMPLE_FULL_SINC_TABLE: by default Speex keeps the smallest table it can, and for 44.1 to
+# 48 kHz that means working out every tap by cubic interpolation, which took as long as Opus
+# itself. The full table is 50 KB per encode at that rate.
+target_compile_definitions(mc_opusenc PRIVATE
+  OPE_BUILD OUTSIDE_SPEEX RANDOM_PREFIX=libopusenc RESAMPLE_FULL_SINC_TABLE
+  PACKAGE_NAME="libopusenc" PACKAGE_VERSION="0.2.1")
+target_link_libraries(mc_opusenc PUBLIC opus)
+if(UNIX)
+  target_link_libraries(mc_opusenc PUBLIC m)
+endif()
+
+# Files only: http.c (and with it OpenSSL) is left out, as if built with OP_DISABLE_HTTP.
+add_library(mc_opusfile STATIC
+  "${opusfile_SOURCE_DIR}/src/info.c"
+  "${opusfile_SOURCE_DIR}/src/internal.c"
+  "${opusfile_SOURCE_DIR}/src/opusfile.c"
+  "${opusfile_SOURCE_DIR}/src/stream.c")
+target_include_directories(mc_opusfile SYSTEM PUBLIC "${opusfile_SOURCE_DIR}/include")
+target_link_libraries(mc_opusfile PUBLIC opus ogg)
+if(UNIX)
+  target_link_libraries(mc_opusfile PUBLIC m)
+endif()
+
+# The codecs are optimized in Debug builds too: at -O0 libopus encodes about six times slower
+# (14 against 84 times real time, with the Speex resampler), and a debug build on a phone
+# transcoding for sync looked broken. Nobody steps through these. MSVC is left alone: its
+# Debug /RTC1 refuses /O2.
+if(NOT MSVC)
+  foreach(_codec IN ITEMS opus ogg mc_opusenc mc_opusfile mc_dr_libs)
+    target_compile_options(${_codec} PRIVATE $<$<CONFIG:Debug>:-O2>)
+  endforeach()
+endif()

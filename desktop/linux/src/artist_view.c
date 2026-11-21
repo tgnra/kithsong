@@ -1,0 +1,1312 @@
+#include "artist_view.h"
+
+#include <string.h>
+
+#include "album_grid.h"
+#include "album_groups.h"
+#include "art_backdrop.h"
+#include "cover.h"
+#include "delete_dialog.h"
+#include "edit_dialog.h"
+#include "playback.h"
+#include "recents.h"
+#include "remove_here.h"
+#include "track_menu.h"
+
+enum { LIST_AVATAR = 40, PAGE_AVATAR = 96 };
+
+/* The page header's backdrop takes its colours from this many covers at most: the albums
+ * most the artist's first, then the singles. */
+enum { BACKDROP_ARTS = 4 };
+/* How much of the backdrop's height, at its bottom, its glows thin out over. */
+#define BACKDROP_FADE 0.4
+
+/* --- ArtistItem: one row of the list --- */
+
+#define ARTIST_TYPE_ITEM (artist_item_get_type())
+G_DECLARE_FINAL_TYPE(ArtistItem, artist_item, ARTIST, ITEM, GObject)
+
+struct _ArtistItem {
+  GObject parent;
+  char uid[MC_UID_STRLEN];
+  char *name; /* "Unknown artist" if it has none */
+  char *sub;  /* "12 albums", or NULL if it's only credited on tracks */
+  char *cover_dir; /* the folder of its picture's cover (mc_artist_info), or NULL for none */
+  gint64 cover_mtime; /* of that cover (cover_mtime()), as a new one can have its path */
+};
+
+G_DEFINE_FINAL_TYPE(ArtistItem, artist_item, G_TYPE_OBJECT)
+
+static void artist_item_finalize(GObject *obj) {
+  ArtistItem *self = ARTIST_ITEM(obj);
+  g_free(self->name);
+  g_free(self->sub);
+  g_free(self->cover_dir);
+  G_OBJECT_CLASS(artist_item_parent_class)->finalize(obj);
+}
+
+static void artist_item_class_init(ArtistItemClass *klass) {
+  G_OBJECT_CLASS(klass)->finalize = artist_item_finalize;
+}
+
+static void artist_item_init(ArtistItem *self) {
+  (void)self;
+}
+
+static ArtistItem *artist_item_new(const mc_artist_info *info) {
+  ArtistItem *self = g_object_new(ARTIST_TYPE_ITEM, NULL);
+  memcpy(self->uid, info->uid, sizeof self->uid);
+  self->name = g_strdup(info->name && *info->name ? info->name : mc_str(MC_STR_UNKNOWN_ARTIST));
+  if (info->album_count > 0) {
+    char sub[64];
+    mc_format(sub, sizeof sub, mc_str_plural(MC_STR_COUNT_ALBUMS, info->album_count), MC_D(info->album_count));
+    self->sub = g_strdup(sub);
+  }
+  self->cover_dir = g_strdup(info->cover_dir);
+  char *cover = cover_path(info->cover_dir);
+  self->cover_mtime = cover_mtime(cover);
+  g_free(cover);
+  return self;
+}
+
+static gboolean artist_item_equal(const ArtistItem *a, const ArtistItem *b) {
+  return !strcmp(a->uid, b->uid) && !strcmp(a->name, b->name) && !g_strcmp0(a->sub, b->sub) &&
+         !g_strcmp0(a->cover_dir, b->cover_dir) && a->cover_mtime == b->cover_mtime;
+}
+
+/* --- ArtistTrack: one row of an artist's tracks --- */
+
+#define ARTIST_TYPE_TRACK (artist_track_get_type())
+G_DECLARE_FINAL_TYPE(ArtistTrack, artist_track, ARTIST, TRACK, GObject)
+
+struct _ArtistTrack {
+  GObject parent;
+  char uid[MC_UID_STRLEN];
+  char album_uid[MC_UID_STRLEN], artist_uid[MC_UID_STRLEN]; /* as mc_track_info has them */
+  char *title, *artist, *album, *cover_dir, *path;
+  int duration_ms, year;
+  char duration[16]; /* "4:44", or "" if unknown */
+};
+
+G_DEFINE_FINAL_TYPE(ArtistTrack, artist_track, G_TYPE_OBJECT)
+
+static void artist_track_finalize(GObject *obj) {
+  ArtistTrack *self = ARTIST_TRACK(obj);
+  g_free(self->title);
+  g_free(self->artist);
+  g_free(self->album);
+  g_free(self->cover_dir);
+  g_free(self->path);
+  G_OBJECT_CLASS(artist_track_parent_class)->finalize(obj);
+}
+
+static void artist_track_class_init(ArtistTrackClass *klass) {
+  G_OBJECT_CLASS(klass)->finalize = artist_track_finalize;
+}
+
+static void artist_track_init(ArtistTrack *self) {
+  (void)self;
+}
+
+static void format_duration(int ms, char *out, size_t n) {
+  int sec = (ms + 500) / 1000;
+  if (ms <= 0) out[0] = '\0';
+  else if (sec >= 3600) g_snprintf(out, n, "%d:%02d:%02d", sec / 3600, sec / 60 % 60, sec % 60);
+  else g_snprintf(out, n, "%d:%02d", sec / 60, sec % 60);
+}
+
+static ArtistTrack *artist_track_new(const mc_track_info *t) {
+  ArtistTrack *self = g_object_new(ARTIST_TYPE_TRACK, NULL);
+  memcpy(self->uid, t->uid, sizeof self->uid);
+  memcpy(self->album_uid, t->album_uid, sizeof self->album_uid);
+  memcpy(self->artist_uid, t->artist_uid, sizeof self->artist_uid);
+  self->title = g_strdup(t->title && *t->title ? t->title : mc_str(MC_STR_UNTITLED));
+  self->artist = g_strdup(t->artist);
+  self->album = g_strdup(t->album);
+  self->cover_dir = g_strdup(t->cover_dir);
+  self->path = g_strdup(t->path);
+  self->duration_ms = t->duration_ms;
+  self->year = t->year;
+  format_duration(t->duration_ms, self->duration, sizeof self->duration);
+  return self;
+}
+
+/* --- State --- */
+
+typedef struct track_row {
+  GtkWidget *title, *album, *duration;
+  ArtistTrack *track; /* bound to, or NULL */
+  GtkListItem *item;
+} track_row;
+
+static struct {
+  app *a;
+  artist_view_callbacks cb;
+  GtkWidget *stack; /* "none" status page | "list" | "artist" page */
+  GtkWidget *none;
+  GListStore *artists;
+  GtkSingleSelection *artist_selection;
+  GtkWidget *list, *list_box, *row_menu; /* list_box holds the list and its rows' menu */
+  char menu_artist[MC_UID_STRLEN];       /* the artist the rows' or the header's menu is for */
+
+  /* The open artist's page. */
+  char open[MC_UID_STRLEN];
+  GtkWidget *page, *avatar, *name, *summary, *actions, *more;
+  GtkWidget *backdrop; /* the covers' colours behind the header */
+  GtkWidget *list_scroller;
+  GtkWidget *albums_heading, *albums_scroller, *albums;
+  GtkWidget *singles_heading, *singles_scroller, *singles_box;
+  GListStore *singles; /* ArtistTracks, in singles_box's order */
+  GListStore *tracks;
+  GtkSingleSelection *track_selection;
+  GtkWidget *track_view, *track_scroller, *menu;
+  GtkWidget *album_menu;        /* an album tile's, as it has everywhere (album_groups.h) */
+  GtkWidget *album_menu_tile;   /* the tile it was opened on, while it lasts */
+  GActionGroup *menu_actions;   /* the menus' "artist." actions */
+  char menu_uid[MC_UID_STRLEN]; /* the track the menu was opened on */
+  gboolean menu_here;           /* and whether it has a file here */
+  char menu_track_album[MC_UID_STRLEN];  /* and its album, or "" */
+  char menu_track_artist[MC_UID_STRLEN]; /* and its artist, or "" */
+  GSimpleAction *go_to_album, *go_to_artist;
+  GSimpleAction *queue_track[2]; /* the track menu's Play next and Play last */
+  GPtrArray *rows;              /* bound track rows, to mark the playing one */
+  char playing_uid[MC_UID_STRLEN];
+} v;
+
+static ArtistItem *artist_at(guint i) {
+  ArtistItem *item = g_list_model_get_item(G_LIST_MODEL(v.artists), i);
+  if (item) g_object_unref(item); /* the store keeps it */
+  return item;
+}
+
+static ArtistTrack *track_at(guint i) {
+  ArtistTrack *t = g_list_model_get_item(G_LIST_MODEL(v.tracks), i);
+  if (t) g_object_unref(t);
+  return t;
+}
+
+static void changed(void) {
+  if (v.cb.changed) v.cb.changed(v.cb.user);
+}
+
+/* --- The artist menu: on the list's rows and under the page's "..." --- */
+
+/* An artist as the list has it, or NULL. */
+static ArtistItem *find_artist(const char *uid) {
+  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(v.artists)); uid[0] && i < n; i++)
+    if (!strcmp(artist_at(i)->uid, uid)) return artist_at(i);
+  return NULL;
+}
+
+/* An artist's name as the list has it, or NULL. */
+static const char *name_of(const char *uid) {
+  ArtistItem *artist = find_artist(uid);
+  return artist ? artist->name : NULL;
+}
+
+/* The open artist's name, or NULL. */
+static const char *open_name(void) {
+  return name_of(v.open);
+}
+
+static void on_deleted(void *user) {
+  app_reload_library(user);
+}
+
+/* Remove from this computer... and Sync to this computer (remove_here.h). */
+static void on_remove_here(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (v.menu_artist[0])
+    remove_here_present(GTK_WIDGET(v.a->win), MC_PROFILE_ARTIST, v.menu_artist, name_of(v.menu_artist), on_deleted,
+                        v.a);
+}
+
+static void on_sync_here(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (v.menu_artist[0]) remove_here_restore(GTK_WIDGET(v.a->win), MC_PROFILE_ARTIST, v.menu_artist, on_deleted, v.a);
+}
+
+static void on_edit_artist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (v.menu_artist[0]) edit_dialog_present(v.a, EDIT_ARTIST, v.menu_artist);
+}
+
+/* The menu for the artist with uid, made each time it opens: Play next, Play last, Edit..., then Remove
+ * from this computer... or Sync to this computer where they apply. An artist can't be deleted
+ * from the library, only their albums and tracks. */
+static GMenuModel *artist_menu(const char *uid) {
+  g_strlcpy(v.menu_artist, uid, sizeof v.menu_artist);
+  GMenu *menu = g_menu_new();
+  track_menu_append_queue(menu, MC_UP_NEXT_ARTIST, uid, name_of(uid));
+  g_menu_append(menu, mc_str_mnemonic(MC_STR_EDIT_MENU), "artist.edit");
+  remove_here_append(menu, MC_PROFILE_ARTIST, uid, "artist.remove-here", "artist.sync-here");
+  return G_MENU_MODEL(menu);
+}
+
+GMenuModel *artist_view_menu(const char *uid) {
+  return artist_menu(uid);
+}
+
+GActionGroup *artist_view_actions(void) {
+  return v.menu_actions;
+}
+
+/* The header's "...": the open artist's. */
+static void make_artist_menu(GtkMenuButton *button, gpointer user) {
+  (void)user;
+  GMenuModel *menu = artist_menu(v.open);
+  gtk_menu_button_set_menu_model(button, menu);
+  g_object_unref(menu);
+}
+
+/* A row of the list's: its artist's, at x, y in widget. */
+static void popup_row_menu(GtkListItem *item, GtkWidget *widget, float x, float y) {
+  ArtistItem *artist = gtk_list_item_get_item(item);
+  graphene_point_t at;
+  if (!artist || !gtk_widget_compute_point(widget, v.list_box, &GRAPHENE_POINT_INIT(x, y), &at)) return;
+  GMenuModel *menu = artist_menu(artist->uid);
+  gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(v.row_menu), menu);
+  g_object_unref(menu);
+  gtk_popover_set_pointing_to(GTK_POPOVER(v.row_menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(v.row_menu));
+}
+
+/* Right-click, or a long press on a touchscreen. */
+static void on_row_click(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  popup_row_menu(user, gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click)), (float)x, (float)y);
+}
+
+static void on_row_long_press(GtkGestureLongPress *press, double x, double y, gpointer user) {
+  gtk_gesture_set_state(GTK_GESTURE(press), GTK_EVENT_SEQUENCE_CLAIMED); /* not opening the artist too */
+  popup_row_menu(user, gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(press)), (float)x, (float)y);
+}
+
+/* A closed menu gives the focus back to the list, as GTK would hand it elsewhere (the
+ * sidebar, under Xvfb), and the keys should go on where they were. */
+static void on_menu_closed(GtkPopover *menu, gpointer list) {
+  (void)menu;
+  gtk_widget_grab_focus(list);
+}
+
+/* The Menu key or Shift+F10 on the list: the focused row's menu, under its name. */
+static gboolean on_list_menu_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  GtkRoot *root = gtk_widget_get_root(v.list);
+  /* The focus is on the list's own row widget, the parent of ours. */
+  for (GtkWidget *w = root ? gtk_root_get_focus(root) : NULL; w && w != v.list; w = gtk_widget_get_parent(w)) {
+    GtkWidget *box = gtk_widget_get_first_child(w);
+    GtkListItem *item = box ? g_object_get_data(G_OBJECT(box), "item") : NULL;
+    if (!item || !gtk_list_item_get_item(item)) continue;
+    GtkWidget *text = gtk_widget_get_next_sibling(gtk_widget_get_first_child(box));
+    popup_row_menu(item, text, 0, (float)gtk_widget_get_height(text));
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/* --- Pictures --- */
+
+/* An avatar's picture on its way, kept on the avatar as "loading": dropping it cancels it. */
+static void cancel_loading(gpointer data) {
+  g_cancellable_cancel(data);
+  g_object_unref(data);
+}
+
+static void picture_loaded(GdkTexture *texture, gpointer user) {
+  adw_avatar_set_custom_image(ADW_AVATAR(user), texture ? GDK_PAINTABLE(texture) : NULL);
+  g_object_set_data(G_OBJECT(user), "loading", NULL);
+}
+
+/* Shows the cover in dir (an artist's picture, mc_artist_info.cover_dir) on avatar, size
+ * across, loading it on the cover thread if it isn't cached; its initials show until then, or
+ * for no dir. */
+static void set_picture(GtkWidget *avatar, const char *dir, int size) {
+  g_object_set_data(G_OBJECT(avatar), "loading", NULL); /* cancels one on its way */
+  adw_avatar_set_custom_image(ADW_AVATAR(avatar), NULL);
+  if (!dir) return;
+  int px = size * gtk_widget_get_scale_factor(avatar);
+  GdkTexture *texture = NULL;
+  if (cover_lookup(dir, px, &texture)) {
+    adw_avatar_set_custom_image(ADW_AVATAR(avatar), texture ? GDK_PAINTABLE(texture) : NULL);
+    g_clear_object(&texture);
+    return;
+  }
+  GCancellable *loading = g_cancellable_new();
+  g_object_set_data_full(G_OBJECT(avatar), "loading", loading, cancel_loading);
+  cover_load(dir, px, loading, picture_loaded, avatar);
+}
+
+/* --- The list --- */
+
+static void artist_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
+  (void)factory;
+  (void)user;
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_widget_set_margin_top(box, 6);
+  gtk_widget_set_margin_bottom(box, 6);
+  gtk_box_append(GTK_BOX(box), adw_avatar_new(LIST_AVATAR, NULL, TRUE));
+  GtkWidget *text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+  gtk_widget_set_valign(text, GTK_ALIGN_CENTER);
+  gtk_widget_set_hexpand(text, TRUE);
+  GtkWidget *name = gtk_label_new(NULL);
+  gtk_label_set_xalign(GTK_LABEL(name), 0);
+  gtk_label_set_ellipsize(GTK_LABEL(name), PANGO_ELLIPSIZE_END);
+  gtk_box_append(GTK_BOX(text), name);
+  GtkWidget *sub = gtk_label_new(NULL);
+  gtk_label_set_xalign(GTK_LABEL(sub), 0);
+  gtk_label_set_ellipsize(GTK_LABEL(sub), PANGO_ELLIPSIZE_END);
+  gtk_widget_add_css_class(sub, "dim-label");
+  gtk_widget_add_css_class(sub, "caption");
+  gtk_box_append(GTK_BOX(text), sub);
+  gtk_box_append(GTK_BOX(box), text);
+
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+  g_signal_connect(click, "released", G_CALLBACK(on_row_click), item);
+  gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(click));
+  GtkGesture *press = gtk_gesture_long_press_new();
+  gtk_gesture_single_set_touch_only(GTK_GESTURE_SINGLE(press), TRUE);
+  g_signal_connect(press, "pressed", G_CALLBACK(on_row_long_press), item);
+  gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(press));
+  g_object_set_data(G_OBJECT(box), "item", item); /* the box is the item's for good */
+  gtk_list_item_set_child(item, box);
+}
+
+static void artist_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
+  (void)factory;
+  (void)user;
+  ArtistItem *artist = gtk_list_item_get_item(item);
+  GtkWidget *box = gtk_list_item_get_child(item);
+  GtkWidget *avatar = gtk_widget_get_first_child(box);
+  GtkWidget *text = gtk_widget_get_next_sibling(avatar);
+  GtkWidget *name = gtk_widget_get_first_child(text), *sub = gtk_widget_get_next_sibling(name);
+  adw_avatar_set_text(ADW_AVATAR(avatar), artist->name);
+  set_picture(avatar, artist->cover_dir, LIST_AVATAR);
+  gtk_label_set_text(GTK_LABEL(name), artist->name);
+  gtk_label_set_text(GTK_LABEL(sub), artist->sub ? artist->sub : "");
+  gtk_widget_set_visible(sub, artist->sub != NULL);
+  gtk_list_item_set_accessible_label(item, artist->name);
+}
+
+/* A row scrolled away: its picture needn't load, so a fast scroll leaves no backlog. */
+static void artist_unbind(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
+  (void)factory;
+  (void)user;
+  set_picture(gtk_widget_get_first_child(gtk_list_item_get_child(item)), NULL, LIST_AVATAR);
+}
+
+static void on_artist_activated(GtkListView *view, guint position, gpointer user) {
+  (void)view;
+  (void)user;
+  ArtistItem *artist = artist_at(position);
+  if (!artist) return;
+  char uid[MC_UID_STRLEN];
+  memcpy(uid, artist->uid, sizeof uid);
+  artist_view_open(uid);
+}
+
+/* Shows items (n of them; the store takes its own references), replacing only the run
+ * that changed so the list keeps its place, as the album grid does. */
+static void set_artists(ArtistItem **items, guint n) {
+  guint old = g_list_model_get_n_items(G_LIST_MODEL(v.artists)), head = 0, tail = 0;
+  while (head < old && head < n && artist_item_equal(artist_at(head), items[head])) head++;
+  while (tail < old - head && tail < n - head && artist_item_equal(artist_at(old - 1 - tail), items[n - 1 - tail]))
+    tail++;
+  if (head + tail < old || head + tail < n)
+    g_list_store_splice(v.artists, head, old - head - tail, (gpointer *)(items + head), n - head - tail);
+}
+
+static void reload_list(void) {
+  mc_artist_list *list = NULL;
+  mc_status st = v.a->lib ? mc_library_list_artists(v.a->lib, &list) : MC_OK;
+  if (st != MC_OK) list = NULL;
+  guint n = list ? (guint)list->count : 0;
+  ArtistItem **items = g_new0(ArtistItem *, n + 1);
+  for (guint i = 0; i < n; i++) items[i] = artist_item_new(&list->items[i]);
+  mc_artist_list_free(list);
+  set_artists(items, n);
+  for (guint i = 0; i < n; i++) g_object_unref(items[i]);
+  g_free(items);
+
+  if (!v.a->lib) {
+    adw_status_page_set_title(ADW_STATUS_PAGE(v.none), mc_str(MC_STR_LIBRARY_OPEN_FAILED));
+  } else if (st != MC_OK) {
+    char *text = mc_format_alloc(mc_str(MC_STR_LIST_FAILED), MC_S(mc_status_str(st)));
+    adw_status_page_set_title(ADW_STATUS_PAGE(v.none), text);
+    mc_free(text);
+  } else {
+    adw_status_page_set_title(ADW_STATUS_PAGE(v.none), mc_str(MC_STR_NO_ARTISTS));
+  }
+}
+
+/* --- The artist's page --- */
+
+static void track_row_update(track_row *r) {
+  gboolean playing = r->track && v.playing_uid[0] && !strcmp(r->track->uid, v.playing_uid);
+  if (playing) {
+    gtk_widget_add_css_class(r->title, "accent");
+    gtk_widget_add_css_class(r->duration, "accent");
+    gtk_widget_remove_css_class(r->duration, "dim-label");
+  } else {
+    gtk_widget_remove_css_class(r->title, "accent");
+    gtk_widget_remove_css_class(r->duration, "accent");
+    gtk_widget_add_css_class(r->duration, "dim-label");
+  }
+}
+
+static GtkWidget *row_label(float xalign) {
+  GtkWidget *l = gtk_label_new(NULL);
+  gtk_label_set_xalign(GTK_LABEL(l), xalign);
+  gtk_label_set_ellipsize(GTK_LABEL(l), PANGO_ELLIPSIZE_END);
+  return l;
+}
+
+/* Makes the track menu act on t. Go to album shows if its album is in the album grid (a
+ * single's isn't), and Go to artist if it's credited to someone else (a single on an album of
+ * the artist's can be). */
+static void menu_for(const ArtistTrack *t) {
+  memcpy(v.menu_uid, t->uid, sizeof v.menu_uid);
+  v.menu_here = t->path != NULL;
+  memcpy(v.menu_track_album, t->album_uid, sizeof v.menu_track_album);
+  memcpy(v.menu_track_artist, t->artist_uid, sizeof v.menu_track_artist);
+  AlbumItem *album = t->album_uid[0] ? album_grid_find(v.a->album_grid, t->album_uid) : NULL;
+  g_simple_action_set_enabled(v.go_to_album, album != NULL);
+  if (album) g_object_unref(album);
+  g_simple_action_set_enabled(v.go_to_artist, t->artist_uid[0] && strcmp(t->artist_uid, v.open));
+  track_menu_enable_queue(v.queue_track, v.menu_here);
+}
+
+/* Right-click: selects the row and opens its menu where the pointer is. */
+static void on_track_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  track_row *r = user;
+  if (!r->track || !r->item) return;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  menu_for(r->track);
+  gtk_single_selection_set_selected(v.track_selection, gtk_list_item_get_position(r->item));
+  GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click));
+  graphene_point_t at;
+  if (!gtk_widget_compute_point(widget, v.page, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) return;
+  gtk_popover_set_pointing_to(GTK_POPOVER(v.menu), &(GdkRectangle){(int)at.x, (int)at.y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(v.menu));
+}
+
+/* A track's row drags its track onto a playlist (drag.h). */
+static gboolean on_track_drag(gpointer user, drag_item *item) {
+  track_row *r = user;
+  if (!r->track) return FALSE;
+  item->kind = DRAG_TRACK;
+  g_strlcpy(item->uid, r->track->uid, sizeof item->uid);
+  return TRUE;
+}
+
+static void track_setup(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
+  (void)factory;
+  (void)user;
+  track_row *r = g_new0(track_row, 1);
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_widget_set_margin_top(box, 6);
+  gtk_widget_set_margin_bottom(box, 6);
+  /* The title and the album in two columns of the same width. */
+  GtkWidget *columns = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_box_set_homogeneous(GTK_BOX(columns), TRUE);
+  gtk_widget_set_hexpand(columns, TRUE);
+  r->title = row_label(0);
+  gtk_box_append(GTK_BOX(columns), r->title);
+  r->album = row_label(0);
+  gtk_widget_add_css_class(r->album, "dim-label");
+  gtk_box_append(GTK_BOX(columns), r->album);
+  gtk_box_append(GTK_BOX(box), columns);
+  r->duration = row_label(1);
+  gtk_widget_add_css_class(r->duration, "numeric");
+  gtk_box_append(GTK_BOX(box), r->duration);
+
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+  g_signal_connect(click, "released", G_CALLBACK(on_track_menu), r);
+  gtk_widget_add_controller(box, GTK_EVENT_CONTROLLER(click));
+  drag_source_new(box, on_track_drag, r);
+  g_object_set_data_full(G_OBJECT(box), "row", r, g_free);
+  gtk_list_item_set_child(item, box);
+}
+
+static void track_bind(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
+  (void)factory;
+  (void)user;
+  ArtistTrack *t = gtk_list_item_get_item(item);
+  track_row *r = g_object_get_data(G_OBJECT(gtk_list_item_get_child(item)), "row");
+  r->track = t;
+  r->item = item;
+  gtk_label_set_text(GTK_LABEL(r->title), t->title);
+  gtk_label_set_text(GTK_LABEL(r->album), t->album ? t->album : "");
+  gtk_label_set_text(GTK_LABEL(r->duration), t->duration);
+  gtk_widget_set_tooltip_text(r->title, t->path ? NULL : mc_str(MC_STR_NOT_ON_DEVICE));
+  gtk_widget_set_sensitive(r->title, t->path != NULL);
+  gtk_list_item_set_accessible_label(item, t->title);
+  track_row_update(r);
+  if (v.rows) g_ptr_array_add(v.rows, r);
+}
+
+static void track_unbind(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer user) {
+  (void)factory;
+  (void)user;
+  track_row *r = g_object_get_data(G_OBJECT(gtk_list_item_get_child(item)), "row");
+  r->track = NULL;
+  r->item = NULL;
+  if (v.rows) g_ptr_array_remove_fast(v.rows, r); /* not if the page has gone */
+}
+
+/* Opens the track menu for t, pointing at x, y in the page. */
+static void popup_track_menu(const ArtistTrack *t, int x, int y) {
+  menu_for(t);
+  gtk_popover_set_pointing_to(GTK_POPOVER(v.menu), &(GdkRectangle){x, y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(v.menu));
+}
+
+/* A closed menu gives the focus back to its tile, as GTK would hand it elsewhere, unless what it
+ * chose opened a dialog or changed the page. */
+static void on_album_menu_closed(GtkPopover *menu, gpointer user) {
+  (void)menu;
+  (void)user;
+  if (v.album_menu_tile && !adw_application_window_get_visible_dialog(ADW_APPLICATION_WINDOW(v.a->win)))
+    gtk_widget_grab_focus(v.album_menu_tile);
+}
+
+/* Opens the menu of child, an album's tile, pointing at x, y in the page. */
+static void popup_album_menu(GtkWidget *child, int x, int y) {
+  GMenuModel *menu = album_groups_album_model(v.a, g_object_get_data(G_OBJECT(child), "uid"),
+                                               g_object_get_data(G_OBJECT(child), "title"));
+  if (!menu) return;
+  g_set_weak_pointer(&v.album_menu_tile, child);
+  gtk_popover_menu_set_menu_model(GTK_POPOVER_MENU(v.album_menu), menu);
+  g_object_unref(menu); /* the popover keeps it */
+  gtk_popover_set_pointing_to(GTK_POPOVER(v.album_menu), &(GdkRectangle){x, y, 1, 1});
+  gtk_popover_popup(GTK_POPOVER(v.album_menu));
+}
+
+/* The Menu key or Shift+F10 on the page: in the tracks, the selected one's menu under its
+ * title; on an album's or a single's tile, its menu under the tile; elsewhere, or with no track
+ * selected, the header's "...". */
+static gboolean on_page_menu_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  if (!v.open[0]) return FALSE;
+  GtkRoot *root = gtk_widget_get_root(v.page);
+  GtkWidget *focus = root ? gtk_root_get_focus(root) : NULL;
+  for (GtkWidget *w = focus; w && w != v.albums; w = gtk_widget_get_parent(w)) {
+    graphene_rect_t at;
+    if (!GTK_IS_FLOW_BOX_CHILD(w) || gtk_widget_get_parent(w) != v.albums || !gtk_widget_compute_bounds(w, v.page, &at))
+      continue;
+    popup_album_menu(w, (int)at.origin.x, (int)(at.origin.y + at.size.height));
+    return TRUE;
+  }
+  for (GtkWidget *w = focus; w && w != v.singles_box; w = gtk_widget_get_parent(w)) {
+    ArtistTrack *t = g_object_get_data(G_OBJECT(w), "track"); /* on a single's flow box child */
+    graphene_rect_t at;
+    if (!t || !gtk_widget_compute_bounds(w, v.page, &at)) continue;
+    popup_track_menu(t, (int)at.origin.x, (int)(at.origin.y + at.size.height));
+    return TRUE;
+  }
+  guint pos = gtk_single_selection_get_selected(v.track_selection);
+  for (guint i = 0; focus && gtk_widget_is_ancestor(focus, v.track_view) && i < v.rows->len; i++) {
+    track_row *r = g_ptr_array_index(v.rows, i);
+    graphene_rect_t at;
+    if (!r->track || !r->item || gtk_list_item_get_position(r->item) != pos ||
+        !gtk_widget_compute_bounds(r->title, v.page, &at))
+      continue;
+    popup_track_menu(r->track, (int)at.origin.x, (int)(at.origin.y + at.size.height));
+    return TRUE;
+  }
+  if (gtk_widget_get_visible(v.more)) gtk_menu_button_popup(GTK_MENU_BUTTON(v.more));
+  return TRUE;
+}
+
+static void on_track_activated(GtkListView *view, guint position, gpointer user) {
+  (void)view;
+  (void)user;
+  artist_view_play((int)position);
+}
+
+static void on_play_all(GtkButton *button, gpointer user) {
+  (void)button;
+  gboolean shuffled = GPOINTER_TO_INT(user);
+  if (v.cb.set_shuffle) v.cb.set_shuffle(v.cb.user, shuffled);
+  artist_view_play(shuffled ? -1 : 0);
+}
+
+static void on_album_activated(GtkFlowBox *box, GtkFlowBoxChild *child, gpointer user) {
+  (void)box;
+  (void)user;
+  char uid[MC_UID_STRLEN];
+  g_strlcpy(uid, g_object_get_data(G_OBJECT(child), "uid"), sizeof uid); /* opening may reload the page */
+  if (v.cb.open_album) v.cb.open_album(v.cb.user, uid);
+}
+
+/* Plays tracks (ArtistTracks) from track start on, or with start -1 from the first
+ * (shuffled, any). Tracks with no file here are left out. */
+static void play_tracks(GListModel *tracks, int start) {
+  guint n = g_list_model_get_n_items(tracks);
+  if (!n) return;
+  playback_track *queue = g_new0(playback_track, n);
+  int count = 0, first = start < 0 ? -1 : 0;
+  for (guint i = 0; i < n; i++) {
+    ArtistTrack *t = g_list_model_get_item(tracks, i);
+    g_object_unref(t); /* the model keeps it */
+    if (!t->path) continue;
+    if (start >= 0 && (int)i <= start) first = count;
+    queue[count++] = (playback_track){t->uid, t->path, t->title, t->artist, t->album, t->cover_dir, t->duration_ms};
+  }
+  if (count) playback_play(queue, count, first, MC_PLAY_CONTEXT_ARTIST, v.open);
+  g_free(queue);
+}
+
+/* A single's tile clicked, or Enter on it: plays the singles from there on, as a track's
+ * row plays the tracks. */
+static void on_single_activated(GtkFlowBox *box, GtkFlowBoxChild *child, gpointer user) {
+  (void)box;
+  (void)user;
+  play_tracks(G_LIST_MODEL(v.singles), gtk_flow_box_child_get_index(child));
+}
+
+/* Right-click on a single's tile: the track menu, where the pointer is. */
+static void on_single_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  ArtistTrack *t = g_object_get_data(G_OBJECT(user), "track");
+  GtkWidget *tile = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click));
+  graphene_point_t at;
+  if (!t || !gtk_widget_compute_point(tile, v.page, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) return;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  popup_track_menu(t, (int)at.x, (int)at.y);
+}
+
+/* Right-click on an album's tile: its menu, where the pointer is. */
+static void on_album_menu(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  GtkWidget *tile = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(click));
+  graphene_point_t at;
+  if (!gtk_widget_compute_point(tile, v.page, &GRAPHENE_POINT_INIT((float)x, (float)y), &at)) return;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  popup_album_menu(user, (int)at.x, (int)at.y);
+}
+
+/* An album's tile drags its album, as the album grid's do. */
+static gboolean on_album_drag(gpointer user, drag_item *item) {
+  item->kind = DRAG_ALBUM;
+  g_strlcpy(item->uid, g_object_get_data(G_OBJECT(user), "uid"), sizeof item->uid);
+  return TRUE;
+}
+
+/* A single's tile drags its track, as a track's row does. */
+static gboolean on_single_drag(gpointer user, drag_item *item) {
+  ArtistTrack *t = g_object_get_data(G_OBJECT(user), "track");
+  if (!t) return FALSE;
+  item->kind = DRAG_TRACK;
+  g_strlcpy(item->uid, t->uid, sizeof item->uid);
+  return TRUE;
+}
+
+static void on_add_to_playlist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  char uid[MC_UID_STRLEN];
+  memcpy(uid, v.menu_uid, sizeof uid);
+  if (v.cb.add_to_playlist && uid[0]) v.cb.add_to_playlist(v.cb.user, uid, v.menu_here);
+}
+
+/* The track menu's Go to album, with the track selected there, and Go to artist. Copies:
+ * opening the page reloads this one. */
+static void on_go_to_album(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  char album[MC_UID_STRLEN], track[MC_UID_STRLEN];
+  memcpy(album, v.menu_track_album, sizeof album);
+  memcpy(track, v.menu_uid, sizeof track);
+  if (album[0]) app_open_track(v.a, album, track);
+}
+
+static void on_go_to_artist(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  char artist[MC_UID_STRLEN];
+  memcpy(artist, v.menu_track_artist, sizeof artist);
+  if (artist[0]) app_open_artist(v.a, artist);
+}
+
+/* The track menu's Edit.... */
+static void on_edit_track(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  if (v.menu_uid[0]) edit_dialog_present(v.a, EDIT_TRACK, v.menu_uid);
+}
+
+/* The track menu's Delete from library... (delete_dialog.h). */
+static void on_delete_track(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  (void)user;
+  /* A single needn't be among the tracks: it can be on an album of theirs but credited to
+   * someone else. */
+  GListModel *lists[] = {G_LIST_MODEL(v.tracks), G_LIST_MODEL(v.singles)};
+  for (guint l = 0; l < G_N_ELEMENTS(lists); l++)
+    for (guint i = 0, n = g_list_model_get_n_items(lists[l]); v.menu_uid[0] && i < n; i++) {
+      ArtistTrack *t = g_list_model_get_item(lists[l], i);
+      g_object_unref(t); /* the model keeps it */
+      if (strcmp(t->uid, v.menu_uid)) continue;
+      delete_dialog_present(GTK_WIDGET(v.a->win), v.a->lib, v.a->settings_dir, MC_DELETE_TRACKS, t->uid, t->title,
+                            on_deleted, v.a);
+      return;
+    }
+}
+
+/* An album's tile, with its year beneath it, or its artist when that's someone else. */
+static GtkWidget *album_child(const mc_album_info *info, const char *artist) {
+  AlbumItem *album = album_item_new(info);
+  if (!info->artist || g_strcmp0(info->artist, artist)) album->subtitle = g_strdup(album->artist ? album->artist : mc_str(MC_STR_UNKNOWN_ARTIST));
+  else album->subtitle = info->year > 0 ? g_strdup_printf("%d", info->year) : g_strdup("");
+  GtkWidget *child = gtk_flow_box_child_new();
+  GtkWidget *tile = album_tile_new(album);
+  gtk_flow_box_child_set_child(GTK_FLOW_BOX_CHILD(child), tile);
+  g_object_set_data_full(G_OBJECT(child), "uid", g_strdup(info->uid), g_free);
+  g_object_set_data_full(G_OBJECT(child), "title", g_strdup(album->title), g_free);
+  g_object_unref(album);
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+  g_signal_connect(click, "released", G_CALLBACK(on_album_menu), child);
+  gtk_widget_add_controller(tile, GTK_EVENT_CONTROLLER(click));
+  drag_source_new(tile, on_album_drag, child);
+  return child;
+}
+
+/* A single's tile, as an album's but for one track: its cover and title, with its year
+ * beneath, or its artist when that's someone else. The child holds the track as "track". */
+static GtkWidget *single_child(ArtistTrack *t, const char *artist) {
+  AlbumItem *item = g_object_new(ALBUM_TYPE_ITEM, NULL);
+  memcpy(item->uid, t->uid, sizeof item->uid);
+  item->title = g_strdup(t->title);
+  item->artist = g_strdup(t->artist);
+  item->cover_file = t->cover_dir ? cover_path(t->cover_dir) : NULL;
+  item->year = t->year;
+  item->here = t->path != NULL;
+  if (!t->artist || g_strcmp0(t->artist, artist))
+    item->subtitle = g_strdup(t->artist ? t->artist : mc_str(MC_STR_UNKNOWN_ARTIST));
+  else item->subtitle = t->year > 0 ? g_strdup_printf("%d", t->year) : g_strdup("");
+  GtkWidget *tile = album_tile_new(item);
+  g_object_unref(item);
+  if (!t->path) gtk_widget_set_tooltip_text(tile, mc_str(MC_STR_NOT_ON_DEVICE));
+  GtkWidget *child = gtk_flow_box_child_new();
+  gtk_flow_box_child_set_child(GTK_FLOW_BOX_CHILD(child), tile);
+  g_object_set_data_full(G_OBJECT(child), "track", g_object_ref(t), g_object_unref);
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+  g_signal_connect(click, "released", G_CALLBACK(on_single_menu), child);
+  gtk_widget_add_controller(tile, GTK_EVENT_CONTROLLER(click));
+  drag_source_new(tile, on_single_drag, child);
+  return child;
+}
+
+/* Fills the singles' row from the library (mc_library_list_artist_singles()), hiding it and
+ * its heading if there are none. */
+static void load_singles(const char *artist) {
+  gtk_flow_box_remove_all(GTK_FLOW_BOX(v.singles_box));
+  g_list_store_remove_all(v.singles);
+  mc_track_list *singles = NULL;
+  if (!v.a->lib || mc_library_list_artist_singles(v.a->lib, v.open, &singles) != MC_OK) singles = NULL;
+  int n = singles ? singles->count : 0;
+  for (int i = 0; i < n; i++) {
+    ArtistTrack *t = artist_track_new(&singles->items[i]);
+    g_list_store_append(v.singles, t);
+    gtk_flow_box_append(GTK_FLOW_BOX(v.singles_box), single_child(t, artist));
+    g_object_unref(t);
+  }
+  mc_track_list_free(singles);
+  gtk_widget_set_visible(v.singles_heading, n > 0);
+  gtk_widget_set_visible(v.singles_scroller, n > 0);
+}
+
+/* Fills the page from the library: the artist's name, albums, singles and tracks. */
+static void load_page(void) {
+  const char *name = open_name();
+  ArtistItem *artist = find_artist(v.open);
+  adw_avatar_set_text(ADW_AVATAR(v.avatar), name);
+  set_picture(v.avatar, artist ? artist->cover_dir : NULL, PAGE_AVATAR);
+  gtk_label_set_text(GTK_LABEL(v.name), name ? name : "");
+
+  gtk_flow_box_remove_all(GTK_FLOW_BOX(v.albums));
+  mc_album_list *albums = NULL;
+  if (!v.a->lib || mc_library_list_artist_albums(v.a->lib, v.open, &albums) != MC_OK) albums = NULL;
+  int album_count = albums ? albums->count : 0;
+  char *arts[BACKDROP_ARTS];
+  int art_count = 0;
+  for (int i = 0; i < album_count; i++) {
+    const mc_album_info *album = &albums->items[i];
+    gtk_flow_box_append(GTK_FLOW_BOX(v.albums), album_child(album, name));
+    if (art_count < BACKDROP_ARTS && album->has_art && album->folder) {
+      char *path = cover_path(album->folder);
+      if (path) arts[art_count++] = path;
+    }
+  }
+  mc_album_list_free(albums);
+  gtk_widget_set_visible(v.albums_heading, album_count > 0);
+  gtk_widget_set_visible(v.albums_scroller, album_count > 0);
+  load_singles(name);
+  /* The backdrop: the first covers, the albums' and then the singles', in the page's order,
+   * so the colours go as the art does (an artist with none leaves it clear). */
+  for (guint i = 0; art_count < BACKDROP_ARTS && i < g_list_model_get_n_items(G_LIST_MODEL(v.singles)); i++) {
+    ArtistTrack *t = g_list_model_get_item(G_LIST_MODEL(v.singles), i);
+    char *path = t->cover_dir ? cover_path(t->cover_dir) : NULL;
+    if (path) arts[art_count++] = path;
+    g_object_unref(t);
+  }
+  art_backdrop_set_files(ART_BACKDROP(v.backdrop), (const char *const *)arts, art_count);
+  for (int i = 0; i < art_count; i++) g_free(arts[i]);
+  /* The selected track stays selected, if it's still there. */
+  char keep[MC_UID_STRLEN] = "";
+  ArtistTrack *sel = gtk_single_selection_get_selected_item(v.track_selection);
+  if (sel) memcpy(keep, sel->uid, sizeof keep);
+  mc_track_list *tracks = NULL;
+  if (!v.a->lib || mc_library_list_artist_tracks(v.a->lib, v.open, &tracks) != MC_OK) tracks = NULL;
+  int n = tracks ? tracks->count : 0;
+  gboolean playable = FALSE;
+  guint selected = GTK_INVALID_LIST_POSITION;
+  ArtistTrack **items = g_new0(ArtistTrack *, (gsize)n + 1);
+  for (int i = 0; i < n; i++) {
+    items[i] = artist_track_new(&tracks->items[i]);
+    playable |= items[i]->path != NULL;
+    if (keep[0] && selected == GTK_INVALID_LIST_POSITION && !strcmp(items[i]->uid, keep)) selected = (guint)i;
+  }
+  mc_track_list_free(tracks);
+  g_list_store_splice(v.tracks, 0, g_list_model_get_n_items(G_LIST_MODEL(v.tracks)), (gpointer *)items, (guint)n);
+  gtk_single_selection_set_selected(v.track_selection, selected);
+  for (int i = 0; i < n; i++) g_object_unref(items[i]);
+  g_free(items);
+  gtk_widget_set_sensitive(v.actions, playable);
+
+  /* "12 albums · 140 tracks", or "3 tracks" for an artist of only singles */
+  char a[64], t[64];
+  mc_format(a, sizeof a, mc_str_plural(MC_STR_COUNT_ALBUMS, album_count), MC_D(album_count));
+  mc_format(t, sizeof t, mc_str_plural(MC_STR_TRACKS, n), MC_D(n));
+  char *summary = album_count > 0 ? g_strdup_printf("%s%s%s", a, mc_str(MC_STR_SEPARATOR_DOT), t) : g_strdup(t);
+  gtk_label_set_text(GTK_LABEL(v.summary), summary);
+  g_free(summary);
+}
+
+static void go_back(void) {
+  if (!v.open[0]) return;
+  v.open[0] = '\0';
+  g_list_store_remove_all(v.tracks);
+  gtk_flow_box_remove_all(GTK_FLOW_BOX(v.albums));
+  g_list_store_remove_all(v.singles);
+  gtk_flow_box_remove_all(GTK_FLOW_BOX(v.singles_box));
+  art_backdrop_set_files(ART_BACKDROP(v.backdrop), NULL, 0);
+  set_picture(v.avatar, NULL, PAGE_AVATAR);
+  gtk_stack_set_visible_child_name(GTK_STACK(v.stack),
+                                   g_list_model_get_n_items(G_LIST_MODEL(v.artists)) ? "list" : "none");
+  gtk_widget_grab_focus(v.list);
+  changed();
+}
+
+static void on_back(GtkButton *button, gpointer user) {
+  (void)button;
+  (void)user;
+  go_back();
+}
+
+static gboolean on_back_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  if (!v.open[0]) return FALSE;
+  go_back();
+  return TRUE;
+}
+
+static void on_back_click(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  (void)x;
+  (void)y;
+  (void)user;
+  if (!v.open[0]) return;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  go_back();
+}
+
+static GtkWidget *play_button(const char *icon, const char *label, gboolean shuffled) {
+  GtkWidget *content = adw_button_content_new();
+  adw_button_content_set_icon_name(ADW_BUTTON_CONTENT(content), icon);
+  adw_button_content_set_label(ADW_BUTTON_CONTENT(content), label);
+  GtkWidget *b = gtk_button_new();
+  gtk_button_set_child(GTK_BUTTON(b), content);
+  g_signal_connect(b, "clicked", G_CALLBACK(on_play_all), GINT_TO_POINTER(shuffled));
+  return b;
+}
+
+static GtkWidget *heading(const char *text) {
+  GtkWidget *label = gtk_label_new(text);
+  gtk_widget_add_css_class(label, "title-4");
+  gtk_label_set_xalign(GTK_LABEL(label), 0);
+  gtk_widget_set_margin_start(label, 18);
+  gtk_widget_set_margin_end(label, 18);
+  gtk_widget_set_margin_top(label, 12);
+  gtk_widget_set_margin_bottom(label, 6);
+  return label;
+}
+
+static GtkWidget *build_header(void) {
+  GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
+  gtk_widget_set_margin_start(header, 18);
+  gtk_widget_set_margin_end(header, 18);
+  gtk_widget_set_margin_top(header, 12);
+  GtkWidget *back = gtk_button_new_from_icon_name("go-previous-symbolic");
+  app_set_tooltip(back, mc_str(MC_STR_BACK), "<Alt>Left");
+  gtk_widget_add_css_class(back, "flat");
+  gtk_widget_add_css_class(back, "circular");
+  gtk_widget_set_valign(back, GTK_ALIGN_START);
+  g_signal_connect(back, "clicked", G_CALLBACK(on_back), NULL);
+  gtk_box_append(GTK_BOX(header), back);
+  v.avatar = adw_avatar_new(PAGE_AVATAR, NULL, TRUE);
+  gtk_box_append(GTK_BOX(header), v.avatar);
+
+  GtkWidget *text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+  gtk_widget_set_valign(text, GTK_ALIGN_CENTER);
+  gtk_widget_set_hexpand(text, TRUE);
+  v.name = gtk_label_new(NULL);
+  gtk_widget_add_css_class(v.name, "title-1");
+  gtk_label_set_xalign(GTK_LABEL(v.name), 0);
+  gtk_label_set_ellipsize(GTK_LABEL(v.name), PANGO_ELLIPSIZE_END);
+  gtk_box_append(GTK_BOX(text), v.name);
+  v.summary = gtk_label_new(NULL);
+  gtk_label_set_xalign(GTK_LABEL(v.summary), 0);
+  gtk_label_set_ellipsize(GTK_LABEL(v.summary), PANGO_ELLIPSIZE_END);
+  gtk_widget_add_css_class(v.summary, "dim-label");
+  gtk_box_append(GTK_BOX(text), v.summary);
+
+  v.actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+  gtk_widget_set_margin_top(v.actions, 8);
+  GtkWidget *play = play_button("media-playback-start-symbolic", mc_str(MC_STR_PLAY), FALSE);
+  gtk_widget_add_css_class(play, "suggested-action");
+  gtk_box_append(GTK_BOX(v.actions), play);
+  gtk_box_append(GTK_BOX(v.actions), play_button("media-playlist-shuffle-symbolic", mc_str(MC_STR_SHUFFLE), TRUE));
+  gtk_box_append(GTK_BOX(text), v.actions);
+  gtk_box_append(GTK_BOX(header), text);
+
+  /* Remove from this computer... or Sync to this computer, under "..." (hidden when neither
+   * applies, by load_page()). */
+  v.more = gtk_menu_button_new();
+  gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(v.more), "view-more-symbolic");
+  gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(v.more), make_artist_menu, NULL, NULL);
+  gtk_widget_set_tooltip_text(v.more, mc_str(MC_STR_ARTIST_MENU));
+  gtk_widget_add_css_class(v.more, "flat");
+  gtk_widget_add_css_class(v.more, "circular");
+  gtk_widget_set_valign(v.more, GTK_ALIGN_START);
+  gtk_box_append(GTK_BOX(header), v.more);
+  return header;
+}
+
+/* A row of tiles that scrolls sideways, for the albums or the singles: *box is its flow
+ * box, named label for screen readers; returns the scroller around it. */
+static GtkWidget *build_tile_row(const char *label, GCallback activated, GtkWidget **box) {
+  *box = gtk_flow_box_new();
+  gtk_orientable_set_orientation(GTK_ORIENTABLE(*box), GTK_ORIENTATION_VERTICAL); /* columns of one */
+  gtk_flow_box_set_min_children_per_line(GTK_FLOW_BOX(*box), 1);
+  gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(*box), 1);
+  gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(*box), GTK_SELECTION_NONE);
+  gtk_widget_add_css_class(*box, "search-albums");
+  gtk_widget_set_margin_start(*box, 10);
+  gtk_widget_set_margin_end(*box, 10);
+  gtk_widget_set_halign(*box, GTK_ALIGN_START);
+  gtk_accessible_update_property(GTK_ACCESSIBLE(*box), GTK_ACCESSIBLE_PROPERTY_LABEL, label, -1);
+  g_signal_connect(*box, "child-activated", activated, NULL);
+  GtkWidget *scroller = gtk_scrolled_window_new();
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_AUTOMATIC, GTK_POLICY_NEVER);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), *box);
+  return scroller;
+}
+
+static GtkWidget *build_tracks(void) {
+  v.tracks = g_list_store_new(ARTIST_TYPE_TRACK);
+  v.track_selection = gtk_single_selection_new(G_LIST_MODEL(v.tracks)); /* takes the store */
+  gtk_single_selection_set_autoselect(v.track_selection, FALSE);
+  gtk_single_selection_set_can_unselect(v.track_selection, TRUE);
+  GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
+  g_signal_connect(factory, "setup", G_CALLBACK(track_setup), NULL);
+  g_signal_connect(factory, "bind", G_CALLBACK(track_bind), NULL);
+  g_signal_connect(factory, "unbind", G_CALLBACK(track_unbind), NULL);
+  v.track_view = gtk_list_view_new(GTK_SELECTION_MODEL(g_object_ref(v.track_selection)), factory);
+  gtk_widget_add_css_class(v.track_view, "navigation-sidebar");
+  gtk_accessible_update_property(GTK_ACCESSIBLE(v.track_view), GTK_ACCESSIBLE_PROPERTY_LABEL,
+                                 mc_str(MC_STR_TRACKS_TITLE), -1);
+  g_signal_connect(v.track_view, "activate", G_CALLBACK(on_track_activated), NULL);
+  v.track_scroller = gtk_scrolled_window_new();
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(v.track_scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(v.track_scroller), v.track_view);
+  gtk_widget_set_vexpand(v.track_scroller, TRUE);
+  gtk_widget_set_margin_start(v.track_scroller, 6);
+  gtk_widget_set_margin_end(v.track_scroller, 6);
+  return v.track_scroller;
+}
+
+static GtkWidget *build_page(void) {
+  v.page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  /* The covers' colours behind the header, thinning out above the albums, which stay on the
+   * page's own background. */
+  v.backdrop = art_backdrop_new();
+  art_backdrop_set_fade_bottom(ART_BACKDROP(v.backdrop), BACKDROP_FADE);
+  art_backdrop_set_child(ART_BACKDROP(v.backdrop), build_header());
+  gtk_box_append(GTK_BOX(v.page), v.backdrop);
+  v.albums_heading = heading(mc_str(MC_STR_SECTION_ALBUMS));
+  gtk_box_append(GTK_BOX(v.page), v.albums_heading);
+  v.albums_scroller = build_tile_row(mc_str(MC_STR_SECTION_ALBUMS), G_CALLBACK(on_album_activated), &v.albums);
+  gtk_box_append(GTK_BOX(v.page), v.albums_scroller);
+  v.singles_heading = heading(mc_str(MC_STR_SECTION_SINGLES));
+  gtk_box_append(GTK_BOX(v.page), v.singles_heading);
+  v.singles = g_list_store_new(ARTIST_TYPE_TRACK);
+  v.singles_scroller =
+    build_tile_row(mc_str(MC_STR_SECTION_SINGLES), G_CALLBACK(on_single_activated), &v.singles_box);
+  gtk_box_append(GTK_BOX(v.page), v.singles_scroller);
+  gtk_box_append(GTK_BOX(v.page), heading(mc_str(MC_STR_TRACKS_TITLE)));
+  gtk_box_append(GTK_BOX(v.page), build_tracks());
+
+  /* The tracks' right-click menu, as the page's child so the "artist." actions (on the
+   * stack, artist_view_new()) resolve. */
+  GMenu *model = g_menu_new();
+  GMenu *section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_PLAY_NEXT), "artist.play-next");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_PLAY_LAST), "artist.play-last");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "artist.add-to-playlist");
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  section = g_menu_new(); /* hidden while their actions are disabled (see menu_for()) */
+  const struct {
+    enum mc_str_id label;
+    const char *action;
+  } go_to[] = {{MC_STR_GO_TO_ALBUM, "artist.go-to-album"}, {MC_STR_GO_TO_ARTIST, "artist.go-to-artist"}};
+  for (size_t i = 0; i < G_N_ELEMENTS(go_to); i++) {
+    GMenuItem *item = g_menu_item_new(mc_str_mnemonic(go_to[i].label), go_to[i].action);
+    g_menu_item_set_attribute(item, "hidden-when", "s", "action-disabled");
+    g_menu_append_item(section, item);
+    g_object_unref(item);
+  }
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_EDIT_MENU), "artist.edit-track");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "artist.delete-track");
+  g_menu_append_section(model, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  v.menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(model));
+  g_object_unref(model);
+  gtk_popover_set_has_arrow(GTK_POPOVER(v.menu), FALSE);
+  gtk_widget_set_halign(v.menu, GTK_ALIGN_START);
+  gtk_widget_set_parent(v.menu, v.page);
+  g_signal_connect(v.menu, "closed", G_CALLBACK(on_menu_closed), v.track_view);
+  v.album_menu = gtk_popover_menu_new_from_model(NULL);
+  g_signal_connect(v.album_menu, "closed", G_CALLBACK(on_album_menu_closed), NULL);
+  gtk_popover_set_has_arrow(GTK_POPOVER(v.album_menu), FALSE);
+  gtk_widget_set_halign(v.album_menu, GTK_ALIGN_START);
+  gtk_widget_set_parent(v.album_menu, v.page);
+
+  GtkEventController *keys = gtk_shortcut_controller_new();
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Escape, 0), gtk_callback_action_new(on_back_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Left, GDK_ALT_MASK), gtk_callback_action_new(on_back_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_BackSpace, 0), gtk_callback_action_new(on_back_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Menu, 0), gtk_callback_action_new(on_page_menu_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_F10, GDK_SHIFT_MASK),
+                     gtk_callback_action_new(on_page_menu_key, NULL, NULL)));
+  gtk_widget_add_controller(v.page, keys);
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 8); /* back */
+  g_signal_connect(click, "pressed", G_CALLBACK(on_back_click), NULL);
+  gtk_widget_add_controller(v.page, GTK_EVENT_CONTROLLER(click));
+  return v.page;
+}
+
+static void on_destroy(GtkWidget *widget, gpointer user) {
+  (void)widget;
+  (void)user;
+  g_clear_object(&v.artist_selection);
+  g_clear_object(&v.track_selection);
+  g_clear_object(&v.singles);
+  g_clear_pointer(&v.rows, g_ptr_array_unref);
+  memset(&v, 0, sizeof v);
+}
+
+GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
+  v.a = a;
+  v.cb = *cb;
+  v.rows = g_ptr_array_new();
+
+  v.none = adw_status_page_new();
+  adw_status_page_set_icon_name(ADW_STATUS_PAGE(v.none), "avatar-default-symbolic");
+  adw_status_page_set_title(ADW_STATUS_PAGE(v.none), mc_str(MC_STR_NO_ARTISTS));
+
+  v.artists = g_list_store_new(ARTIST_TYPE_ITEM);
+  v.artist_selection = gtk_single_selection_new(G_LIST_MODEL(v.artists)); /* takes the store */
+  gtk_single_selection_set_autoselect(v.artist_selection, FALSE);
+  gtk_single_selection_set_can_unselect(v.artist_selection, TRUE);
+  GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
+  g_signal_connect(factory, "setup", G_CALLBACK(artist_setup), NULL);
+  g_signal_connect(factory, "bind", G_CALLBACK(artist_bind), NULL);
+  g_signal_connect(factory, "unbind", G_CALLBACK(artist_unbind), NULL);
+  /* The view takes both; the selection stays ours too. */
+  v.list = gtk_list_view_new(GTK_SELECTION_MODEL(g_object_ref(v.artist_selection)), factory);
+  gtk_list_view_set_single_click_activate(GTK_LIST_VIEW(v.list), TRUE);
+  gtk_widget_add_css_class(v.list, "navigation-sidebar");
+  gtk_widget_set_margin_start(v.list, 6);
+  gtk_widget_set_margin_end(v.list, 6);
+  gtk_accessible_update_property(GTK_ACCESSIBLE(v.list), GTK_ACCESSIBLE_PROPERTY_LABEL, mc_str(MC_STR_SECTION_ARTISTS),
+                                 -1);
+  g_signal_connect(v.list, "activate", G_CALLBACK(on_artist_activated), NULL);
+  GtkEventController *keys = gtk_shortcut_controller_new();
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Menu, 0), gtk_callback_action_new(on_list_menu_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_F10, GDK_SHIFT_MASK),
+                     gtk_callback_action_new(on_list_menu_key, NULL, NULL)));
+  gtk_widget_add_controller(v.list, keys);
+  GtkWidget *scroller = gtk_scrolled_window_new();
+  v.list_scroller = scroller;
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+  gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), v.list);
+  gtk_widget_set_vexpand(scroller, TRUE);
+  v.list_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_box_append(GTK_BOX(v.list_box), scroller);
+  v.row_menu = gtk_popover_menu_new_from_model(NULL);
+  gtk_popover_set_has_arrow(GTK_POPOVER(v.row_menu), FALSE);
+  gtk_widget_set_halign(v.row_menu, GTK_ALIGN_START);
+  gtk_widget_set_parent(v.row_menu, v.list_box);
+  g_signal_connect(v.row_menu, "closed", G_CALLBACK(on_menu_closed), v.list);
+
+  v.stack = gtk_stack_new();
+  gtk_stack_add_named(GTK_STACK(v.stack), v.none, "none");
+  gtk_stack_add_named(GTK_STACK(v.stack), v.list_box, "list");
+  gtk_stack_add_named(GTK_STACK(v.stack), build_page(), "artist");
+  /* The menus' actions, for the list's rows and the page alike. */
+  GSimpleActionGroup *actions = g_simple_action_group_new();
+  const GActionEntry entries[] = {{"add-to-playlist", on_add_to_playlist, NULL, NULL, NULL, {0}},
+                                  {"delete-track", on_delete_track, NULL, NULL, NULL, {0}},
+                                  {"edit", on_edit_artist, NULL, NULL, NULL, {0}},
+                                  {"edit-track", on_edit_track, NULL, NULL, NULL, {0}},
+                                  {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
+                                  {"sync-here", on_sync_here, NULL, NULL, NULL, {0}}};
+  g_action_map_add_action_entries(G_ACTION_MAP(actions), entries, G_N_ELEMENTS(entries), NULL);
+  /* The track menu's Go to album and Go to artist, enabled for the track it's opened on. */
+  v.go_to_album = g_simple_action_new("go-to-album", NULL);
+  g_signal_connect(v.go_to_album, "activate", G_CALLBACK(on_go_to_album), NULL);
+  g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(v.go_to_album));
+  g_object_unref(v.go_to_album); /* the group keeps it */
+  v.go_to_artist = g_simple_action_new("go-to-artist", NULL);
+  g_signal_connect(v.go_to_artist, "activate", G_CALLBACK(on_go_to_artist), NULL);
+  g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(v.go_to_artist));
+  g_object_unref(v.go_to_artist);
+  track_menu_add_queue_actions(actions, v.menu_uid, v.queue_track);
+  gtk_widget_insert_action_group(v.stack, "artist", G_ACTION_GROUP(actions));
+  v.menu_actions = G_ACTION_GROUP(actions); /* the stack keeps it */
+  g_object_unref(actions);
+  g_signal_connect(v.stack, "destroy", G_CALLBACK(on_destroy), NULL);
+  return v.stack;
+}
+
+void artist_view_reload(void) {
+  if (!v.stack) return;
+  reload_list();
+  if (v.open[0] && !open_name()) v.open[0] = '\0'; /* it left the library */
+  if (v.open[0]) load_page();
+  else {
+    g_list_store_remove_all(v.tracks);
+    gtk_flow_box_remove_all(GTK_FLOW_BOX(v.albums));
+    g_list_store_remove_all(v.singles);
+    gtk_flow_box_remove_all(GTK_FLOW_BOX(v.singles_box));
+  }
+  gtk_stack_set_visible_child_name(GTK_STACK(v.stack), v.open[0]                                         ? "artist"
+                                                       : g_list_model_get_n_items(G_LIST_MODEL(v.artists)) ? "list"
+                                                                                                           : "none");
+  changed();
+}
+
+gboolean artist_view_open(const char *uid) {
+  if (!v.stack || !uid || strlen(uid) >= MC_UID_STRLEN) return FALSE;
+  char was[MC_UID_STRLEN];
+  memcpy(was, v.open, sizeof was);
+  g_strlcpy(v.open, uid, sizeof v.open);
+  if (!open_name()) {
+    memcpy(v.open, was, sizeof v.open);
+    return FALSE;
+  }
+  gtk_single_selection_set_selected(v.track_selection, GTK_INVALID_LIST_POSITION);
+  load_page();
+  gtk_adjustment_set_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(v.track_scroller)), 0);
+  gtk_adjustment_set_value(gtk_scrolled_window_get_hadjustment(GTK_SCROLLED_WINDOW(v.albums_scroller)), 0);
+  gtk_adjustment_set_value(gtk_scrolled_window_get_hadjustment(GTK_SCROLLED_WINDOW(v.singles_scroller)), 0);
+  gtk_stack_set_visible_child_name(GTK_STACK(v.stack), "artist");
+  gtk_widget_grab_focus(v.track_view); /* so Escape and the arrow keys work from the start */
+  /* Where the list will be on the way back. */
+  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(v.artists)); i < n; i++)
+    if (!strcmp(artist_at(i)->uid, v.open)) gtk_single_selection_set_selected(v.artist_selection, i);
+  if (v.a->lib && mc_library_record_opened(v.a->lib, MC_RECENT_ARTIST, v.open) == MC_OK) recents_refresh(v.a);
+  changed();
+  return TRUE;
+}
+
+const char *artist_view_artist(void) {
+  return v.open[0] ? v.open : NULL;
+}
+
+const char *artist_view_find(const char *name) {
+  const char *found = NULL;
+  for (guint i = 0, n = v.artists && name ? g_list_model_get_n_items(G_LIST_MODEL(v.artists)) : 0; i < n; i++) {
+    ArtistItem *artist = artist_at(i);
+    if (strcmp(artist->name, name)) continue;
+    if (found) return NULL; /* which one? */
+    found = artist->uid;
+  }
+  return found;
+}
+
+gboolean artist_view_playable(void) {
+  if (!v.open[0]) return FALSE;
+  for (guint i = 0, n = g_list_model_get_n_items(G_LIST_MODEL(v.tracks)); i < n; i++)
+    if (track_at(i)->path) return TRUE;
+  return FALSE;
+}
+
+void artist_view_play(int start) {
+  if (v.open[0]) play_tracks(G_LIST_MODEL(v.tracks), start);
+}
+
+GtkWidget *artist_view_scrolled(void) {
+  return v.list_scroller;
+}
+
+void artist_view_set_playing(const char *uid) {
+  const char *now = uid ? uid : "";
+  if (!v.rows || !strcmp(now, v.playing_uid) || strlen(now) >= MC_UID_STRLEN) return;
+  strcpy(v.playing_uid, now);
+  for (guint i = 0; i < v.rows->len; i++) track_row_update(g_ptr_array_index(v.rows, i));
+}

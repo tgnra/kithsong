@@ -1,0 +1,128 @@
+/* Deleting tracks and albums from the library, and taking them back when their files come
+ * back out of the Recycle Bin or trash. An artist goes when its last track does.
+ *
+ * A delete moves each track's files on this device (original, and copies or transcodes sync
+ * brought) to the trash with mc_trash(), then removes its rows: the track, its plays and
+ * playlist places, and any album or artist left with no tracks. An album folder left with
+ * only its cover loses that too. It's logged, so sync deletes the track on every device. A
+ * track one of whose files can't be trashed (in use, or no trash) stays, with that file.
+ *
+ * What's needed to restore is kept outside the library, in config_dir/deleted.db: for each
+ * trashed file its path, size, mtime, hash and its rows as JSON. mc_delete_restore() looks
+ * for those files at their old paths and gives a returned one its rows back with the old
+ * uids. It costs one stat per record, so frontends call it at startup and on window
+ * activation; sync calls it before sweeping unknown files.
+ *
+ * Sync: a delete is newer than every edit seen before it, so it wins over them everywhere.
+ * An edit made on another device that hadn't yet heard of the delete still wins (as with any
+ * row) and brings back the track's row, without files here; plays and playlist places made
+ * there don't come back. */
+#ifndef KITHCORE_DELETE_H
+#define KITHCORE_DELETE_H
+
+#include "kithcore/kithcore.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct mc_library mc_library;
+
+/* How long a deleted file's record waits to be restored. */
+#define MC_DELETE_KEEP_DAYS 90
+
+typedef enum mc_delete_kind {
+  MC_DELETE_TRACKS,  /* the tracks named */
+  MC_DELETE_ALBUMS  /* every track of the albums named */
+} mc_delete_kind;
+
+typedef struct mc_delete_plan mc_delete_plan;
+
+/* What deleting uids (count of them, of kind) would delete, for the confirmation: see
+ * mc_delete_plan_tracks() and _files(). Uids that don't exist are skipped. Free with
+ * mc_delete_plan_free(). */
+mc_status mc_delete_plan_new(mc_library *lib, mc_delete_kind kind, const char *const *uids,
+                             int count, mc_delete_plan **out);
+void mc_delete_plan_free(mc_delete_plan *plan);
+/* The tracks it deletes. */
+int mc_delete_plan_tracks(const mc_delete_plan *plan);
+/* The files it moves to the trash: the tracks' files on this device, and the covers of
+ * album folders it leaves empty. Tracks with no file here only lose their rows. */
+int mc_delete_plan_files(const mc_delete_plan *plan);
+/* Whether it deletes track_uid, e.g. so a frontend can stop playing it first (a file that's
+ * open can't go to the Recycle Bin). */
+int mc_delete_plan_has(const mc_delete_plan *plan, const char *track_uid);
+
+typedef struct mc_delete_result {
+  int tracks_deleted;
+  int files_trashed; /* or removed, by mc_delete_run_permanently() */
+  int tracks_kept;   /* a file couldn't go to the trash (or be removed), so the track stayed with it */
+} mc_delete_result;
+
+/* Deletes what plan holds, as the library is now, recording what's needed to restore it in
+ * config_dir/deleted.db. out may be NULL. MC_OK even if some tracks were kept (see
+ * tracks_kept); an error only if the library couldn't be written, in which case files
+ * already trashed are still recorded, so restoring them brings them back. */
+mc_status mc_delete_run(mc_library *lib, const char *config_dir, const mc_delete_plan *plan,
+                        mc_delete_result *out);
+
+/* mc_delete_run() for a device with no trash (Android): the files, and the covers of album
+ * folders it leaves empty, are removed for good rather than trashed, and nothing is
+ * recorded, so mc_delete_restore() can't bring them back. The same results and errors; a
+ * file that can't be removed keeps its track. */
+mc_status mc_delete_run_permanently(mc_library *lib, const mc_delete_plan *plan,
+                                    mc_delete_result *out);
+
+/* --- The recycle bin ---
+ * Where there's no trash but the device is in a sync group (mc_sync_bin_offered()), a delete
+ * can be taken back until the next sync. Files go for good at once, and the delete is logged
+ * as usual, but the recycle_bin table also keeps the changelog rows it logged and the rows it
+ * took. Until a sync sends them no other device has heard of it, so mc_sync_bin_restore() can
+ * drop those changelog rows and put the rows back unlogged; the music then counts as removed
+ * from this device (kithcore/sync_here.h), not deleted.
+ *
+ * A sync that sends the library's rows empties the bin first, so a delete can't be taken back
+ * once another device may have it. While the bin holds anything this device neither starts
+ * nor accepts syncs by itself: only a press of Sync (mc_sync_now())
+ * sends them. See "Recycle bin" in docs/sync-protocol.md. */
+
+/* mc_delete_run_permanently() that keeps the delete in the recycle bin as well, to be taken
+ * back before the next sync. A frontend calls it where mc_sync_bin_offered() says so; with no
+ * group, or on an archive, there's nothing to take back to. */
+mc_status mc_delete_run_to_bin(mc_library *lib, const mc_delete_plan *plan, mc_delete_result *out);
+
+/* One delete in the bin. */
+typedef struct mc_bin_entry {
+  int64_t id;
+  mc_delete_kind kind;
+  int items;          /* albums or tracks it was asked to delete */
+  char *title;        /* the first one's title, NULL if it had none */
+  char *artist;       /* its artist credit as shown, NULL if none */
+  int tracks;         /* tracks it deleted */
+  int64_t deleted_ms; /* Unix ms */
+} mc_bin_entry;
+
+typedef struct mc_bin_list {
+  mc_bin_entry *items;
+  int count;
+} mc_bin_list;
+
+/* The bin's entries, newest first. Free with mc_delete_bin_list_free(). */
+mc_status mc_delete_bin_list(mc_library *lib, mc_bin_list **out);
+void mc_delete_bin_list_free(mc_bin_list *list);
+/* How many entries the bin holds; -1 if that couldn't be read. Cheap. */
+int mc_delete_bin_count(mc_library *lib);
+
+/* Brings back deleted tracks whose files are back where they were (see above), and drops
+ * records older than MC_DELETE_KEEP_DAYS. *restored (may be NULL) is how many files came
+ * back: if it's not 0, the library changed. *tracks (may be NULL) is how many tracks came
+ * back with them, e.g. for a "Restored N tracks" message: fewer when a track had several
+ * files here (an original and a copy), or one of its files came back earlier. A missing
+ * deleted.db is not an error. */
+mc_status mc_delete_restore(mc_library *lib, const char *config_dir, int *restored, int *tracks);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

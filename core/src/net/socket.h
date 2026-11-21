@@ -1,0 +1,86 @@
+/* Minimal blocking-style TCP over POSIX sockets and Winsock, with a timeout on every call.
+ * Sockets are non-blocking underneath; each call waits with poll()/select() until it is done
+ * or its deadline passes. Internal to core. */
+#ifndef MC_NET_SOCKET_H
+#define MC_NET_SOCKET_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "kithcore/kithcore.h"
+
+/* Timeouts are in milliseconds for the whole call, except sending and receiving (below);
+ * MC_SOCKET_FOREVER waits indefinitely. */
+#define MC_SOCKET_FOREVER (-1)
+
+typedef struct mc_socket mc_socket;
+typedef struct mc_listener mc_listener;
+
+/* Process-wide setup: WSAStartup on Windows, nothing elsewhere. Every function below calls
+ * it, so callers never need to; safe from any thread, and cheap after the first call. */
+mc_status mc_socket_init(void);
+
+/* Listens on all interfaces: IPv4, plus IPv6 on the same port where the OS has it.
+ * port 0 picks an ephemeral port; mc_listener_port() tells which. */
+mc_status mc_listener_open(uint16_t port, mc_listener **out);
+/* Listens on one local address only, a numeric IPv4 or IPv6 one (from
+ * mc_socket_local_address(), say), so only that interface's network can connect. port as for
+ * mc_listener_open(). */
+mc_status mc_listener_open_on(const char *address, uint16_t port, mc_listener **out);
+uint16_t mc_listener_port(const mc_listener *l);
+/* Waits for one connection. Returns MC_OK with *out = NULL if the timeout passed or the
+ * listener was stopped (see mc_listener_stopped()). */
+mc_status mc_listener_accept(mc_listener *l, int timeout_ms, mc_socket **out);
+/* Wakes a blocked mc_listener_accept() and makes every later one return at once. The only
+ * listener function that may be called from another thread. */
+void mc_listener_stop(mc_listener *l);
+int mc_listener_stopped(mc_listener *l);
+void mc_listener_close(mc_listener *l);
+
+/* Connects to host (an IPv4/IPv6 literal or a name) and port. The timeout covers the name
+ * lookup too: a lookup still running when it passes is left to finish on a thread of its
+ * own. */
+mc_status mc_socket_connect(const char *host, uint16_t port, int timeout_ms, mc_socket **out);
+/* Whether host accepts a connection on port: MC_OK once one of its addresses does (up to four
+ * are tried at once, then closed), else MC_ERR_NET. timeout_ms (not -1) covers the name lookup
+ * too. cancelled (NULL: never) is asked every 100 ms; once it says so the probe gives up
+ * (MC_ERR_NET). Otherwise, on MC_ERR_NET, why (if why_len isn't 0) says why in English: the
+ * lookup failed or took too long, or no address answered. */
+mc_status mc_socket_probe(const char *host, uint16_t port, int timeout_ms,
+                          int (*cancelled)(void *user), void *user, char *why, size_t why_len);
+/* For tests: each name lookup (not an address literal) first waits this long, as a network
+ * with broken DNS would make it. */
+extern uint32_t mc_socket_test_lookup_delay_ms;
+/* For these two the timeout is one of inactivity: it restarts whenever bytes move, so a
+ * long transfer at any steady pace doesn't time out, but a peer that goes silent does. */
+/* Sends all len bytes. MC_ERR_NET on error, timeout or a closed peer. */
+mc_status mc_socket_send_all(mc_socket *s, const void *buf, size_t len, int timeout_ms);
+/* Receives exactly len bytes. MC_ERR_NET on error, timeout or a closed peer. */
+mc_status mc_socket_recv_exact(mc_socket *s, void *buf, size_t len, int timeout_ms);
+/* Receives what has arrived, up to len bytes, waiting up to timeout_ms (no restarts) for the
+ * first of it: how many bytes (at least 1), 0 if the time ran out, -1 on error or a closed
+ * peer. For a reader that can't know a message's length ahead, such as a TLS library. */
+long mc_socket_recv_some(mc_socket *s, void *buf, size_t len, int timeout_ms);
+/* Waits up to timeout_ms for something to receive. 1 once there is, or the connection has
+ * failed or closed, for the next receive to report; 0 if the time ran out. */
+int mc_socket_wait_readable(mc_socket *s, int timeout_ms);
+/* The peer's address as text, for logs. */
+const char *mc_socket_peer(const mc_socket *s);
+/* This end's address of the connection, numeric and without the port: the address of the
+ * interface the peer is reached through, which it can connect back to. */
+mc_status mc_socket_local_address(const mc_socket *s, char *out, size_t cap);
+/* Shuts the connection down both ways, so a send or receive blocked on another thread
+ * fails at once. The only socket function that may be called from another thread; s must
+ * stay open (not closed) until that thread is done with it. */
+void mc_socket_shutdown(mc_socket *s);
+/* Shuts down only the sending side: the peer reads what was sent, then the end. What it
+ * sends can still be received. Unlike mc_socket_shutdown(), never resets the connection
+ * (Windows resets one shut down for receiving once more arrives, and a reset drops what
+ * the peer hadn't yet read). */
+void mc_socket_shutdown_send(mc_socket *s);
+/* Receives and drops everything until the peer closes, or the connection fails, or
+ * timeout_ms passes in all: closing with nothing unread doesn't reset the connection. */
+void mc_socket_drain(mc_socket *s, int timeout_ms);
+void mc_socket_close(mc_socket *s);
+
+#endif

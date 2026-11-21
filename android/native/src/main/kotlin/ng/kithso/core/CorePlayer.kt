@@ -1,0 +1,260 @@
+package ng.kithso.core
+
+/**
+ * What's left of an entry of up next (mc_up_next_entry). [id] stays while it's up next. [block]
+ * if it was added as a whole, an album say; [artist] is null if there's none, and a block's row
+ * then says how many [tracks] are left. [firstItem] is the first of those as a queue item.
+ * Made in jni_up_next.c.
+ */
+data class UpNextEntry(
+    val id: Int,
+    val title: String,
+    val artist: String?,
+    val block: Boolean,
+    val tracks: Int,
+    val durationMs: Long,
+    val firstItem: Int,
+    /** A [CorePlayer.PlayContext]'s ordinal. */
+    val context: Int,
+)
+
+/**
+ * kithcore's gapless player (mc_player). It may be used from any thread. [onEvent] is called
+ * on the player's own thread with an [Event]; read [status] from there or after posting to
+ * the UI thread.
+ */
+class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
+    enum class State { Stopped, Playing, Paused }
+
+    /**
+     * mc_player_event, in the same order. Played: a play counts, to take with [takePlayed]. Ended:
+     * one ended, to take with [takeEnded]. Queue: the queue got new items (up next's).
+     * UpNext: up next changed, by a call or by a track of it starting.
+     */
+    enum class Event { State, Track, Error, Played, Ended, Queue, UpNext }
+
+    /** What there is to add to up next as a whole (mc_up_next_kind, in the same order). */
+    enum class UpNextKind { Track, Album, Artist, Playlist, SmartPlaylist, AlbumGroup, SmartAlbumGroup }
+
+    /** How a queue came to be played (mc_play_context, in the same order). */
+    enum class PlayContext { Unknown, Manual, Album, Playlist, AlbumGroup, Artist, Shuffle, Device }
+
+    /** How a play ended (mc_play_end, in the same order). */
+    enum class PlayEnd { Unknown, Finished, Skipped, Stopped, Replaced, Failed }
+
+    /** What a queue is, for the play log: [contextUid] is the album, playlist, group or artist. */
+    data class Origin(val context: PlayContext = PlayContext.Unknown, val contextUid: String? = null)
+
+    /** A play that has ended, counted or not, for [CoreLibrary.logPlay]. */
+    data class PlayEvent(
+        val trackUid: String,
+        /** Wall clock. */
+        val startedMs: Long,
+        /** Time heard, which pauses and seeks don't add to. */
+        val listenedMs: Long,
+        val end: PlayEnd,
+        val origin: Origin,
+    )
+
+    data class Status(
+        val state: State,
+        /** Current queue item, -1 if the queue is empty. */
+        val index: Int,
+        val count: Int,
+        val positionMs: Long,
+        /** 0 if unknown. */
+        val durationMs: Long,
+        val shuffle: Boolean,
+        /** 0 to 100; see [setVolume]. */
+        val volume: Int,
+        val muted: Boolean,
+        /** Entries of up next. */
+        val upNext: Int,
+        /** Goes up with every change to up next, for telling if a list is out of date. */
+        val upNextChanges: Long,
+    )
+
+    /** A play that counts: queue item [index], begun at [startedMs] (wall clock). */
+    data class Played(val index: Int, val startedMs: Long)
+
+    private var handle = nativeNew(this)
+
+    /**
+     * Replaces the queue with [paths] and plays item [start], or with -1 the first (shuffled,
+     * any). [trackUids] go with the paths, one each, and with [origin] say what's logged. This is
+     * someone playing something new, so it clears up next, unless [paths] is empty.
+     */
+    fun setQueue(paths: List<String>, trackUids: List<String>, origin: Origin, start: Int) =
+        nativeSetQueue(handle, paths.toTypedArray(), trackUids.toTypedArray(), origin.context.ordinal, origin.contextUid, start)
+
+    /**
+     * As [setQueue], but stopped on item [start] (or with -1, the first, which shuffled is any),
+     * to play from its start on [resume]. So what will play can be shown before it does.
+     */
+    fun loadQueue(paths: List<String>, trackUids: List<String>, origin: Origin, start: Int) =
+        nativeLoadQueue(handle, paths.toTypedArray(), trackUids.toTypedArray(), origin.context.ordinal, origin.contextUid, start)
+
+    /** As [loadQueue], but up next stays: for what was playing coming back, which nobody just asked for. */
+    fun restoreQueue(paths: List<String>, trackUids: List<String>, origin: Origin, start: Int) =
+        nativeRestoreQueue(handle, paths.toTypedArray(), trackUids.toTypedArray(), origin.context.ordinal, origin.contextUid, start)
+
+    /** Queue item [index]'s track uid; null if there's no such item, or it isn't logged. */
+    fun queueUid(index: Int): String? = nativeQueueUid(handle, index)
+
+    /** Queue item [index]'s file is now at [path]: nothing stops, see mc_player_queue_set_path(). */
+    fun setQueuePath(index: Int, path: String) = nativeQueueSetPath(handle, index, path)
+
+    fun skipTo(index: Int) = nativeSkipTo(handle, index)
+    fun toggle() = nativeCommand(handle, 0)
+    fun pause() = nativeCommand(handle, 1)
+    fun resume() = nativeCommand(handle, 2)
+    fun stop() = nativeCommand(handle, 3)
+    /** After the last item, stops with the first item current. */
+    fun next() = nativeCommand(handle, 4)
+    /** Back to the start of the item, or to the previous one within its first 3 seconds. */
+    fun previous() = nativeCommand(handle, 5)
+    fun seekMs(positionMs: Long) = nativeSeekMs(handle, positionMs)
+
+    /**
+     * Shuffle (mc_player_set_shuffle): the queue plays in a shuffled order that [next] and
+     * [previous] follow, and never ends. Set before [setQueue] to start a queue shuffled.
+     */
+    fun setShuffle(on: Boolean) = nativeSetShuffle(handle, on)
+
+    /**
+     * The play order around the current item (mc_player_order): the queue items at the
+     * [count] places from [from] on, counted from the current one (0 is the current item, -1
+     * the one before it, 1 the next), -1 where there's none. Shuffled it goes on in new rounds,
+     * so an item can come up more than once.
+     */
+    fun order(from: Int, count: Int): IntArray = nativeOrder(handle, from, count)
+
+    /**
+     * What Play Next ([front]) or Play Last adds for [uid] of [library]: its tracks with a file
+     * here, as one block called [name] unless [asTracks] or [name] is null (mc_up_next_add_load).
+     * False if it has none. Tracks of up next are items like any other, at the end of the
+     * queue: [Event.Queue] says so, and can lag by seconds behind [Status.count];
+     * [queueUid] says what the new items are. Call on [library]'s thread.
+     */
+    fun addUpNext(library: CoreLibrary, kind: UpNextKind, uid: String, name: String?, asTracks: Boolean, front: Boolean): Boolean =
+        nativeUpNextAdd(handle, library.handle, kind.ordinal, uid, name, asTracks, front)
+
+    /** Up next now, in the order it plays. */
+    val upNext: List<UpNextEntry> get() = nativeUpNext(handle).asList()
+
+    /** Entry [id] goes to place [to] (0 first). */
+    fun moveUpNext(id: Int, to: Int) = nativeUpNextMove(handle, id, to)
+    fun removeUpNext(id: Int) = nativeUpNextRemove(handle, id)
+    /** Empties up next; playback goes on. */
+    fun clearUpNext() = nativeUpNextClear(handle)
+    /** Entry [id]'s row has a new [title] and [artist], an edit having changed them. */
+    fun renameUpNext(id: Int, title: String, artist: String?) = nativeUpNextRename(handle, id, title, artist)
+
+    /**
+     * The volume, 0 to 100 (100 to begin with), on a perceptual curve; changes fade over a few
+     * milliseconds. The system's own volume is left alone.
+     */
+    fun setVolume(volume: Int) = nativeSetVolume(handle, volume)
+    /** Muted is silence, keeping the volume for when it's unmuted. */
+    fun setMuted(muted: Boolean) = nativeSetMuted(handle, muted)
+
+    /**
+     * Starts the output tap: from now on what plays is also kept, before the volume and mute,
+     * for [readTap]. Starting again empties it. See mc_player_tap_start.
+     */
+    fun startTap() = nativeTapStart(handle)
+    /** Stops the tap, dropping what's left in it. */
+    fun stopTap() = nativeTapStop(handle)
+
+    /**
+     * Takes what the tap has, oldest first, as interleaved 16-bit stereo into [out] (up to half
+     * its length in frames, 4096 at most), and its rate into [rate]`[0]` (0 before the audio
+     * device has opened). Gives the frames read, 0 if there are none yet (it never waits), or
+     * -1 without a tap started. From any thread, but not once [close] has begun.
+     */
+    fun readTap(out: ShortArray, rate: IntArray): Int = nativeTapRead(handle, out, rate)
+
+    val status: Status
+        get() {
+            val v = LongArray(10)
+            nativeStatus(handle, v)
+            return Status(
+                State.entries[v[0].toInt()], v[1].toInt(), v[2].toInt(), v[3], v[4],
+                shuffle = v[5] != 0L, volume = v[6].toInt(), muted = v[7] != 0L,
+                upNext = v[8].toInt(), upNextChanges = v[9],
+            )
+        }
+
+    /**
+     * The oldest play that has counted since the last call, or null. Plays are dropped with
+     * the queue, so take them before [setQueue].
+     */
+    fun takePlayed(): Played? {
+        val v = LongArray(2)
+        return if (nativeTakePlayed(handle, v)) Played(v[0].toInt(), v[1]) else null
+    }
+
+    /** The oldest play that has ended since the last call, or null. They outlive the queue. */
+    fun takeEnded(): PlayEvent? {
+        val v = LongArray(4)
+        val strings = arrayOfNulls<String>(2)
+        if (!nativeTakeEnded(handle, v, strings)) return null
+        val origin = Origin(PlayContext.entries[v[3].toInt()], strings[1])
+        return PlayEvent(strings[0].orEmpty(), v[0], v[1], PlayEnd.entries[v[2].toInt()], origin)
+    }
+
+    /** Ends the play under way there and then, so [takeEnded] has it: for before [close]. */
+    fun endPlay() = nativeEndPlay(handle)
+
+    /** Stops playback and closes the audio device. */
+    override fun close() {
+        if (handle != 0L) nativeFree(handle)
+        handle = 0
+    }
+
+    // Called from jni_bridge.c.
+    @Suppress("unused")
+    private fun onEvent(event: Int) = listener(Event.entries[event])
+
+    private companion object {
+        init {
+            System.loadLibrary("kithsong_jni")
+        }
+
+        @JvmStatic external fun nativeNew(listener: CorePlayer): Long
+        @JvmStatic external fun nativeFree(handle: Long)
+        @JvmStatic external fun nativeSetQueue(
+            handle: Long, paths: Array<String>, uids: Array<String>, context: Int, contextUid: String?, start: Int,
+        )
+        @JvmStatic external fun nativeLoadQueue(
+            handle: Long, paths: Array<String>, uids: Array<String>, context: Int, contextUid: String?, start: Int,
+        )
+        @JvmStatic external fun nativeRestoreQueue(
+            handle: Long, paths: Array<String>, trackUids: Array<String>, context: Int, contextUid: String?, start: Int,
+        )
+        @JvmStatic external fun nativeQueueUid(handle: Long, index: Int): String?
+        @JvmStatic external fun nativeQueueSetPath(handle: Long, index: Int, path: String)
+        @JvmStatic external fun nativeCommand(handle: Long, command: Int)
+        @JvmStatic external fun nativeSkipTo(handle: Long, index: Int)
+        @JvmStatic external fun nativeSeekMs(handle: Long, ms: Long)
+        @JvmStatic external fun nativeSetShuffle(handle: Long, on: Boolean)
+        @JvmStatic external fun nativeOrder(handle: Long, from: Int, count: Int): IntArray
+        @JvmStatic external fun nativeUpNextAdd(
+            handle: Long, library: Long, kind: Int, uid: String, name: String?, asTracks: Boolean, front: Boolean,
+        ): Boolean
+        @JvmStatic external fun nativeUpNext(handle: Long): Array<UpNextEntry>
+        @JvmStatic external fun nativeUpNextMove(handle: Long, id: Int, to: Int)
+        @JvmStatic external fun nativeUpNextRemove(handle: Long, id: Int)
+        @JvmStatic external fun nativeUpNextClear(handle: Long)
+        @JvmStatic external fun nativeUpNextRename(handle: Long, id: Int, title: String, artist: String?)
+        @JvmStatic external fun nativeSetVolume(handle: Long, volume: Int)
+        @JvmStatic external fun nativeSetMuted(handle: Long, muted: Boolean)
+        @JvmStatic external fun nativeTapStart(handle: Long)
+        @JvmStatic external fun nativeTapStop(handle: Long)
+        @JvmStatic external fun nativeTapRead(handle: Long, out: ShortArray, rate: IntArray): Int
+        @JvmStatic external fun nativeStatus(handle: Long, out: LongArray)
+        @JvmStatic external fun nativeTakePlayed(handle: Long, out: LongArray): Boolean
+        @JvmStatic external fun nativeTakeEnded(handle: Long, out: LongArray, strings: Array<String?>): Boolean
+        @JvmStatic external fun nativeEndPlay(handle: Long)
+    }
+}

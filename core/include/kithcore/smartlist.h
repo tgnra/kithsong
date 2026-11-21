@@ -1,0 +1,135 @@
+/* Smart lists: playlists (of tracks) and album groups (of albums) defined by a rule instead
+ * of by hand, e.g. "the 10 least played tracks" or "albums added in the last 30 days". The
+ * rule is JSON, stored as one value so an edit syncs whole, and is evaluated each time the
+ * list is listed, so it always reflects current play counts and this device's files. The
+ * format, fields and operators are in docs/schema.md (Smart lists).
+ *
+ * MC_ERR_FORMAT means a rule isn't valid: bad JSON, an unknown field or operator, a value of
+ * the wrong type, or a newer rule version than this build understands. MC_ERR_NOT_FOUND means
+ * the smart list named doesn't exist. */
+#ifndef KITHCORE_SMARTLIST_H
+#define KITHCORE_SMARTLIST_H
+
+#include "kithcore/kithcore.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Defined in library.h, which includes this through kithcore.h before it defines them. */
+typedef struct mc_library mc_library;
+typedef struct mc_track_list mc_track_list;
+typedef struct mc_album_list mc_album_list;
+
+typedef enum mc_smart_subject {
+  MC_SMART_TRACKS, /* a smart playlist */
+  MC_SMART_ALBUMS  /* a smart album group */
+} mc_smart_subject;
+
+/* Checks rule_json against subject without saving anything, e.g. while it's being edited. */
+mc_status mc_smart_validate(mc_smart_subject subject, const char *rule_json);
+
+/* name must not be empty; names needn't be unique. The rule must be valid. */
+mc_status mc_smart_create(mc_library *lib, const char *name, mc_smart_subject subject,
+                          const char *rule_json, char out_uid[MC_UID_STRLEN]);
+mc_status mc_smart_rename(mc_library *lib, const char *smart_uid, const char *name);
+mc_status mc_smart_set_rule(mc_library *lib, const char *smart_uid, const char *rule_json);
+mc_status mc_smart_delete(mc_library *lib, const char *smart_uid);
+/* Picks a new seed for a list ordered by random, so it comes out in a new order (on every
+ * device, once it syncs). MC_ERR_INVALID_ARG if the list isn't ordered by random. */
+mc_status mc_smart_reshuffle(mc_library *lib, const char *smart_uid);
+
+typedef struct mc_smart_info {
+  char uid[MC_UID_STRLEN];
+  char *name;
+  mc_smart_subject subject;
+  char *rule;  /* the rule's JSON */
+  int random;  /* ordered by random, so mc_smart_reshuffle() gives it a new order */
+} mc_smart_info;
+
+typedef struct mc_smart_list {
+  mc_smart_info *items;
+  int count;
+  int hidden; /* smart lists MC_LIST_PLAYABLE left out */
+} mc_smart_list;
+
+/* Every smart list of either subject, by name (an example list every library starts with goes
+ * by its name in the language in use until renamed). With MC_LIST_PLAYABLE (library.h) in flags,
+ * each rule is evaluated, and a list is left out if what it picks has no file here (a smart
+ * playlist's tracks, a smart album group's albums) or its rule can't be evaluated
+ * (MC_ERR_FORMAT, e.g. from a newer app). One that picks nothing in the whole library is kept,
+ * unless this device has no files at all. Free with mc_smart_list_free(). */
+mc_status mc_library_list_smart(mc_library *lib, unsigned flags, mc_smart_list **out);
+/* The same, but MC_LIST_PLAYABLE doesn't leave out keep_uid (may be NULL): a list hidden here
+ * that the user has asked to open, from a search or by making it, stays on its page. */
+mc_status mc_library_list_smart_keeping(mc_library *lib, unsigned flags, const char *keep_uid, mc_smart_list **out);
+void mc_smart_list_free(mc_smart_list *list);
+
+/* What a saved smart list holds now. MC_ERR_INVALID_ARG if it's the other subject. Free with
+ * mc_track_list_free() / mc_album_list_free(). */
+mc_status mc_library_list_smart_tracks(mc_library *lib, const char *smart_uid, mc_track_list **out);
+mc_status mc_library_list_smart_albums(mc_library *lib, const char *smart_uid, mc_album_list **out);
+/* What a rule would hold, without saving it: a live preview while editing. */
+mc_status mc_smart_preview_tracks(mc_library *lib, const char *rule_json, mc_track_list **out);
+mc_status mc_smart_preview_albums(mc_library *lib, const char *rule_json, mc_album_list **out);
+/* A saved list's cover art is mc_smart_art() in playlist.h, made as a playlist's or album
+ * group's is. */
+/* How many tracks or albums a rule picks (at most its limit, if it has one), counted in one
+ * query without listing them: for the counts in an editor. To count what one condition or
+ * group matches, pass a rule of just it, e.g. {"v":1,"match":<condition>}. An empty group
+ * is ignored, so a rule of one matches everything. */
+mc_status mc_smart_count(mc_library *lib, mc_smart_subject subject, const char *rule_json, int *out);
+
+/* A field a rule can test or order by. type says what a value looks like: "text", "int",
+ * "duration" (seconds), "date" (Unix ms, or {"days": n} for within/not_within), "bool", or
+ * "playlist" / "group" / "format" (a playlist uid, an album group uid, a format such as
+ * "flac"). ops is NULL-terminated. A list can also be ordered by "random", which isn't a
+ * field. Every string is static. */
+typedef struct mc_smart_field {
+  const char *name;
+  const char *type;
+  const char *const *ops;
+  int sortable;
+} mc_smart_field;
+
+/* The fields subject supports, in a sensible order for a picker: field i, for i from 0 to
+ * mc_smart_field_count() - 1. mc_smart_field_get() returns 0 if i is out of range. */
+int mc_smart_field_count(mc_smart_subject subject);
+int mc_smart_field_get(mc_smart_subject subject, int i, mc_smart_field *out);
+
+/* --- Words for an editor ---
+ *
+ * In the language set with mc_strings_set_locale() (i18n.h), so every platform's editor uses
+ * the same wording. All static; NULL for a name or combination the rule format doesn't have.
+ * A bool field's values read as MC_STR_SMART_VALUE_YES / MC_STR_SMART_VALUE_NO. */
+
+/* A field's label for a picker, e.g. "Last played" for "last_played"; also "Random" for the
+ * "random" order key. */
+const char *mc_smart_field_label(const char *field);
+/* An operator's label for a picker after the field, e.g. "is less than" for ("int", "<") or
+ * "isn't in the last" for ("date", "not_within"). type is an mc_smart_field type. */
+const char *mc_smart_op_label(const char *type, const char *op);
+/* A sort order's label, e.g. "least played first" for ("plays", 0) and "newest added first"
+ * for ("added", 1); desc is 1 for "dir": "desc". "random" gives "shuffled" either way. NULL
+ * for a field neither subject can sort on (check mc_smart_field.sortable: genre has words
+ * but only sorts tracks). */
+const char *mc_smart_order_label(const char *field, int desc);
+
+/* rule_json as a sentence for showing under a list's name or in the editor, e.g. "Tracks
+ * where genre contains “jazz” and (play count is less than 3 or last played isn't in the last
+ * 180 days) · least played first · 10 tracks": the conditions, the order and the limit,
+ * joined with " · " (each left out if the rule has none); "All tracks" / "All albums" if
+ * everything matches, as when the rule's groups are all empty. A group with a name reads as
+ * "it matches “<name>”" inside a longer sentence, but the match itself reads in full: so an
+ * editor can describe one group, e.g. as an unnamed group's title, by passing
+ * {"v":1,"match":<group>}. Playlists and album groups are named as they're called in lib
+ * now (one that's been deleted reads as "a deleted playlist"), dates are in local time, and
+ * the words are in the current language. MC_ERR_FORMAT if the rule isn't valid for subject.
+ * Free *out with mc_free(). Runs one small query per playlist or group the rule names. */
+mc_status mc_smart_describe(mc_library *lib, mc_smart_subject subject, const char *rule_json, char **out);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

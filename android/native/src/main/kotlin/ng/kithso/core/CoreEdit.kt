@@ -1,0 +1,175 @@
+package ng.kithso.core
+
+// Editing an album's, artist's or track's tags, an album's flags and cover and a single's mix on
+// an open CoreLibrary, and matching an album to another MusicBrainz release (kithcore/edit.h),
+// bound in jni_edit.c.
+// The rows are what's edited and the files follow, so a set can rewrite and move files, and a
+// search or a new release waits for MusicBrainz: keep them all off the main thread. Each throws
+// KithCoreException; the ERR_ statuses below are the ones worth telling apart. "" is no text
+// and 0 an unknown number, on the way in and out.
+
+/** mc_album_tags. [mbAlbumId] is the release; "" unlinks the album. */
+data class AlbumTags(val title: String, val artist: String, val year: Int, val originalYear: Int, val mbAlbumId: String)
+
+/** mc_artist_tags. [name] can't be empty. */
+data class ArtistTags(val name: String, val sortName: String)
+
+/** mc_track_tags. [artist] is the credit as shown, "" for the album's. */
+data class TrackTags(
+    val title: String,
+    val artist: String,
+    val trackNo: Int,
+    val discNo: Int,
+    val year: Int,
+    val genre: String,
+)
+
+/** mc_album_flags: what an album's tags can't say. [artChosen] is only read: a cover the user chose. */
+data class AlbumFlags(val noScrobble: Boolean, val mix: Boolean, val artChosen: Boolean = false)
+
+/** mc_track_mix: a single's flag, which only a track that [canSet] has; a longer album's is the album's. */
+data class TrackMix(val canSet: Boolean, val mix: Boolean)
+
+/** mc_release_info: a MusicBrainz release, and in [score] how well it fits the album, 0 to 1. */
+data class ReleaseInfo(
+    val mbAlbumId: String,
+    val title: String,
+    val artist: String,
+    val year: Int,
+    val country: String?,
+    val label: String?,
+    val format: String?,
+    val trackCount: Int,
+    val score: Double,
+)
+
+/**
+ * What an edit asks while it runs (mc_edit_watch), on the thread of the edit: how far it is, in
+ * files copied of those to copy, and whether to stop, which gives [CoreEdit.ERR_CANCELLED].
+ */
+interface EditWatch {
+    fun progress(done: Int, total: Int)
+    fun cancelled(): Boolean
+}
+
+object CoreEdit {
+    /** MC_ERR_IO: a file couldn't be read or written. Nothing has changed. */
+    const val ERR_IO = -4
+
+    /** MC_ERR_NET: MusicBrainz can't be reached. */
+    const val ERR_NET = -6
+
+    /** MC_ERR_NOT_FOUND: the uid has gone. */
+    const val ERR_NOT_FOUND = -8
+
+    /** MC_ERR_IN_USE: a file is open, or kept changing. Nothing has changed. */
+    const val ERR_IN_USE = -13
+
+    /** MC_ERR_CANCELLED: stopped, with nothing changed. */
+    const val ERR_CANCELLED = -16
+
+    /** MC_ALBUM_ART_MAX_BYTES: no image bigger than this can be a cover. */
+    const val ALBUM_ART_MAX_BYTES = 16 * 1024 * 1024
+
+    /** A status in words (mc_status_str), in the core's language. */
+    fun statusText(status: Int): String = EditNatives.nativeStatusText(status)
+
+    /** Throws if [image] can't be a cover. It's decoded, so a big one takes a moment: not on the main thread. */
+    fun checkAlbumArt(image: ByteArray) = EditNatives.nativeCheckAlbumArt(image)
+}
+
+/** Runs [edits], calls on this connection that change the library, with [watch] looking on. */
+fun <T> CoreLibrary.watchingEdits(watch: EditWatch, edits: () -> T): T {
+    val started = EditNatives.nativeStartWatch(handle, watch)
+    try {
+        return edits()
+    } finally {
+        EditNatives.nativeEndWatch(handle, started)
+    }
+}
+
+fun CoreLibrary.albumTags(uid: String): AlbumTags = EditNatives.nativeAlbumTags(handle, uid)
+
+/** Saves [tags]: see mc_album_tags for what a change to each does to the tracks and files. */
+fun CoreLibrary.setAlbumTags(uid: String, tags: AlbumTags) = EditNatives.nativeSetAlbumTags(
+    handle, uid, tags.title.encodeToByteArray(), tags.artist.encodeToByteArray(), tags.year, tags.originalYear, tags.mbAlbumId,
+)
+
+fun CoreLibrary.artistTags(uid: String): ArtistTags = EditNatives.nativeArtistTags(handle, uid)
+
+fun CoreLibrary.setArtistTags(uid: String, tags: ArtistTags) =
+    EditNatives.nativeSetArtistTags(handle, uid, tags.name.encodeToByteArray(), tags.sortName.encodeToByteArray())
+
+fun CoreLibrary.trackTags(uid: String): TrackTags = EditNatives.nativeTrackTags(handle, uid)
+
+fun CoreLibrary.setTrackTags(uid: String, tags: TrackTags) = EditNatives.nativeSetTrackTags(
+    handle, uid, tags.title.encodeToByteArray(), tags.artist.encodeToByteArray(), tags.trackNo, tags.discNo, tags.year,
+    tags.genre.encodeToByteArray(),
+)
+
+fun CoreLibrary.albumFlags(uid: String): AlbumFlags =
+    EditNatives.nativeAlbumFlags(handle, uid).let { AlbumFlags(it[0] != 0, it[1] != 0, it[2] != 0) }
+
+fun CoreLibrary.setAlbumFlags(uid: String, flags: AlbumFlags) =
+    EditNatives.nativeSetAlbumFlags(handle, uid, flags.noScrobble, flags.mix)
+
+/** Back to the cover an import would give album [uid], for one the user chose: see mc_album_art_reset(). Waits for the network. */
+fun CoreLibrary.resetAlbumArt(uid: String) = EditNatives.nativeResetAlbumArt(handle, uid)
+
+/** Another artist called [name], for a form to offer to merge; null for none. */
+fun CoreLibrary.artistSameName(uid: String, name: String): String? =
+    EditNatives.nativeArtistSameName(handle, uid, name.encodeToByteArray())
+
+/** Makes artist [uid] and [other] one, by [other]'s name: see mc_artist_merge(). */
+fun CoreLibrary.mergeArtists(uid: String, other: String) = EditNatives.nativeMergeArtists(handle, uid, other)
+
+fun CoreLibrary.trackMix(uid: String): TrackMix =
+    EditNatives.nativeTrackMix(handle, uid).let { TrackMix(it[0] != 0, it[1] != 0) }
+
+/** Makes a track that [TrackMix.canSet] a mix or not; one with no album is given one of its title. */
+fun CoreLibrary.setTrackMix(uid: String, mix: Boolean) = EditNatives.nativeSetTrackMix(handle, uid, mix)
+
+/** The file of album [uid]'s cover here, null for none. Throws [CoreEdit.ERR_NOT_FOUND] if the album has no file here. */
+fun CoreLibrary.albumArt(uid: String): String? = EditNatives.nativeAlbumArt(handle, uid)
+
+/** Makes [image] album [uid]'s cover. After [setAlbumTags], which can move the album's folder. */
+fun CoreLibrary.setAlbumArt(uid: String, image: ByteArray) = EditNatives.nativeSetAlbumArt(handle, uid, image)
+
+/** The releases for [artist] and [title], best fit for album [uid]'s tracks first; about 6 s. */
+fun CoreLibrary.searchReleases(uid: String, artist: String, title: String): List<ReleaseInfo> =
+    EditNatives.nativeReleaseSearch(handle, uid, artist.encodeToByteArray(), title.encodeToByteArray()).toList()
+
+/** What album [uid]'s tags would be on release [mbAlbumId], to fill in a form: nothing changes. */
+fun CoreLibrary.releaseTags(uid: String, mbAlbumId: String): AlbumTags = EditNatives.nativeReleaseTags(handle, uid, mbAlbumId)
+
+internal object EditNatives {
+    init {
+        System.loadLibrary("kithsong_jni")
+    }
+
+    @JvmStatic external fun nativeStartWatch(handle: Long, watch: EditWatch): Long
+    @JvmStatic external fun nativeEndWatch(handle: Long, started: Long)
+    @JvmStatic external fun nativeAlbumTags(handle: Long, uid: String): AlbumTags
+    @JvmStatic external fun nativeSetAlbumTags(
+        handle: Long, uid: String, title: ByteArray, artist: ByteArray, year: Int, originalYear: Int, mbAlbumId: String,
+    )
+    @JvmStatic external fun nativeArtistTags(handle: Long, uid: String): ArtistTags
+    @JvmStatic external fun nativeSetArtistTags(handle: Long, uid: String, name: ByteArray, sortName: ByteArray)
+    @JvmStatic external fun nativeTrackTags(handle: Long, uid: String): TrackTags
+    @JvmStatic external fun nativeSetTrackTags(
+        handle: Long, uid: String, title: ByteArray, artist: ByteArray, trackNo: Int, discNo: Int, year: Int, genre: ByteArray,
+    )
+    @JvmStatic external fun nativeAlbumFlags(handle: Long, uid: String): IntArray
+    @JvmStatic external fun nativeSetAlbumFlags(handle: Long, uid: String, noScrobble: Boolean, mix: Boolean)
+    @JvmStatic external fun nativeResetAlbumArt(handle: Long, uid: String)
+    @JvmStatic external fun nativeArtistSameName(handle: Long, uid: String, name: ByteArray): String?
+    @JvmStatic external fun nativeMergeArtists(handle: Long, uid: String, other: String)
+    @JvmStatic external fun nativeTrackMix(handle: Long, uid: String): IntArray
+    @JvmStatic external fun nativeSetTrackMix(handle: Long, uid: String, mix: Boolean)
+    @JvmStatic external fun nativeAlbumArt(handle: Long, uid: String): String?
+    @JvmStatic external fun nativeCheckAlbumArt(image: ByteArray)
+    @JvmStatic external fun nativeSetAlbumArt(handle: Long, uid: String, image: ByteArray)
+    @JvmStatic external fun nativeReleaseSearch(handle: Long, uid: String, artist: ByteArray, title: ByteArray): Array<ReleaseInfo>
+    @JvmStatic external fun nativeReleaseTags(handle: Long, uid: String, mbAlbumId: String): AlbumTags
+    @JvmStatic external fun nativeStatusText(status: Int): String
+}

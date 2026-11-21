@@ -1,0 +1,348 @@
+# Release builds. Pushing a v<VERSION> tag (or v<VERSION>-<suffix> for a prerelease) builds
+# every platform with the scripts in scripts/ and publishes the results as a GitHub release,
+# then deploys the website, which brings its Flatpak repo up to date. Running it by hand
+# (Actions > Release > Run workflow) builds the same files as workflow artifacts without
+# making a release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KITHSONG_CONTACT: ${{ secrets.KITHSONG_CONTACT }}
+  KITHSONG_LASTFM_KEY: ${{ secrets.KITHSONG_LASTFM_KEY }}
+  KITHSONG_LASTFM_SECRET: ${{ secrets.KITHSONG_LASTFM_SECRET }}
+
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        run: |
+          version="$(head -n1 VERSION | tr -d '[:space:]')"
+          prerelease=false
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [[ "${tag%%-*}" != "$version" ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME doesn't match VERSION ($version)."
+              exit 1
+            fi
+            [[ "$tag" == *-* ]] && prerelease=true
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >>"$GITHUB_OUTPUT"
+
+  # Each architecture builds and runs its tests on its own CPU. windows-11-arm is free for public
+  # repositories.
+  windows:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            ninja: ninja-win.zip
+            ninja-sha256: 07fc8261b42b20e71d1720b39068c2e14ffcee6396b76fb7a795fb460b78dc65
+          - arch: arm64
+            runner: windows-11-arm
+            ninja: ninja-winarm64.zip
+            ninja-sha256: e52f0bdef9dfb1003229dbd6508a508c4073fd017247002adc66e5e806cb0391
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install llvm-mingw and Ninja
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = "$env:RUNNER_TEMP\tools"
+          $llvmMingw = scripts/install-llvm-mingw.ps1 -Dir $tools
+          Invoke-WebRequest https://github.com/ninja-build/ninja/releases/download/v1.13.2/${{ matrix.ninja }} -OutFile "$env:RUNNER_TEMP\ninja.zip"
+          if ((Get-FileHash "$env:RUNNER_TEMP\ninja.zip" -Algorithm SHA256).Hash -ne '${{ matrix.ninja-sha256 }}') { throw 'Checksum mismatch: Ninja' }
+          Expand-Archive "$env:RUNNER_TEMP\ninja.zip" "$tools\ninja"
+          "LLVM_MINGW=$llvmMingw" >> $env:GITHUB_ENV
+          "$tools\ninja" >> $env:GITHUB_PATH
+      # FetchContent's subbuilds record absolute paths, so the key includes the repository
+      # (and with it the checkout path): a cache from before a rename won't configure. The _deps
+      # folder holds objects too, so the key also has the architecture and the toolchain's pin.
+      - name: Cache fetched dependencies
+        uses: actions/cache@v6
+        with:
+          path: build/windows-${{ matrix.arch }}-release/_deps
+          key: deps-windows-${{ matrix.arch }}-${{ github.repository }}-${{ hashFiles('third_party/CMakeLists.txt', 'cmake/llvm-mingw.pin') }}
+      - name: Build
+        shell: pwsh
+        env:
+          KITHSONG_BUILD_NUMBER: ${{ github.run_number }}
+        run: scripts/release-windows.ps1 -Arch ${{ matrix.arch }}
+      # Packs what Build installed, so the stage folder is named from the version job's output.
+      # The script takes the package version from VERSION; a stage folder that doesn't match
+      # fails here. Windows PowerShell, as the script is run and tested locally. The runner's
+      # Windows SDK has makeappx and makepri.
+      - name: Pack the MSIX
+        shell: powershell
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: scripts/package-msix.ps1 -Arch ${{ matrix.arch }} -StageDir "build/stage-windows-${{ matrix.arch }}/kithsong-$env:VERSION"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/*.zip
+          if-no-files-found: error
+      # Its own artifact, as if-no-files-found only fires when every path comes up empty. The
+      # release job's merge-multiple download puts it in dist/ with the rest.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-${{ matrix.arch }}-msix
+          path: dist/*.msix
+          if-no-files-found: error
+
+  windows-bundle:
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: windows-*-msix
+          path: dist
+          merge-multiple: true
+      # Windows PowerShell and the runner's SDK, like Pack the MSIX.
+      - name: Bundle the MSIX packages
+        shell: powershell
+        run: scripts/package-msix.ps1 -Bundle
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-msixbundle
+          path: dist/*.msixbundle
+          if-no-files-found: error
+
+  # Each architecture builds on its own CPU: the container's image has an arm64 build, so no
+  # QEMU. ubuntu-24.04-arm is free for public repositories.
+  #
+  # Each uploads a .flatpak bundle and its own unsigned repo, which holds that architecture
+  # alone. linux-repo merges them into the one the website serves, so no leg needs the key.
+  linux:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # The tag tracks runtime-version in packaging/flatpak/ng.kithso.Kithsong.yml.
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: bash scripts/release-linux.sh
+      # The script names the bundle by flatpak --default-arch. Asking for this leg's arch fails
+      # here if that's ever not it, before two legs' files can collide in the release's dist/.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*-linux-${{ matrix.arch }}.flatpak
+          if-no-files-found: error
+      # One tar, as an OSTree repo is thousands of small files. In build/, not dist/: it's for
+      # linux-repo, and the release job leaves it out.
+      - name: Pack the repo
+        shell: bash
+        run: tar -cf "build/flatpak-repo-${{ matrix.arch }}.tar" -C build flatpak-repo
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}-repo
+          path: build/flatpak-repo-${{ matrix.arch }}.tar
+          if-no-files-found: error
+
+  # Merges the architectures' repos into the one at kithso.ng/repo, signs it and writes the
+  # flatpakref: kithsong-flatpak-repo.tar.gz, which the website unpacks. Flatpak picks each
+  # user's architecture from the repo. Without the key (not on a tag) it still merges, as a
+  # check, but writes nothing for the website.
+  linux-repo:
+    needs: linux
+    runs-on: ubuntu-latest
+    # The same image as linux, for the same flatpak.
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: linux-*-repo
+          path: build
+          merge-multiple: true
+      - name: Import the Flatpak repo's signing key
+        shell: bash
+        env:
+          KITHSONG_FLATPAK_GPG_KEY: ${{ secrets.KITHSONG_FLATPAK_GPG_KEY }}
+        run: |
+          if [[ -z "$KITHSONG_FLATPAK_GPG_KEY" ]]; then
+            if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+              echo "::error::KITHSONG_FLATPAK_GPG_KEY isn't set; a release needs the signed Flatpak repo."
+              exit 1
+            fi
+            echo "::warning::KITHSONG_FLATPAK_GPG_KEY isn't set; building without the signed repo."
+            exit 0
+          fi
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --quiet --import <<<"$KITHSONG_FLATPAK_GPG_KEY"
+          key_id="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')"
+          echo "GNUPGHOME=$GNUPGHOME" >>"$GITHUB_ENV"
+          echo "KITHSONG_FLATPAK_GPG_KEY_ID=$key_id" >>"$GITHUB_ENV"
+      # Every architecture by name, so a missing one fails here rather than leave its users
+      # without updates.
+      - name: Merge and sign the repos
+        shell: bash
+        run: |
+          repos=()
+          for arch in x86_64 aarch64; do
+            mkdir "build/flatpak-repo-$arch"
+            tar -xf "build/flatpak-repo-$arch.tar" -C "build/flatpak-repo-$arch" --strip-components=1
+            repos+=("build/flatpak-repo-$arch")
+          done
+          bash scripts/release-linux.sh repo "${repos[@]}"
+      - name: Remove the signing key
+        if: always()
+        shell: bash
+        run: |
+          gpgconf --kill all || true
+          rm -rf "$RUNNER_TEMP/gnupg"
+      # Without the key the script writes nothing for the website, so there's nothing to upload.
+      - uses: actions/upload-artifact@v7
+        if: env.KITHSONG_FLATPAK_GPG_KEY_ID != ''
+        with:
+          name: linux-flatpak-repo
+          path: dist/kithsong-flatpak-repo.tar.gz
+          if-no-files-found: error
+
+  # For people who don't want the Flatpak. Its own job, as the binary only runs on systems at
+  # least as new as the one it's built on: the runner's the oldest with the libadwaita we need
+  # (1.5), where the Flatpak job's GNOME SDK would rule out most distros. Keep both versions
+  # pinned; ubuntu-latest would raise that floor unannounced.
+  linux-tarball:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libadwaita-1-dev libgtk-4-dev ninja-build
+      - name: Build
+        env:
+          KITHSONG_BUILD_NUMBER: ${{ github.run_number }}
+        run: bash scripts/release-linux-tarball.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}-tarball
+          path: dist/kithsong-*-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Install the NDK and CMake
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "ndk;27.2.12479018" "cmake;3.30.5" >/dev/null
+      - name: Decode the signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [[ -z "$ANDROID_KEYSTORE_BASE64" ]]; then
+            if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 isn't set; a release needs signed APKs."
+              exit 1
+            fi
+            echo "::warning::ANDROID_KEYSTORE_BASE64 isn't set; building unsigned."
+            exit 0
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d >"$RUNNER_TEMP/release.jks"
+          echo "KITHSONG_KEYSTORE=$RUNNER_TEMP/release.jks" >>"$GITHUB_ENV"
+      - name: Build
+        env:
+          KITHSONG_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KITHSONG_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KITHSONG_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash scripts/release-android.sh
+      - name: Remove the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: |
+            dist/*.apk
+            dist/*.aab
+            dist/*-mapping.txt
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [version, windows, windows-bundle, linux, linux-repo, linux-tarball, android]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      # The architectures' unsigned repos, which linux-repo has merged into
+      # kithsong-flatpak-repo.tar.gz.
+      - name: Leave out the per-architecture repos
+        run: rm -f dist/flatpak-repo-*.tar
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          flags=(--generate-notes --verify-tag --title "Kithsong $GITHUB_REF_NAME")
+          if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); else flags+=(--latest); fi
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}" dist/*
+      # A prerelease is never the latest, so it doesn't reach flatpak update. On master, as the
+      # github-pages environment only takes that.
+      - name: Deploy the website
+        if: needs.version.outputs.prerelease != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run site.yml --ref master

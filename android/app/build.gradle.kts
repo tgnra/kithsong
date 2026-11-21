@@ -1,0 +1,133 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+android {
+    namespace = "ng.kithso.android"
+    compileSdk = 37
+    // The same NDK as :native, which AGP needs to strip the native core's debug symbols.
+    ndkVersion = "27.2.12479018"
+
+    defaultConfig {
+        applicationId = "ng.kithso"
+        // Android 7.0: Compose needs 23, the native core 24 (see :native).
+        minSdk = 24
+        targetSdk = 36
+        versionCode = rootProject.extra["kithsongVersionCode"] as Int
+        versionName = rootProject.extra["kithsongVersionName"] as String
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+    }
+
+    signingConfigs {
+        // Release signing comes from the environment (scripts/release-android.*). Without
+        // it, release builds come out unsigned.
+        System.getenv("KITHSONG_KEYSTORE")?.let { keystore ->
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = System.getenv("KITHSONG_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KITHSONG_KEY_ALIAS")
+                keyPassword = System.getenv("KITHSONG_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // R8: shrinks, optimises and renames the code, then drops unused resources. The
+            // JNI bridge's keep rules come with :native (native/consumer-rules.pro); the
+            // libraries bring their own, and proguard-rules.pro has the app's. The map back is
+            // build/outputs/mapping/release/.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    buildFeatures {
+        compose = true
+    }
+    // The store screenshot tests (src/test/.../screenshots) run only when asked for, with
+    // -PkithsongScreenshots: Robolectric draws the Compose UI on the JVM, Roborazzi saves it, and
+    // the PNGs land in build/outputs/store-screenshots. Without the property they're left out,
+    // and so are the merged resources they need, so a plain testDebugUnitTest is as before.
+    val storeScreenshots = providers.gradleProperty("kithsongScreenshots").isPresent
+    testOptions {
+        unitTests.isIncludeAndroidResources = storeScreenshots
+        unitTests.all {
+            if (storeScreenshots) {
+                it.filter.includeTestsMatching("*.screenshots.*")
+                it.systemProperty("roborazzi.test.record", "true")
+                it.systemProperty("kithsong.screenshots.out", layout.buildDirectory.dir("outputs/store-screenshots").get().asFile.path)
+                // Robolectric reaches into java.base on newer JDKs.
+                it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED", "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED", "--enable-native-access=ALL-UNNAMED")
+                it.maxHeapSize = "2g"
+                // Always drawn again: what they show changes without the tests changing.
+                it.outputs.upToDateWhen { false }
+            } else {
+                it.exclude("**/screenshots/**")
+            }
+        }
+    }
+}
+
+// R.string/R.plurals from strings/en.json (see GenerateStrings in the root build.gradle.kts).
+extra["kithsongStringSections"] = listOf("shared", "android")
+
+dependencies {
+    implementation(project(":native"))
+    // CoreMediaPlayer, the core's player as a Media3 Player.
+    implementation(project(":playback"))
+
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
+    implementation(composeBom)
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    // The window's size and fold (ui/WindowShape.kt), for the tablet layout and tabletop.
+    implementation("androidx.compose.material3.adaptive:adaptive:1.2.0")
+    // The launch screen, in the system's light or dark colours, on every version back to 24.
+    implementation("androidx.core:core-splashscreen:1.2.0")
+    // Album art loading and caching; the art itself comes from ui/art/Art.kt's ArtSource.
+    implementation("io.coil-kt.coil3:coil-compose:3.6.3")
+    // The media session, notification and MediaController around the core's player. Only the
+    // session: the core decodes and plays, so there's no ExoPlayer.
+    implementation("androidx.media3:media3-session:1.11.1")
+    // Google Cast (ng.kithso.android.cast), with MediaRouter for finding devices. It needs
+    // Google Play services on the phone, which is checked at run time: without it, casting
+    // isn't offered.
+    implementation("com.google.android.gms:play-services-cast-framework:23.0.0")
+    // The Cast framework asks for Fragment 1.1.0, which Gradle already resolves to 1.5.4. Lint
+    // (InvalidFragmentVersionForActivityResult) goes by the 1.1.0 and fails the release
+    // build over MainActivity's registerForActivityResult, so the version is stated here.
+    implementation("androidx.fragment:fragment:1.5.4")
+    // Colour schemes from album art. 5.x is built with Kotlin 2.4, so it needs the project on
+    // 2.4 too (the Compose compiler plugin's version in the root build.gradle.kts).
+    implementation("com.materialkolor:material-kolor:5.0.1")
+    // Whether the app is on screen, for sync (KithsongApp.isVisible). The lifecycle libraries
+    // keep their versions in step, so this follows the newer one the others bring.
+    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
+    // Only to cancel the background sync job versions up to 0.4.2 scheduled (KithsongApp).
+    implementation("androidx.work:work-runtime-ktx:2.11.1")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    // Store screenshots on the JVM: Robolectric's native graphics and Roborazzi.
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.78.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.78.0")
+    // Unit tests of what runs without a device, such as the smart list editor's rule model.
+    testImplementation("junit:junit:4.13.2")
+    // Virtual time, for what waits on a timer.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+}

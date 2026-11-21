@@ -1,0 +1,220 @@
+/* The app's own string table (English only so far) and mc_format. Translations and the
+ * fallback between languages are tested against a small table in test_strings_lang.c. */
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "kithcore/kithcore.h"
+#include "test.h"
+
+/* The no-break space that keeps a length whole. */
+#define NB "\xC2\xA0"
+
+/* CHECK_STR for a char array, which is never NULL. */
+#define CHECK_BUF(buf, s) CHECK(strcmp((buf), (s)) == 0)
+
+static void test_lookup(void) {
+  CHECK_STR(mc_strings_locale(), "en");
+  CHECK_STR(mc_str(MC_STR_CANCEL), "Cancel");
+  CHECK_STR(mc_str(MC_STR_LINUX_NOT_AVAILABLE_YET), "Not available yet");
+  CHECK_STR(mc_str(MC_STR_WINDOWS_COL_COUNTRY), "Country");
+  CHECK_STR(mc_str(MC_STR_ANDROID_COVER_OF), "Cover of {0}");
+  CHECK_STR(mc_str(MC_STR_COUNT), "");
+  CHECK_STR(mc_str((enum mc_str_id)-1), "");
+
+  /* Mnemonics: stripped by mc_str, kept by mc_str_mnemonic. */
+  CHECK_STR(mc_str(MC_STR_IMPORT_SKIP), "Skip");
+  CHECK_STR(mc_str_mnemonic(MC_STR_IMPORT_SKIP), "S_kip");
+  CHECK_STR(mc_str_mnemonic(MC_STR_CANCEL), "Cancel");
+
+  /* Core's own text comes from the table too. */
+  CHECK_STR(mc_status_str(MC_ERR_NOMEM), "out of memory");
+  CHECK_STR(mc_status_str((mc_status)-999), "unknown error");
+}
+
+static void test_locale(void) {
+  /* No translations yet: everything falls back to English. */
+  mc_strings_set_locale("xx-YY");
+  CHECK_STR(mc_strings_locale(), "en");
+  CHECK_STR(mc_str(MC_STR_CANCEL), "Cancel");
+  mc_strings_set_locale(NULL);
+  CHECK_STR(mc_strings_locale(), "en");
+  mc_strings_set_locale("C");
+  CHECK_STR(mc_strings_locale(), "en");
+  mc_strings_set_locale("en_US.UTF-8");
+  CHECK_STR(mc_strings_locale(), "en");
+}
+
+static void test_plurals(void) {
+  CHECK_STR(mc_str_plural(MC_STR_TRACKS, 1), "{0:d} track");
+  CHECK_STR(mc_str_plural(MC_STR_TRACKS, 0), "{0:d} tracks");
+  CHECK_STR(mc_str_plural(MC_STR_TRACKS, 2), "{0:d} tracks");
+  CHECK_STR(mc_str_plural(MC_STR_TRACKS, 11), "{0:d} tracks");
+  CHECK_STR(mc_str_plural(MC_STR_TRACKS, -1), "{0:d} track");
+  CHECK_STR(mc_str(MC_STR_TRACKS), "{0:d} tracks"); /* a plural's "other" */
+  CHECK_STR(mc_str_plural(MC_STR_CANCEL, 1), "Cancel"); /* not a plural */
+
+  char buf[64];
+  long n = 1;
+  mc_format(buf, sizeof buf, mc_str_plural(MC_STR_TRACKS, n), MC_D(n));
+  CHECK_BUF(buf, "1 track");
+}
+
+static void test_format(void) {
+  char buf[64];
+  CHECK(mc_format(buf, sizeof buf, "{1}, then {0}", MC_S("b"), MC_S("a")) == 9);
+  CHECK_BUF(buf, "a, then b");
+  mc_format(buf, sizeof buf, "{0}{0}{0}", MC_S("ab"));
+  CHECK_BUF(buf, "ababab");
+  mc_format(buf, sizeof buf, "{0:d} of {1:d}", MC_D(3), MC_D(-12));
+  CHECK_BUF(buf, "3 of -12");
+  mc_format(buf, sizeof buf, "{0}", MC_D(LLONG_MIN));
+  CHECK_BUF(buf, "-9223372036854775808");
+  mc_format(buf, sizeof buf, "{0:d}", MC_D(0));
+  CHECK_BUF(buf, "0");
+
+  /* Escapes, and what isn't a placeholder. */
+  mc_format(buf, sizeof buf, "{{0}} is {0}", MC_S("x"));
+  CHECK_BUF(buf, "{0} is x");
+  mc_format(buf, sizeof buf, "{{{0}}}", MC_S("x"));
+  CHECK_BUF(buf, "{x}");
+  mc_format(buf, sizeof buf, "{x} {0 {} } {", MC_S("x"));
+  CHECK_BUF(buf, "{x} {0 {} } {");
+  mc_format(buf, sizeof buf, "{0} {1} {0:s}", MC_S("x"));
+  CHECK_BUF(buf, "x {1} {0:s}"); /* missing argument, unknown type: copied through */
+  mc_format(buf, sizeof buf, "[{0}]", MC_S(NULL));
+  CHECK_BUF(buf, "[]");
+  CHECK(mc_format_args(buf, sizeof buf, "{0} plain", NULL, 0) == 9);
+  CHECK_BUF(buf, "{0} plain");
+  CHECK(mc_format_args(buf, sizeof buf, NULL, NULL, 0) == 0);
+  CHECK_BUF(buf, "");
+
+  /* A real one. */
+  mc_format(buf, sizeof buf, mc_str(MC_STR_IMPORT_MATCH_YEAR), MC_S("Radiohead"), MC_S("OK Computer"),
+            MC_D(1997));
+  CHECK_BUF(buf, "Radiohead \xE2\x80\x93 OK Computer (1997)");
+}
+
+/* The summary line's total: minutes, hours and minutes, then hours alone. */
+static void test_playing_time(void) {
+  char buf[64];
+  struct {
+    long long ms;
+    const char *text;
+  } cases[] = {
+    {0, ""},                                /* not known: nothing to show */
+    {-1, ""},
+    {1, "1" NB "min"},                           /* a few seconds of music isn't 0 min */
+    {29999, "1" NB "min"},
+    {89999, "1" NB "min"},
+    {90000, "2" NB "min"},
+    {47 * 60000LL, "47" NB "min"},
+    {3569000, "59" NB "min"},
+    {3570000, "1" NB "hr" NB "0" NB "min"},                /* 59:30 rounds up to the hour */
+    {90 * 60000LL, "1" NB "hr" NB "30" NB "min"},
+    {25 * 3600000LL + 4 * 60000LL, "25" NB "hr" NB "4" NB "min"}, /* over a day */
+    {99 * 3600000LL + 29 * 60000LL, "99" NB "hr" NB "29" NB "min"},
+    {99 * 3600000LL + 30 * 60000LL, "100" NB "hours"},
+    {100 * 3600000LL, "100" NB "hours"},
+    {700 * 3600000LL, "700" NB "hours"},         /* past what an int of ms holds */
+    {1234 * 3600000LL + 29 * 60000LL, "1234" NB "hours"},
+  };
+  for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+    size_t n = mc_format_playing_time(buf, sizeof buf, cases[i].ms);
+    CHECK_BUF(buf, cases[i].text);
+    CHECK(n == strlen(cases[i].text));
+  }
+  CHECK_STR(mc_str_plural(MC_STR_DURATION_HOURS, 1), "{0}" NB "hour");
+
+  /* Cut short like mc_format, and nothing needs no room. */
+  CHECK(mc_format_playing_time(buf, 3, 47 * 60000LL) == 7);
+  CHECK_BUF(buf, "47");
+  CHECK(mc_format_playing_time(NULL, 0, 0) == 0);
+}
+
+/* Stands in for a frontend's grouping, so it shows when it's used. */
+static void group_with_dots(long long n, char *out, size_t size) {
+  snprintf(out, size, "%lld.%03lld", n / 1000, n % 1000);
+}
+
+/* Library stats' totals: 0 is a number there, and thousands of hours are grouped. */
+static void test_total_time(void) {
+  char buf[64];
+  struct {
+    long long ms;
+    const char *text;
+  } cases[] = {
+    {0, "0" NB "min"},
+    {47 * 60000LL, "47" NB "min"},
+    {90 * 60000LL, "1" NB "hr" NB "30" NB "min"},
+    {999 * 3600000LL, "999" NB "hours"},
+    {999 * 3600000LL + 29 * 60000LL, "999" NB "hours"},
+    {999 * 3600000LL + 30 * 60000LL, "1.000" NB "hours"},
+    {1234 * 3600000LL, "1.234" NB "hours"},
+  };
+  for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+    size_t n = mc_format_total_time(buf, sizeof buf, cases[i].ms, group_with_dots);
+    CHECK_BUF(buf, cases[i].text);
+    CHECK(n == strlen(cases[i].text));
+  }
+}
+
+static void test_size(void) {
+  char buf[64];
+  struct {
+    long long bytes;
+    const char *text;
+  } cases[] = {
+    {0, "0 bytes"},
+    {1, "1 byte"},
+    {1023, "1023 bytes"},
+    {1024, "1.0 KB"},
+    {1536, "1.5 KB"},
+    {1024 * 1024LL - 1, "1024 KB"},
+    {100 * 1024LL, "100 KB"},
+    {5 * 1024 * 1024LL, "5.0 MB"},
+    {3LL << 30, "3.0 GB"},
+    {2LL << 40, "2.0 TB"},
+    {2000LL << 40, "2000 TB"}, /* TB is as far as it goes */
+  };
+  for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+    size_t n = mc_format_size(buf, sizeof buf, cases[i].bytes);
+    CHECK_BUF(buf, cases[i].text);
+    CHECK(n == strlen(cases[i].text));
+  }
+}
+
+static void test_truncation(void) {
+  char buf[8];
+  memset(buf, 'z', sizeof buf);
+  CHECK(mc_format(buf, sizeof buf, "{0} and {1}", MC_S("this"), MC_S("that")) == 13);
+  CHECK_BUF(buf, "this an");
+  CHECK(mc_format(buf, 1, "{0}", MC_S("abc")) == 3);
+  CHECK_BUF(buf, "");
+  CHECK(mc_format(NULL, 0, "{0}", MC_S("abc")) == 3);
+  /* A UTF-8 character is written whole or not at all: "a…" needs 5 bytes with the NUL. */
+  CHECK(mc_format(buf, 4, "a{0}", MC_S("\xE2\x80\xA6")) == 4);
+  CHECK_BUF(buf, "a");
+  CHECK(mc_format(buf, 5, "a{0}", MC_S("\xE2\x80\xA6")) == 4);
+  CHECK_BUF(buf, "a\xE2\x80\xA6");
+  /* Nothing more after the first character that doesn't fit, even a shorter one. */
+  CHECK(mc_format(buf, 4, "ab\xE2\x80\xA6" "c", MC_S("")) == 6);
+  CHECK_BUF(buf, "ab");
+
+  char *s = mc_format_alloc("{0}: {1:d} tracks", MC_S("Long playlist name"), MC_D(1234));
+  CHECK_STR(s, "Long playlist name: 1234 tracks");
+  mc_free(s);
+}
+
+int main(void) {
+  test_lookup();
+  test_locale();
+  test_plurals();
+  test_format();
+  test_playing_time();
+  test_total_time();
+  test_size();
+  test_truncation();
+  return TEST_RESULT();
+}

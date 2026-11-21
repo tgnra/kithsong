@@ -1,0 +1,290 @@
+package ng.kithso.android.data
+
+import androidx.compose.runtime.Immutable
+import kotlinx.coroutines.flow.StateFlow
+import ng.kithso.core.CorePlayer
+import ng.kithso.core.LibraryStats
+
+/**
+ * Album art to load: [uid] names the album (or artist or playlist) whose cover it is, and
+ * [label] gives the placeholder its letter and colour when there is no cover. [file] is the
+ * cover image (never an audio file: embedded art isn't shown), and [version] its modification
+ * time, so a changed cover isn't served from the cache; with no [file], art is a placeholder.
+ */
+@Immutable
+data class ArtRef(val uid: String, val label: String, val file: String? = null, val version: Long = 0)
+
+/** An album. The library's album list is ordered by [title]. */
+@Immutable
+data class Album(
+    val uid: String,
+    val title: String,
+    val artist: String,
+    val year: Int,
+    val art: ArtRef,
+    val mix: Boolean = false,
+)
+
+/**
+ * An artist with something on this phone: [albumCount] albums here as album artist, and
+ * [trackCount] tracks here credited to them. [sortName] is what artists are ordered by: their
+ * sort name ("Beatles, The"), else their name.
+ */
+@Immutable
+data class Artist(
+    val uid: String,
+    val name: String,
+    val albumCount: Int,
+    val art: ArtRef,
+    val trackCount: Int = 0,
+    val sortName: String = name,
+)
+
+@Immutable
+data class Playlist(val uid: String, val name: String, val trackCount: Int, val art: ArtRef)
+
+/** An album group, manual or smart, with [albumCount] albums on this phone. */
+@Immutable
+data class AlbumGroup(val uid: String, val name: String, val albumCount: Int, val art: ArtRef)
+
+/**
+ * A track; [album] is empty for one on no album. [albumUid] and [artistUid] are its album's
+ * and artist's, for going to their pages; null when it has none, or isn't known.
+ */
+@Immutable
+data class Track(
+    val uid: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val trackNo: Int,
+    val durationMs: Long,
+    val art: ArtRef,
+    /** The file to play, or null when the track has none on this device. */
+    val path: String? = null,
+    /** Its entry in the playlist it was listed from, for moving and removing it; else null. */
+    val entryUid: String? = null,
+    val albumUid: String? = null,
+    val artistUid: String? = null,
+)
+
+/**
+ * What a track list screen shows: an album, an artist, a playlist or an album group. A smart
+ * playlist is a Playlist and a smart album group an AlbumGroup, as the core's recents have them.
+ * [group] is the album group an album was opened from, if any: played from there it goes on
+ * into the group's following albums, where the same album from anywhere else stays one album.
+ */
+@Immutable
+data class CollectionRef(val kind: Kind, val uid: String, val group: String? = null) {
+    enum class Kind { Album, Artist, Playlist, AlbumGroup }
+
+    val parentGroup: CollectionRef?
+        get() = group?.let { CollectionRef(Kind.AlbumGroup, it) }
+}
+
+/**
+ * Something played recently, shown under Recents. [artist] is an album's artist; artists,
+ * playlists and album groups have none, and are labelled by their kind instead.
+ */
+@Immutable
+data class Recent(
+    val ref: CollectionRef,
+    val title: String,
+    val artist: String?,
+    val art: ArtRef,
+)
+
+/** The library as the main screen shows it. */
+@Immutable
+data class Library(
+    val recents: List<Recent>,
+    val playlists: List<Playlist>,
+    val albums: List<Album>,
+    val artists: List<Artist>,
+    val albumGroups: List<AlbumGroup> = emptyList(),
+) {
+    /** No music here: an empty playlist or album group doesn't change that. */
+    val isEmpty: Boolean
+        get() = recents.isEmpty() && albums.isEmpty() && artists.isEmpty() &&
+            playlists.all { it.trackCount == 0 } && albumGroups.all { it.albumCount == 0 }
+
+    /**
+     * The art of [ref], as its row shows it and its track list has it, or null if it isn't
+     * here: known before the track list is read, for the screen opening it.
+     */
+    fun artOf(ref: CollectionRef): ArtRef? = when (ref.kind) {
+        CollectionRef.Kind.Album -> albums.firstOrNull { it.uid == ref.uid }?.art
+        CollectionRef.Kind.Artist -> artists.firstOrNull { it.uid == ref.uid }?.art
+        CollectionRef.Kind.Playlist -> playlists.firstOrNull { it.uid == ref.uid }?.art
+        CollectionRef.Kind.AlbumGroup -> albumGroups.firstOrNull { it.uid == ref.uid }?.art
+    }
+
+    companion object {
+        val Empty = Library(emptyList(), emptyList(), emptyList(), emptyList())
+    }
+}
+
+/**
+ * The Home page's rows (the core's home_picks.h), top to bottom, leaving out those with nothing
+ * here. Each tile is a [Recent], as Recents' are: something to open or play, with its title and
+ * art. Like the main screen's lists, a row only has what's on
+ * this phone. [hasMusic] is a library with an album or playlist to show, and [hasPlays] one with
+ * something in it played, without which the rows that go by plays have nothing in them yet.
+ */
+@Immutable
+data class Home(val rows: List<HomeRow>, val hasMusic: Boolean, val hasPlays: Boolean) {
+    companion object {
+        val Empty = Home(emptyList(), hasMusic = false, hasPlays = false)
+    }
+}
+
+/** A row of the Home page: [kind] says which, and so its heading. */
+@Immutable
+data class HomeRow(val kind: Kind, val items: List<Recent>) {
+    enum class Kind { Recents, PlayedLately, NotPlayedLately, Random }
+}
+
+/**
+ * A track list screen's contents. An album has its [artist] and [year] (0 if unknown), an
+ * artist its [albumCount] and [singles] (its tracks alone on their album or on none, which
+ * aren't among its [albums]). An artist and an album group have their [albums] here too; a
+ * group's [tracks] are its albums' in turn, for playing it. [canReshuffle] is a smart list
+ * ordered by random, which [LibrarySource.reshuffle] gives a new order.
+ */
+@Immutable
+data class TrackList(
+    val title: String,
+    val art: ArtRef,
+    val tracks: List<Track>,
+    val artist: String = "",
+    val year: Int = 0,
+    val albumCount: Int = 0,
+    val albums: List<Album> = emptyList(),
+    val singles: List<Track> = emptyList(),
+    val canReshuffle: Boolean = false,
+    val mix: Boolean = false,
+)
+
+/**
+ * A track search found; [albumUid] is its album, played from the track on. A single has none
+ * (its album isn't listed, or it's on no album): it's [track], played alone.
+ */
+@Immutable
+data class FoundTrack(
+    val uid: String,
+    val title: String,
+    val artist: String,
+    val album: String,
+    val albumUid: String?,
+    val art: ArtRef,
+    val track: Track? = null,
+)
+
+/**
+ * What a search found on this phone, each kind best first. [order] is the kinds by their best
+ * result, the order to show their sections in.
+ */
+@Immutable
+data class SearchResults(
+    val order: List<Kind>,
+    val artists: List<Artist> = emptyList(),
+    val albums: List<Album> = emptyList(),
+    val tracks: List<FoundTrack> = emptyList(),
+    val playlists: List<Playlist> = emptyList(),
+    val albumGroups: List<AlbumGroup> = emptyList(),
+) {
+    enum class Kind { Artists, Albums, Tracks, Playlists, AlbumGroups }
+
+    val isEmpty: Boolean get() = order.isEmpty()
+
+    companion object {
+        val Empty = SearchResults(emptyList())
+    }
+}
+
+/**
+ * Something a sync profile can select: an album (with its [artist] and [year], 0 if unknown),
+ * an artist or an album group (with its [albumCount]), or a playlist. [sortKey] is what its
+ * list is ordered by (see [Album] and [Artist.sortName]).
+ */
+@Immutable
+data class ProfileChoice(
+    val uid: String,
+    val name: String,
+    val artist: String? = null,
+    val year: Int = 0,
+    val albumCount: Int = 0,
+    val sortKey: String = name,
+)
+
+/**
+ * What a sync profile can select, from the whole library rather than just what's on this
+ * phone: every album, artist, manual playlist and manual album group, by the core's uids.
+ */
+@Immutable
+data class ProfileChoices(
+    val albums: List<ProfileChoice>,
+    val artists: List<ProfileChoice>,
+    val playlists: List<ProfileChoice>,
+    val albumGroups: List<ProfileChoice>,
+)
+
+/** Where the UI gets the library from: the core ([CoreLibrarySource]) or [FakeLibrary]. */
+interface LibrarySource {
+    /** The library, or null until it has been read for the first time. */
+    val library: StateFlow<Library?>
+
+    /**
+     * The Home page's rows, or null until they've been read. Reading them goes through the whole
+     * library and its play log, so a source may keep them up to date only while something
+     * collects this, and read them again when something next does; what was read last stays
+     * meanwhile.
+     */
+    val home: StateFlow<Home?>
+
+    /** The tracks of [ref], or null if it no longer exists. */
+    suspend fun trackList(ref: CollectionRef): TrackList?
+
+    /** The tracks [uids], in order, with null for one the library doesn't have. */
+    suspend fun tracks(uids: List<String>): List<Track?>
+
+    /** Notes that [ref] was played, putting it first under Recents. */
+    fun notePlayed(ref: CollectionRef)
+
+    /** What matches [query] (see the core's search.h), among what's on this phone. */
+    suspend fun search(query: String): SearchResults
+
+    /**
+     * The artists track [trackUid] is credited to that are listed here, in the credit's order
+     * ("A feat. B" is A, then B): its album's for a track with none of its own, and none for
+     * an unknown artist.
+     */
+    suspend fun trackArtists(trackUid: String): List<Artist>
+
+    /** Gives smart list [ref], which is ordered by random, a new order. */
+    suspend fun reshuffle(ref: CollectionRef)
+
+    /**
+     * Counts a play of track [trackUid] in its play count and last played time, which sync and
+     * which smart playlists and Recents read. The player calls it once a track has played
+     * long enough to count.
+     */
+    fun recordPlay(trackUid: String)
+
+    /** Adds a play that has ended, counted or not, to the library's play log. */
+    fun logPlay(event: CorePlayer.PlayEvent)
+
+    /** Numbers about the library; all of them 0 if it can't be read. */
+    suspend fun stats(): LibraryStats
+}
+
+/**
+ * Taking things out of Recents, for a [LibrarySource] that can ([CoreLibrarySource]; the
+ * made-up library's recents stay as they are). Like opening, it syncs to every device.
+ */
+interface RecentsEditor {
+    /** Takes [ref] out of Recents until it's next played. */
+    fun removeRecent(ref: CollectionRef)
+
+    fun clearRecents()
+}

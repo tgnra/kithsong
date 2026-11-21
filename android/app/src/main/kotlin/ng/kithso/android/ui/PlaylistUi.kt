@@ -1,0 +1,947 @@
+package ng.kithso.android.ui
+
+import android.widget.Toast
+import androidx.annotation.StringRes
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import ng.kithso.android.R
+import ng.kithso.android.data.Addition
+import ng.kithso.android.data.Album
+import ng.kithso.android.data.AlbumGroup
+import ng.kithso.android.data.Artist
+import ng.kithso.android.data.CollectionRef
+import ng.kithso.android.data.DeleteOutcome
+import ng.kithso.android.data.DeleteSize
+import ng.kithso.android.data.Deletion
+import ng.kithso.android.data.DeviceRemover
+import ng.kithso.android.data.EditFailure
+import ng.kithso.android.data.FoundTrack
+import ng.kithso.android.data.Library
+import ng.kithso.android.data.LibraryDeleter
+import ng.kithso.android.data.Playlist
+import ng.kithso.android.data.PlaylistChoice
+import ng.kithso.android.data.PlaylistEditor
+import ng.kithso.android.data.Recent
+import ng.kithso.android.data.RecentsEditor
+import ng.kithso.android.data.SmartListEditor
+import ng.kithso.android.data.TagTarget
+import ng.kithso.android.data.Track
+import ng.kithso.android.playback.Playback
+import ng.kithso.android.playback.QueueAddition
+import ng.kithso.core.HerePreview
+import ng.kithso.core.HereState
+import ng.kithso.core.ProfileItemKind
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+
+/**
+ * The state of the long-press menus and their dialogs, which [PlaylistSheets] shows over
+ * everything. [editor] is null when the library can't be edited and [deleter] when nothing can
+ * be deleted from it (the made-up one): the menus then offer only playing. Each optional
+ * collaborator adds its own entries where it applies. A delete or removal that takes any of
+ * [playback]'s queue empties it first, as Windows does.
+ */
+@Stable
+class PlaylistActions(
+    val editor: PlaylistEditor?,
+    val deleter: LibraryDeleter? = null,
+    val remover: DeviceRemover? = null,
+    val recents: RecentsEditor? = null,
+    val playback: Playback? = null,
+    val smart: SmartListEditor? = null,
+    val onEdit: ((TagTarget) -> Unit)? = null,
+) {
+    internal var sheet by mutableStateOf<Sheet?>(null)
+    internal var dialog by mutableStateOf<Dialog?>(null)
+
+    /** What the smart list editor is open on, or null. */
+    var smartEditing by mutableStateOf<SmartEditTarget?>(null)
+
+    /** The + on the Playlists heading, or on Album groups if [isAlbums]: asks which kind to make. */
+    fun newList(isAlbums: Boolean) {
+        if (editor != null) dialog = Dialog.NewList(isAlbums)
+    }
+
+    /** New smart playlist…, or New smart album group… if [isAlbums]. */
+    fun newSmart(isAlbums: Boolean) {
+        if (smart != null) smartEditing = SmartEditTarget.New(isAlbums)
+    }
+
+    /** Edit rules… on smart list [uid]. */
+    fun editSmart(uid: String) {
+        if (smart != null) smartEditing = SmartEditTarget.Edit(uid)
+    }
+
+    fun recentMenu(recent: Recent) {
+        sheet = Sheet.RecentMenu(recent)
+    }
+
+    fun playlistMenu(playlist: Playlist) {
+        sheet = Sheet.PlaylistMenu(playlist)
+    }
+
+    fun albumGroupMenu(group: AlbumGroup) {
+        sheet = Sheet.AlbumGroupMenu(group)
+    }
+
+    /**
+     * [groupUid]: the manual album group the album is listed from, which it can be taken out of.
+     * [inGroup]: the album group, manual or smart, it's listed from or was opened from, whose
+     * following albums its Play goes on into.
+     */
+    fun albumMenu(album: Album, groupUid: String? = null, inGroup: String? = null) {
+        sheet = Sheet.AlbumMenu(album, groupUid, inGroup)
+    }
+
+    fun artistMenu(artist: Artist) {
+        sheet = Sheet.ArtistMenu(artist)
+    }
+
+    /**
+     * [removable]: the track is listed from a manual playlist and can be taken out of it.
+     * [from]: the page it's listed on, which its Go to album or Go to artist would only open again.
+     */
+    fun trackMenu(track: Track, removable: Boolean, from: CollectionRef? = null) {
+        sheet = Sheet.TrackMenu(track, removable && track.entryUid != null, from)
+    }
+
+    /**
+     * A search result's menu: Add to playlist, and Go to its album and its [artists] (those it's
+     * credited to that are listed here, see [ng.kithso.android.data.LibrarySource.trackArtists]).
+     */
+    fun foundTrackMenu(track: FoundTrack, artists: List<Artist>) {
+        sheet = Sheet.FoundTrackMenu(track, artists)
+    }
+
+    fun addToPlaylist(what: Addition) {
+        if (editor != null) sheet = Sheet.AddTo(what)
+    }
+
+    internal sealed interface Sheet {
+        data class RecentMenu(val recent: Recent) : Sheet
+        data class PlaylistMenu(val playlist: Playlist) : Sheet
+        data class AlbumGroupMenu(val group: AlbumGroup) : Sheet
+        data class AlbumMenu(val album: Album, val groupUid: String?, val inGroup: String? = null) : Sheet
+        data class ArtistMenu(val artist: Artist) : Sheet
+        data class TrackMenu(val track: Track, val removable: Boolean, val from: CollectionRef?) : Sheet
+        data class FoundTrackMenu(val track: FoundTrack, val artists: List<Artist>) : Sheet
+        data class AddTo(val what: Addition) : Sheet
+        data class AddToGroup(val albumUid: String) : Sheet
+    }
+
+    internal sealed interface Dialog {
+        /** Which kind of playlist, or of album group if [isAlbums], to make. */
+        data class NewList(val isAlbums: Boolean) : Dialog
+        // Asking for the name of one starting with [what], or empty without it.
+        data class NewPlaylist(val what: Addition?) : Dialog
+        data class NewGroup(val albumUid: String?) : Dialog
+        // A playlist's, or if [group] an album group's; a smart one's if [smart].
+        data class Rename(val uid: String, val name: String, val group: Boolean = false, val smart: Boolean = false) : Dialog
+        data class Delete(val uid: String, val name: String, val group: Boolean = false, val smart: Boolean = false) : Dialog
+        /** Deleting an album, artist or track from the library, which is asked first. */
+        data class DeleteFromLibrary(val what: Deletion) : Dialog
+        /** Removing an album or artist from this phone only, which is asked first. */
+        data class RemoveHere(val kind: ProfileItemKind, val uid: String, val name: String) : Dialog
+    }
+}
+
+@get:StringRes
+private val EditFailure.message: Int
+    get() = when (this) {
+        EditFailure.PlaylistAdd -> R.string.playlist_add_failed
+        EditFailure.PlaylistCreate -> R.string.playlist_create_failed
+        EditFailure.PlaylistRename -> R.string.playlist_rename_failed
+        EditFailure.PlaylistDelete -> R.string.playlist_delete_failed
+        EditFailure.PlaylistRemove -> R.string.playlist_remove_failed
+        EditFailure.PlaylistMove -> R.string.playlist_move_failed
+        EditFailure.GroupAdd -> R.string.album_group_add_failed
+        EditFailure.GroupCreate -> R.string.album_group_create_failed
+        EditFailure.GroupRename -> R.string.album_group_rename_failed
+        EditFailure.GroupDelete -> R.string.album_group_delete_failed
+        EditFailure.GroupRemove -> R.string.album_group_remove_failed
+        EditFailure.GroupMove -> R.string.album_group_move_failed
+        EditFailure.SmartCreate -> R.string.smart_create_failed
+        EditFailure.SmartSave -> R.string.smart_save_failed
+        EditFailure.SmartRename -> R.string.smart_rename_failed
+        EditFailure.SmartDelete -> R.string.smart_delete_failed
+    }
+
+/** One row of a menu sheet. */
+private class SheetAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
+
+/** Edit… on an album, artist or track, if the library can be edited. */
+@Composable
+private fun editAction(actions: PlaylistActions, kind: TagTarget.Kind, uid: String): SheetAction? = actions.onEdit?.let { edit ->
+    SheetAction(stringResource(R.string.edit_menu), Icons.Edit) { edit(TagTarget(kind, uid)) }
+}
+
+/** A smart playlist's (or if [group] smart album group's) Edit rules…, Rename… and Delete, as on Linux. */
+@Composable
+private fun smartActions(actions: PlaylistActions, uid: String, name: String, group: Boolean): List<SheetAction> = listOf(
+    SheetAction(stringResource(R.string.smart_edit_menu), Icons.Edit) { actions.editSmart(uid) },
+    SheetAction(stringResource(R.string.playlist_rename_menu), Icons.Edit) {
+        actions.dialog = PlaylistActions.Dialog.Rename(uid, name, group = group, smart = true)
+    },
+    SheetAction(
+        stringResource(if (group) R.string.smart_delete_group_menu else R.string.smart_delete_playlist_menu),
+        Icons.Delete,
+    ) {
+        actions.dialog = PlaylistActions.Dialog.Delete(uid, name, group = group, smart = true)
+    },
+)
+
+/**
+ * Shows [actions]' open menu or dialog, if any. [onPlay] plays a collection from its start,
+ * or shuffled; [onDeleted] is called with a playlist or album group once it's been deleted,
+ * to close its page. A track's Go to album and Go to artist call [onOpen], and are offered
+ * when [library] has the page: not for a track on no album, or a single, whose album isn't
+ * listed.
+ */
+@Composable
+fun PlaylistSheets(
+    actions: PlaylistActions,
+    library: Library?,
+    onPlay: (CollectionRef, shuffle: Boolean) -> Unit,
+    onDeleted: (CollectionRef) -> Unit,
+    onOpen: (CollectionRef) -> Unit,
+) {
+    val editor = actions.editor
+    val deleter = actions.deleter
+    val remover = actions.remover
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current.applicationContext
+    val syncHereFailed = stringResource(R.string.sync_here_failed)
+    // A failed edit says so; most of them look like nothing happened otherwise.
+    if (editor != null) LaunchedEffect(editor) {
+        editor.failures.collect { failure ->
+            Toast.makeText(context, context.getString(failure.message), Toast.LENGTH_LONG).show()
+        }
+    }
+    // Remove from this phone or Sync to this phone for an album or artist, where it applies.
+    @Composable
+    fun hereAction(kind: ProfileItemKind, uid: String, name: String): SheetAction? {
+        val state by produceState(HereState.Unavailable, kind, uid) {
+            value = remover?.hereState(kind, uid) ?: HereState.Unavailable
+        }
+        val bringHere: () -> Unit = {
+            scope.launch {
+                if (remover?.restoreHere(kind, uid) == false) {
+                    Toast.makeText(context, syncHereFailed, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        return when (state) {
+            HereState.Unavailable -> null
+            HereState.Held -> SheetAction(stringResource(R.string.remove_from_this_phone), Icons.Remove) {
+                actions.dialog = PlaylistActions.Dialog.RemoveHere(kind, uid, name)
+            }
+            HereState.Removed -> SheetAction(stringResource(R.string.sync_to_this_phone), Icons.Sync, bringHere)
+            HereState.NotIncluded -> SheetAction(stringResource(R.string.add_to_this_phone), Icons.Sync, bringHere)
+        }
+    }
+    // Play next and Play last. Whether it went in shows as a toast,
+    // as the desktops show it in the now-playing bar.
+    @Composable
+    fun queueActions(what: QueueAddition): List<SheetAction> {
+        val playback = actions.playback ?: return emptyList()
+        val add = { next: Boolean ->
+            scope.launch {
+                val added = playback.addUpNext(what, next)
+                val text = if (added) R.string.queue_added else R.string.queue_nothing_here
+                Toast.makeText(context, text, if (added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+            }
+            Unit
+        }
+        return listOf(
+            SheetAction(stringResource(R.string.play_next), Icons.QueuePlayNext) { add(true) },
+            SheetAction(stringResource(R.string.play_last), Icons.PlaylistPlay) { add(false) },
+        )
+    }
+    when (val sheet = actions.sheet) {
+        null -> Unit
+        is PlaylistActions.Sheet.RecentMenu -> {
+            val recent = sheet.recent
+            val recents = actions.recents
+            val edit = when (recent.ref.kind) {
+                CollectionRef.Kind.Album -> editAction(actions, TagTarget.Kind.Album, recent.ref.uid)
+                CollectionRef.Kind.Artist -> editAction(actions, TagTarget.Kind.Artist, recent.ref.uid)
+                else -> null
+            }
+            MenuSheet(
+                actions,
+                recent.title,
+                recent.subtitle(),
+                buildList {
+                    add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(recent.ref, false) })
+                    add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(recent.ref, true) })
+                    addAll(queueActions(QueueAddition(recent.ref.kind, recent.ref.uid, recent.title)))
+                    if (edit != null) add(edit)
+                    if (recents != null) {
+                        add(SheetAction(stringResource(R.string.recent_remove_menu), Icons.Remove) {
+                            recents.removeRecent(recent.ref)
+                        })
+                        add(SheetAction(stringResource(R.string.recents_clear_menu), Icons.ClearAll) {
+                            recents.clearRecents()
+                        })
+                    }
+                },
+            )
+        }
+        is PlaylistActions.Sheet.PlaylistMenu -> {
+            val playlist = sheet.playlist
+            val ref = CollectionRef(CollectionRef.Kind.Playlist, playlist.uid)
+            // A smart playlist's rules are edited in the rule editor.
+            val editable by produceState(false, playlist.uid) { value = editor?.isEditable(playlist.uid) == true }
+            val smart by produceState(false, playlist.uid) { value = actions.smart?.isSmart(playlist.uid) == true }
+            MenuSheet(
+                actions,
+                playlist.name,
+                pluralStringResource(R.plurals.tracks, playlist.trackCount, playlist.trackCount),
+                buildList {
+                    add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
+                    add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    addAll(queueActions(QueueAddition(ref.kind, ref.uid, playlist.name)))
+                    if (editable) {
+                        add(SheetAction(stringResource(R.string.playlist_rename_menu), Icons.Edit) {
+                            actions.dialog = PlaylistActions.Dialog.Rename(playlist.uid, playlist.name)
+                        })
+                        add(SheetAction(stringResource(R.string.playlist_delete_menu), Icons.Delete) {
+                            actions.dialog = PlaylistActions.Dialog.Delete(playlist.uid, playlist.name)
+                        })
+                    }
+                    if (smart) addAll(smartActions(actions, playlist.uid, playlist.name, group = false))
+                },
+            )
+        }
+        is PlaylistActions.Sheet.AlbumGroupMenu -> {
+            val group = sheet.group
+            val ref = CollectionRef(CollectionRef.Kind.AlbumGroup, group.uid)
+            // A smart album group's rules are edited in the rule editor.
+            val editable by produceState(false, group.uid) { value = editor?.isEditableGroup(group.uid) == true }
+            val smart by produceState(false, group.uid) { value = actions.smart?.isSmart(group.uid) == true }
+            MenuSheet(
+                actions,
+                group.name,
+                pluralStringResource(R.plurals.albums, group.albumCount, group.albumCount),
+                buildList {
+                    add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
+                    add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    addAll(queueActions(QueueAddition(ref.kind, ref.uid, group.name)))
+                    if (editable) {
+                        add(SheetAction(stringResource(R.string.playlist_rename_menu), Icons.Edit) {
+                            actions.dialog = PlaylistActions.Dialog.Rename(group.uid, group.name, group = true)
+                        })
+                        add(SheetAction(stringResource(R.string.album_group_delete_menu), Icons.Delete) {
+                            actions.dialog = PlaylistActions.Dialog.Delete(group.uid, group.name, group = true)
+                        })
+                    }
+                    if (smart) addAll(smartActions(actions, group.uid, group.name, group = true))
+                },
+            )
+        }
+        is PlaylistActions.Sheet.AlbumMenu -> {
+            val album = sheet.album
+            val ref = CollectionRef(CollectionRef.Kind.Album, album.uid, sheet.inGroup)
+            val groupUid = sheet.groupUid
+            val here = hereAction(ProfileItemKind.Album, album.uid, album.title)
+            val edit = editAction(actions, TagTarget.Kind.Album, album.uid)
+            MenuSheet(
+                actions,
+                album.title,
+                album.artist,
+                buildList {
+                    add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
+                    add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    addAll(queueActions(QueueAddition(ref.kind, ref.uid, album.title)))
+                    if (editor != null) {
+                        add(SheetAction(stringResource(R.string.add_to_playlist_menu), Icons.PlaylistAdd) {
+                            actions.addToPlaylist(Addition.Album(album.uid))
+                        })
+                        add(SheetAction(stringResource(R.string.add_to_album_group_menu), Icons.LibraryAdd) {
+                            actions.sheet = PlaylistActions.Sheet.AddToGroup(album.uid)
+                        })
+                        if (groupUid != null) {
+                            add(SheetAction(stringResource(R.string.remove_from_album_group), Icons.Remove) {
+                                editor.removeFromAlbumGroup(groupUid, album.uid)
+                            })
+                        }
+                    }
+                    if (edit != null) add(edit)
+                    if (here != null) add(here)
+                    if (deleter != null) {
+                        add(SheetAction(stringResource(R.string.delete_from_library_menu), Icons.Delete) {
+                            actions.dialog = PlaylistActions.Dialog.DeleteFromLibrary(
+                                Deletion(Deletion.Kind.Album, album.uid, album.title),
+                            )
+                        })
+                    }
+                },
+            )
+        }
+        is PlaylistActions.Sheet.ArtistMenu -> {
+            val artist = sheet.artist
+            val ref = CollectionRef(CollectionRef.Kind.Artist, artist.uid)
+            val here = hereAction(ProfileItemKind.Artist, artist.uid, artist.name)
+            val edit = editAction(actions, TagTarget.Kind.Artist, artist.uid)
+            MenuSheet(
+                actions,
+                artist.name,
+                artist.subtitle(),
+                buildList {
+                    add(SheetAction(stringResource(R.string.play), Icons.Play) { onPlay(ref, false) })
+                    add(SheetAction(stringResource(R.string.shuffle), Icons.Shuffle) { onPlay(ref, true) })
+                    addAll(queueActions(QueueAddition(ref.kind, ref.uid, artist.name)))
+                    if (edit != null) add(edit)
+                    if (here != null) add(here)
+                },
+            )
+        }
+        is PlaylistActions.Sheet.TrackMenu -> {
+            val track = sheet.track
+            // Pages the library has (a single's album isn't listed), other than the one it's on.
+            val album = track.albumUid?.let { CollectionRef(CollectionRef.Kind.Album, it) }
+                ?.takeIf { it != sheet.from && library?.artOf(it) != null }
+            val artist = track.artistUid?.let { CollectionRef(CollectionRef.Kind.Artist, it) }
+                ?.takeIf { it != sheet.from && library?.artOf(it) != null }
+            val edit = editAction(actions, TagTarget.Kind.Track, track.uid)
+            MenuSheet(
+                actions,
+                track.title,
+                trackByline(track.artist, track.album),
+                buildList {
+                    if (track.path != null) addAll(queueActions(QueueAddition(null, track.uid)))
+                    if (editor != null) {
+                        add(SheetAction(stringResource(R.string.add_to_playlist_menu), Icons.PlaylistAdd) {
+                            actions.addToPlaylist(Addition.Tracks(listOf(track.uid)))
+                        })
+                    }
+                    if (album != null) add(SheetAction(stringResource(R.string.go_to_album), Icons.Album) { onOpen(album) })
+                    if (artist != null) add(SheetAction(stringResource(R.string.go_to_artist), Icons.Person) { onOpen(artist) })
+                    if (edit != null) add(edit)
+                    val entry = track.entryUid
+                    val playlist = sheet.from?.takeIf { it.kind == CollectionRef.Kind.Playlist }?.uid
+                    if (editor != null && sheet.removable && entry != null && playlist != null) {
+                        add(SheetAction(stringResource(R.string.remove_from_playlist), Icons.Remove) { editor.removeEntry(playlist, entry) })
+                    }
+                    if (deleter != null) {
+                        val name = track.title.ifEmpty { stringResource(R.string.unknown_value) }
+                        add(SheetAction(stringResource(R.string.delete_from_library_menu), Icons.Delete) {
+                            actions.dialog = PlaylistActions.Dialog.DeleteFromLibrary(
+                                Deletion(Deletion.Kind.Track, track.uid, name),
+                            )
+                        })
+                    }
+                },
+            )
+        }
+        is PlaylistActions.Sheet.FoundTrackMenu -> {
+            val track = sheet.track
+            // A single's album isn't listed, so it has no page to go to.
+            val album = track.albumUid?.let { CollectionRef(CollectionRef.Kind.Album, it) }
+                ?.takeIf { library?.artOf(it) != null }
+            val artists = sheet.artists
+            val edit = editAction(actions, TagTarget.Kind.Track, track.uid)
+            MenuSheet(
+                actions,
+                track.title,
+                trackByline(track.artist, track.album),
+                buildList {
+                    addAll(queueActions(QueueAddition(null, track.uid)))
+                    if (editor != null) {
+                        add(SheetAction(stringResource(R.string.add_to_playlist_menu), Icons.PlaylistAdd) {
+                            actions.addToPlaylist(Addition.Tracks(listOf(track.uid)))
+                        })
+                    }
+                    if (album != null) add(SheetAction(stringResource(R.string.go_to_album), Icons.Album) { onOpen(album) })
+                    // One artist is Go to artist; each of several goes by name. An unknown
+                    // artist has none.
+                    for (artist in artists) {
+                        val ref = CollectionRef(CollectionRef.Kind.Artist, artist.uid)
+                        val label = if (artists.size == 1) stringResource(R.string.go_to_artist)
+                        else stringResource(R.string.go_to_named_artist, artist.name)
+                        add(SheetAction(label, Icons.Person) { onOpen(ref) })
+                    }
+                    if (edit != null) add(edit)
+                },
+            )
+        }
+        is PlaylistActions.Sheet.AddTo -> if (editor != null) {
+            AddToSheet(
+                actions,
+                title = stringResource(R.string.add_to_playlist),
+                newLabel = stringResource(R.string.new_playlist_menu),
+                icon = Icons.LibraryMusic,
+                added = R.string.playlist_added,
+                load = editor::playlistChoices,
+                onNew = { actions.dialog = PlaylistActions.Dialog.NewPlaylist(sheet.what) },
+                onPick = { editor.addToPlaylist(it.uid, sheet.what) },
+            )
+        }
+        is PlaylistActions.Sheet.AddToGroup -> if (editor != null) {
+            AddToSheet(
+                actions,
+                title = stringResource(R.string.add_to_album_group),
+                newLabel = stringResource(R.string.new_album_group_menu),
+                icon = Icons.Album,
+                added = R.string.album_group_added,
+                load = editor::albumGroupChoices,
+                onNew = { actions.dialog = PlaylistActions.Dialog.NewGroup(sheet.albumUid) },
+                onPick = { editor.addToAlbumGroup(it.uid, sheet.albumUid) },
+            )
+        }
+    }
+
+    when (val dialog = actions.dialog) {
+        null -> Unit
+        is PlaylistActions.Dialog.NewList -> NewListDialog(
+            isAlbums = dialog.isAlbums,
+            onManual = {
+                actions.dialog = if (dialog.isAlbums) PlaylistActions.Dialog.NewGroup(null) else PlaylistActions.Dialog.NewPlaylist(null)
+            },
+            onSmart = if (actions.smart != null) ({
+                actions.dialog = null
+                actions.newSmart(dialog.isAlbums)
+            }) else null,
+            onDismiss = { actions.dialog = null },
+        )
+        is PlaylistActions.Dialog.NewPlaylist -> NameDialog(
+            title = stringResource(R.string.new_playlist),
+            initial = "",
+            confirm = stringResource(R.string.create),
+            onConfirm = { name ->
+                if (dialog.what != null) editor?.addToNewPlaylist(name, dialog.what) else editor?.newPlaylist(name)
+            },
+            onDismiss = { actions.dialog = null },
+        )
+        is PlaylistActions.Dialog.NewGroup -> NameDialog(
+            title = stringResource(R.string.new_album_group),
+            initial = "",
+            confirm = stringResource(R.string.create),
+            onConfirm = { name ->
+                if (dialog.albumUid != null) editor?.addToNewAlbumGroup(name, dialog.albumUid) else editor?.newAlbumGroup(name)
+            },
+            onDismiss = { actions.dialog = null },
+        )
+        is PlaylistActions.Dialog.Rename -> NameDialog(
+            title = stringResource(
+                when {
+                    dialog.smart -> if (dialog.group) R.string.smart_rename_group_title else R.string.smart_rename_playlist_title
+                    else -> if (dialog.group) R.string.album_group_rename_title else R.string.playlist_rename_title
+                },
+            ),
+            initial = dialog.name,
+            confirm = stringResource(R.string.rename),
+            onConfirm = { name ->
+                if (name != dialog.name) {
+                    when {
+                        dialog.smart -> actions.smart?.renameSmart(dialog.uid, name)
+                        dialog.group -> editor?.renameAlbumGroup(dialog.uid, name)
+                        else -> editor?.renamePlaylist(dialog.uid, name)
+                    }
+                }
+            },
+            onDismiss = { actions.dialog = null },
+        )
+        is PlaylistActions.Dialog.Delete -> AlertDialog(
+            onDismissRequest = { actions.dialog = null },
+            title = { Text(stringResource(R.string.playlist_delete_title, dialog.name)) },
+            text = { Text(stringResource(if (dialog.group) R.string.album_group_delete_text else R.string.playlist_delete_text)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    actions.dialog = null
+                    when {
+                        dialog.smart -> actions.smart?.deleteSmart(dialog.uid)
+                        dialog.group -> editor?.deleteAlbumGroup(dialog.uid)
+                        else -> editor?.deletePlaylist(dialog.uid)
+                    }
+                    onDeleted(CollectionRef(if (dialog.group) CollectionRef.Kind.AlbumGroup else CollectionRef.Kind.Playlist, dialog.uid))
+                }) {
+                    Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { actions.dialog = null }) { Text(stringResource(R.string.cancel)) }
+            },
+        )
+        is PlaylistActions.Dialog.DeleteFromLibrary -> if (deleter != null) {
+            DeleteFromLibraryDialog(deleter, actions.playback, dialog.what, scope, onDismiss = { actions.dialog = null })
+        }
+        is PlaylistActions.Dialog.RemoveHere -> if (remover != null) {
+            RemoveHereDialog(remover, actions.playback, dialog, scope, onDismiss = { actions.dialog = null })
+        }
+    }
+}
+
+/**
+ * Asks before removing an album or artist from this phone only: how many files go from here,
+ * how many originals imported here stay until an archive has them, that it stays in the
+ * library and on the other devices, and how to get it back. Remove waits for the count, and
+ * stops [playback] first if its queue has any of the tracks. Afterwards a toast says if it
+ * failed, or if some files couldn't be removed.
+ */
+@Composable
+private fun RemoveHereDialog(
+    remover: DeviceRemover,
+    playback: Playback?,
+    what: PlaylistActions.Dialog.RemoveHere,
+    // Outlives the dialog, which closes as the removal starts, for the toasts after it.
+    scope: CoroutineScope,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current.applicationContext
+    val failed = stringResource(R.string.remove_here_failed)
+    val resources = context.resources
+    val name = what.name.ifEmpty { stringResource(R.string.unknown_value) }
+    val preview by produceState<HerePreview?>(null, what) {
+        val found = remover.herePreview(what.kind, what.uid)
+        if (found == null) {
+            Toast.makeText(context, failed, Toast.LENGTH_LONG).show()
+            onDismiss()
+        } else {
+            value = found
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.remove_from_this_phone_title, name)) },
+        text = {
+            preview?.let {
+                val parts = buildList {
+                    if (it.files > 0) add(pluralStringResource(R.plurals.remove_here_files, it.files, it.files))
+                    else if (it.kept == 0 && it.staying == 0) add(stringResource(R.string.remove_here_no_files))
+                    if (it.kept > 0) add(pluralStringResource(R.plurals.remove_here_kept, it.kept, it.kept))
+                    if (it.staying > 0) add(pluralStringResource(R.plurals.remove_here_staying, it.staying, it.staying))
+                    add(stringResource(R.string.remove_from_this_phone_back))
+                }
+                Text(parts.joinToString(" "))
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = preview != null,
+                onClick = {
+                    val kept = preview?.kept ?: 0
+                    onDismiss()
+                    scope.launch {
+                        val queue = playback?.queueUids.orEmpty()
+                        if (queue.isNotEmpty() && remover.takesAny(what.kind, what.uid, queue)) playback?.clear()
+                        val result = remover.removeHere(what.kind, what.uid)
+                        if (result == null) {
+                            Toast.makeText(context, failed, Toast.LENGTH_LONG).show()
+                        } else if (result.filesKept > kept) {
+                            val n = result.filesKept - kept
+                            Toast.makeText(
+                                context,
+                                resources.getQuantityString(R.plurals.remove_here_in_use, n, n),
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    }
+                },
+            ) {
+                Text(stringResource(R.string.remove), color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        },
+    )
+}
+
+/**
+ * Asks before deleting [what] from the library, saying how many files go from this phone for
+ * good (there's no trash to restore them from; in a group, the recycle bin keeps the delete
+ * until the next sync) and that it goes from every device, then
+ * deletes it, stopping [playback] first if its queue has any of the tracks. Delete waits for
+ * the count; something that's gone already closes the dialog. Afterwards a toast says if the
+ * delete failed, or some tracks stayed; the desktops show a message box.
+ */
+@Composable
+private fun DeleteFromLibraryDialog(
+    deleter: LibraryDeleter,
+    playback: Playback?,
+    what: Deletion,
+    // Outlives the dialog, which closes as the delete starts, for the toasts after it.
+    scope: CoroutineScope,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current.applicationContext
+    val failed = stringResource(R.string.delete_failed)
+    val resources = context.resources
+    val size by produceState<DeleteSize?>(null, what) {
+        val found = deleter.deleteSize(what)
+        if (found == null) Toast.makeText(context, failed, Toast.LENGTH_LONG).show()
+        if (found == null || found.tracks == 0) onDismiss() else value = found
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.playlist_delete_title, what.name)) },
+        text = {
+            size?.let {
+                Text(
+                    when {
+                        it.files == 0 -> stringResource(R.string.delete_no_files_text)
+                        // In a group: restorable from the recycle bin until the next sync.
+                        it.toBin -> pluralStringResource(R.plurals.delete_to_bin_text, it.files, it.files)
+                        else -> pluralStringResource(R.plurals.delete_permanently_text, it.files, it.files)
+                    },
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = size != null,
+                onClick = {
+                    onDismiss()
+                    scope.launch {
+                        val queue = playback?.queueUids.orEmpty()
+                        if (queue.isNotEmpty() && deleter.takesAny(what, queue)) playback?.clear()
+                        when (val outcome = deleter.delete(what)) {
+                            DeleteOutcome.Deleted -> Unit
+                            is DeleteOutcome.Kept -> Toast.makeText(
+                                context,
+                                resources.getQuantityString(R.plurals.delete_kept, outcome.tracks, outcome.tracks),
+                                Toast.LENGTH_LONG,
+                            ).show()
+                            DeleteOutcome.Failed -> Toast.makeText(context, failed, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                },
+            ) {
+                Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        },
+    )
+}
+
+/**
+ * A bottom sheet with [title] and [subtitle] over [items]. Picking one slides the sheet away,
+ * then does it; the action may open another sheet or a dialog.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MenuSheet(actions: PlaylistActions, title: String, subtitle: String, items: List<SheetAction>) {
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    val current = actions.sheet
+    // Only if this sheet is still the one open: the action may have opened another.
+    val pick: (() -> Unit) -> Unit = { action ->
+        scope.launch { state.hide() }.invokeOnCompletion {
+            if (actions.sheet == current) actions.sheet = null
+        }
+        action()
+    }
+    ModalBottomSheet(onDismissRequest = { if (actions.sheet == current) actions.sheet = null }, sheetState = state) {
+        Column(Modifier.navigationBarsPadding().padding(bottom = 8.dp)) {
+            SheetTitle(title, subtitle)
+            for (item in items) {
+                ListItem(
+                    headlineContent = { Text(item.label) },
+                    leadingContent = { Icon(item.icon, contentDescription = null) },
+                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.clickable { pick(item.onClick) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SheetTitle(title: String, subtitle: String?) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 8.dp)) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.semantics { heading() },
+        )
+        if (subtitle != null) {
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/**
+ * Add to playlist or Add to album group: [title] over New playlist… or New album group…
+ * ([newLabel]; [onNew] asks for a name), then the manual playlists or album groups [load]
+ * lists, those with nothing to play on this phone too. Picking one hands it to [onPick], and a
+ * toast says where it went ([added], with its name).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddToSheet(
+    actions: PlaylistActions,
+    title: String,
+    newLabel: String,
+    icon: ImageVector,
+    @StringRes added: Int,
+    load: suspend () -> List<PlaylistChoice>?,
+    onNew: () -> Unit,
+    onPick: (PlaylistChoice) -> Unit,
+) {
+    val state = rememberModalBottomSheetState()
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val current = actions.sheet
+    val choices by produceState<List<PlaylistChoice>?>(null, current) { value = load() }
+    val close: (() -> Unit) -> Unit = { then ->
+        scope.launch { state.hide() }.invokeOnCompletion {
+            if (actions.sheet == current) actions.sheet = null
+        }
+        then()
+    }
+    ModalBottomSheet(onDismissRequest = { if (actions.sheet == current) actions.sheet = null }, sheetState = state) {
+        SheetTitle(title, null)
+        LazyColumn(Modifier.navigationBarsPadding()) {
+            item(key = "new") {
+                ListItem(
+                    headlineContent = { Text(newLabel) },
+                    leadingContent = { Icon(Icons.Add, contentDescription = null) },
+                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.clickable { close(onNew) },
+                )
+            }
+            items(choices.orEmpty(), key = { it.uid }) { choice ->
+                val toast = stringResource(added, choice.name)
+                ListItem(
+                    headlineContent = { Text(choice.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingContent = { Icon(icon, contentDescription = null) },
+                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    modifier = Modifier.clickable {
+                        close {
+                            onPick(choice)
+                            Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * What the + on the Playlists heading, or if [isAlbums] on Album groups, opens: a list you fill
+ * yourself ([onManual], which goes on to ask its name) or a smart one ([onSmart], the rule
+ * editor), if those can be made.
+ */
+@Composable
+private fun NewListDialog(isAlbums: Boolean, onManual: () -> Unit, onSmart: (() -> Unit)?, onDismiss: () -> Unit) {
+    @Composable
+    fun Choice(title: Int, text: Int, icon: ImageVector, onClick: () -> Unit) {
+        ListItem(
+            headlineContent = { Text(stringResource(title)) },
+            supportingContent = { Text(stringResource(text)) },
+            leadingContent = { Icon(icon, contentDescription = null) },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier.clickable(onClick = onClick),
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(if (isAlbums) R.string.new_album_group else R.string.new_playlist)) },
+        text = {
+            Column {
+                if (isAlbums) {
+                    Choice(R.string.album_group, R.string.new_list_album_group_text, Icons.Album, onManual)
+                    if (onSmart != null) Choice(R.string.smart_album_group, R.string.new_list_smart_group_text, Icons.AutoAwesome, onSmart)
+                } else {
+                    Choice(R.string.playlist, R.string.new_list_playlist_text, Icons.PlaylistAdd, onManual)
+                    if (onSmart != null) Choice(R.string.smart_playlist, R.string.new_list_smart_playlist_text, Icons.AutoAwesome, onSmart)
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+/** Asks for a playlist's or album group's name, starting from [initial] (selected), for [onConfirm]. */
+@Composable
+private fun NameDialog(
+    title: String,
+    initial: String,
+    confirm: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var value by remember { mutableStateOf(TextFieldValue(initial, TextRange(0, initial.length))) }
+    val name = value.text.trim()
+    val focus = remember { FocusRequester() }
+    val done = {
+        if (name.isNotEmpty()) {
+            onDismiss()
+            onConfirm(name)
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                label = { Text(stringResource(R.string.name)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { done() }),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            )
+        },
+        confirmButton = { TextButton(onClick = done, enabled = name.isNotEmpty()) { Text(confirm) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+    LaunchedEffect(Unit) { focus.requestFocus() }
+}

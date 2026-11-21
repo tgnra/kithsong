@@ -1,0 +1,81 @@
+package ng.kithso.core
+
+// Editing playlists (kithcore/playlist.h) on an open CoreLibrary, bound in jni_playlist_edit.c.
+// Entries are a playlist's items: a track can be in one more than once, so moving and
+// removing name an entry ([playlistEntries]) rather than a track. Each throws
+// KithCoreException, MC_ERR_NOT_FOUND (-8) when the playlist, track or entry doesn't exist.
+
+/** A new, empty playlist called [name] (not blank); returns its uid. */
+fun CoreLibrary.createPlaylist(name: String): String = PlaylistNatives.nativeCreate(handle, name)
+
+fun CoreLibrary.renamePlaylist(playlistUid: String, name: String) = PlaylistNatives.nativeRename(handle, playlistUid, name)
+
+/** Deletes the playlist and its entries; the tracks are untouched. */
+fun CoreLibrary.deletePlaylist(playlistUid: String) = PlaylistNatives.nativeDelete(handle, playlistUid)
+
+/** Adds [trackUids] at the end of the playlist, in order, stopping at the first that fails. */
+fun CoreLibrary.appendToPlaylist(playlistUid: String, trackUids: List<String>) =
+    PlaylistNatives.nativeAppend(handle, playlistUid, trackUids.toTypedArray())
+
+/**
+ * The entry uids of [playlistUid] in playlist order, one for each of [CoreLibrary.playlistTracks]
+ * (the same order, so the two can be zipped).
+ */
+fun CoreLibrary.playlistEntries(playlistUid: String): List<String> =
+    PlaylistNatives.nativeEntries(handle, playlistUid).asList()
+
+/** Moves [entryUid] to after [afterEntryUid] in its playlist, or to the start if that's null. */
+fun CoreLibrary.movePlaylistEntry(entryUid: String, afterEntryUid: String?) =
+    PlaylistNatives.nativeMove(handle, entryUid, afterEntryUid)
+
+fun CoreLibrary.removePlaylistEntry(entryUid: String) = PlaylistNatives.nativeRemove(handle, entryUid)
+
+internal object PlaylistNatives {
+    init {
+        System.loadLibrary("kithsong_jni")
+    }
+
+    @JvmStatic external fun nativeCreate(handle: Long, name: String): String
+    @JvmStatic external fun nativeRename(handle: Long, uid: String, name: String)
+    @JvmStatic external fun nativeDelete(handle: Long, uid: String)
+    @JvmStatic external fun nativeAppend(handle: Long, uid: String, trackUids: Array<String>)
+    @JvmStatic external fun nativeEntries(handle: Long, uid: String): Array<String>
+    @JvmStatic external fun nativeMove(handle: Long, entryUid: String, afterEntryUid: String?)
+    @JvmStatic external fun nativeRemove(handle: Long, entryUid: String)
+}
+
+// Editing album groups, the playlists of albums (also kithcore/playlist.h), likewise. An album
+// is in a group at most once, so adding and removing name the album. Listing them is
+// CoreLibrary.albumGroups and albumGroupAlbums. Each throws KithCoreException, MC_ERR_NOT_FOUND
+// (-8) when the group or album doesn't exist, or for a removal, the album isn't in the group.
+
+/** A new, empty album group called [name] (not blank); returns its uid. */
+fun CoreLibrary.createAlbumGroup(name: String): String = AlbumGroupNatives.nativeCreate(handle, name)
+
+fun CoreLibrary.renameAlbumGroup(groupUid: String, name: String) = AlbumGroupNatives.nativeRename(handle, groupUid, name)
+
+/** Deletes the group and its entries; the albums are untouched. */
+fun CoreLibrary.deleteAlbumGroup(groupUid: String) = AlbumGroupNatives.nativeDelete(handle, groupUid)
+
+/** Adds [albumUid] at the end of the group; nothing changes if it's in it already. */
+fun CoreLibrary.addToAlbumGroup(groupUid: String, albumUid: String) = AlbumGroupNatives.nativeAdd(handle, groupUid, albumUid)
+
+fun CoreLibrary.removeFromAlbumGroup(groupUid: String, albumUid: String) =
+    AlbumGroupNatives.nativeRemove(handle, groupUid, albumUid)
+
+/** Moves [albumUid] to after [afterAlbumUid] in the group, or to the start if that's null. */
+fun CoreLibrary.moveInAlbumGroup(groupUid: String, albumUid: String, afterAlbumUid: String?) =
+    AlbumGroupNatives.nativeMove(handle, groupUid, albumUid, afterAlbumUid)
+
+internal object AlbumGroupNatives {
+    init {
+        System.loadLibrary("kithsong_jni")
+    }
+
+    @JvmStatic external fun nativeCreate(handle: Long, name: String): String
+    @JvmStatic external fun nativeRename(handle: Long, uid: String, name: String)
+    @JvmStatic external fun nativeDelete(handle: Long, uid: String)
+    @JvmStatic external fun nativeAdd(handle: Long, uid: String, albumUid: String)
+    @JvmStatic external fun nativeRemove(handle: Long, uid: String, albumUid: String)
+    @JvmStatic external fun nativeMove(handle: Long, uid: String, albumUid: String, afterAlbumUid: String?)
+}

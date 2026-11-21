@@ -1,0 +1,216 @@
+/* Thin OS layer: clocks, sleeping, randomness, threads, files. Everything else in core is
+ * platform-independent. */
+#ifndef MC_UTIL_PLATFORM_H
+#define MC_UTIL_PLATFORM_H
+
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#include "kithcore/kithcore.h"
+
+#ifndef _WIN32
+#include <pthread.h>
+#endif
+
+/* Milliseconds since the Unix epoch. */
+uint64_t mc_wall_ms(void);
+/* Monotonic milliseconds, arbitrary origin. */
+uint64_t mc_mono_ms(void);
+/* Milliseconds of CPU the calling thread has used, so time spent waiting for a core or
+ * asleep doesn't count. It ticks at about 15.6 ms on Windows. */
+uint64_t mc_thread_cpu_ms(void);
+void mc_sleep_ms(uint32_t ms);
+/* Logical processors online, at least 1. */
+int mc_cpu_count(void);
+
+/* This machine's host name as UTF-8 (gethostname, or the DNS host name on Windows), cut
+ * to fit cap bytes. */
+mc_status mc_hostname(char *out, size_t cap);
+/* Bytes free for this user on the volume holding path. */
+mc_status mc_free_space(const char *path, int64_t *out);
+
+/* Cryptographically secure random bytes from the OS. */
+mc_status mc_random_bytes(void *buf, size_t len);
+
+/* Duplicates a string with malloc; NULL in, NULL out. */
+char *mc_strdup(const char *s);
+
+typedef struct mc_mutex {
+#ifdef _WIN32
+  void *srw; /* SRWLOCK, which is pointer-sized; zero-initialised = unlocked */
+#else
+  pthread_mutex_t m;
+#endif
+} mc_mutex;
+
+void mc_mutex_init(mc_mutex *mutex);
+void mc_mutex_destroy(mc_mutex *mutex);
+void mc_mutex_lock(mc_mutex *mutex);
+void mc_mutex_unlock(mc_mutex *mutex);
+
+typedef struct mc_cond {
+#ifdef _WIN32
+  void *cv; /* CONDITION_VARIABLE, also pointer-sized */
+#else
+  pthread_cond_t c;
+#endif
+} mc_cond;
+
+void mc_cond_init(mc_cond *cond);
+void mc_cond_destroy(mc_cond *cond);
+/* Atomically releases mutex and waits; reacquires it before returning. */
+void mc_cond_wait(mc_cond *cond, mc_mutex *mutex);
+/* Like mc_cond_wait, but gives up after about ms milliseconds. */
+void mc_cond_wait_ms(mc_cond *cond, mc_mutex *mutex, uint32_t ms);
+void mc_cond_broadcast(mc_cond *cond);
+
+typedef struct mc_thread {
+#ifdef _WIN32
+  void *handle;
+#else
+  pthread_t t;
+#endif
+} mc_thread;
+
+mc_status mc_thread_start(mc_thread *thread, void (*fn)(void *), void *arg);
+void mc_thread_join(mc_thread *thread);
+/* Lets a thread run on unjoined: it cleans up after itself once it returns. Instead of
+ * mc_thread_join(), never as well. */
+void mc_thread_detach(mc_thread *thread);
+
+/* Makes the calling thread run only when nothing else wants the CPU or the disk, as far as the
+ * platform goes, for the rest of its life. */
+void mc_thread_background(void);
+/* Undoes it as far as it can: on Linux only a privileged thread can lower its nice value. */
+void mc_thread_foreground(void);
+
+/* Native path separator, for building paths to show the user. */
+#ifdef _WIN32
+#define MC_PATH_SEP '\\'
+#else
+#define MC_PATH_SEP '/'
+#endif
+
+/* Calls fn for every regular file under path, recursing into subdirectories, or once for
+ * path itself if it is a file. Paths are UTF-8. Stops early if fn returns non-zero. */
+typedef int (*mc_walk_fn)(void *user, const char *path);
+mc_status mc_walk(const char *path, mc_walk_fn fn, void *user);
+
+/* Calls fn for each entry directly inside dir (no recursion, no "." or ".."). */
+typedef void (*mc_list_fn)(void *user, const char *name, int is_dir);
+mc_status mc_list_dir(const char *dir, mc_list_fn fn, void *user);
+
+/* A strict mc_walk(), for deciding what isn't there as well as what is. Depth first, every
+ * file and folder under root, hidden ones too, each folder before what's in it. Links,
+ * junctions and other reparse points, and anything else that's neither a file nor a folder,
+ * aren't followed or reported. It stops at the first folder it can't read all of and says so:
+ * MC_ERR_NOT_FOUND for no root, MC_ERR_IO otherwise (a root that's a file too). fn returns 0
+ * to go on, 1 not to go into this folder, -1 to stop (MC_ERR_IN_USE). */
+typedef struct mc_tree_entry {
+  const char *path;  /* UTF-8, root then native separators */
+  int is_dir;
+  int system;        /* Windows' system attribute: the OS's, not the user's */
+  int64_t newest_ms; /* the latest of modified and created (POSIX: inode changed), since a
+                      * copy keeps the original's modified time and only this shows it's new */
+  int64_t mtime_ms;  /* modified */
+} mc_tree_entry;
+typedef int (*mc_tree_fn)(void *user, const mc_tree_entry *entry);
+mc_status mc_tree_walk(const char *root, mc_tree_fn fn, void *user);
+/* Tests only: mc_tree_walk() fails on reaching a folder whose path contains this. */
+extern const char *mc_tree_test_fail;
+
+/* The file calls here take paths of any length on Windows, not just under MAX_PATH (260),
+ * with or without Windows' long-path setting. Whether path, made absolute, is 260 characters
+ * or more: too long for Windows code that has no way round the limit. Always 0 elsewhere. */
+int mc_long_path(const char *path);
+#ifdef _WIN32
+/* A UTF-8 path as UTF-16 for the wide Win32 and CRT file calls, malloc'd, or NULL: a long one
+ * absolute and with the \\?\ prefix, so the call works whatever MAX_PATH says. */
+wchar_t *mc_win_path(const char *path);
+/* What mc_trash() ends with: sends an absolute path under MAX_PATH to the Recycle Bin. A test
+ * can swap it. */
+extern mc_status (*mc_win_recycle)(const wchar_t *full);
+#endif
+/* path as it should be given to a library that opens files by UTF-8 path itself (opusfile,
+ * libopusenc): on Windows a long one in its \\?\ form, elsewhere just a copy. malloc'd, or
+ * NULL. */
+char *mc_open_path(const char *path);
+
+/* fopen with a UTF-8 path on every platform. */
+FILE *mc_fopen(const char *path, const char *mode);
+/* The same for reading a file for long, "rb": on Windows it can be renamed and deleted meanwhile,
+ * as anywhere else, and what's read goes on being what was there. */
+FILE *mc_fopen_shared(const char *path);
+/* Creates a directory and any missing parents. Succeeds if it already exists. */
+mc_status mc_mkdirs(const char *path);
+mc_status mc_file_info(const char *path, int64_t *size, int64_t *mtime_ms);
+mc_status mc_touch(const char *path);
+int mc_file_exists(const char *path);
+/* Whether path is a symbolic link, or on Windows a junction (mount point): one that may
+ * lead elsewhere. */
+int mc_is_link(const char *path);
+/* Copies a file. Fails if dst exists, unless overwrite is set. */
+mc_status mc_copy_file(const char *src, const char *dst, int overwrite);
+/* The same, calling fn (which may be NULL) as it goes with the bytes copied so far. fn returning
+ * non-zero stops the copy: dst is removed, and it returns MC_ERR_CANCELLED. */
+typedef int (*mc_copy_fn)(void *user, int64_t bytes_done);
+mc_status mc_copy_file_watched(const char *src, const char *dst, int overwrite, mc_copy_fn fn,
+                               void *user);
+/* Renames or moves a file, across volumes if needed. Fails if dst exists, unless replace
+ * is set. */
+mc_status mc_rename(const char *src, const char *dst, int replace);
+mc_status mc_remove(const char *path);
+/* Whether something has path open so that it can't be renamed or removed: on Windows, a handle
+ * that doesn't share deleting, which is what fopen and so the player's decoders open. Elsewhere
+ * an open file can always be renamed, so 0. */
+int mc_file_in_use(const char *path);
+/* Clears a file's or directory's read-only attribute on Windows, where it stops mc_remove()
+ * and mc_rmdir(), and a copy keeps it. Elsewhere does nothing: removing needs only the
+ * folder's permission. */
+mc_status mc_clear_read_only(const char *path);
+/* Moves a file to the Recycle Bin (Windows) or a freedesktop.org trash (POSIX), so the user
+ * can still get it back: the home trash ($XDG_DATA_HOME/Trash) when the file is on its file
+ * system, else the one at the top of the file's own (mc_trash_in_topdir()). Fails rather
+ * than deleting when there is no trash it can use (e.g. on Android, or a file system it
+ * can't make one on); callers then leave the file where it is. On Windows a drive without a
+ * Recycle Bin (some network and removable drives) deletes the file outright. */
+mc_status mc_trash(const char *path);
+#ifndef _WIN32
+/* The top directory of the file system path's file is on (its mount point), with the
+ * folders on the way resolved: malloc'd, or NULL. */
+char *mc_trash_topdir(const char *path);
+/* mc_trash() into topdir's trash, as the spec has it for a file system other than the home
+ * trash's: $topdir/.Trash/$uid if $topdir/.Trash is a sticky directory and not a link,
+ * else $topdir/.Trash-$uid (made, mode 0700, if need be), with the info file's Path
+ * relative to topdir. Both paths absolute; path must be under topdir. Separate so a test
+ * can give a topdir on its one file system. */
+mc_status mc_trash_in_topdir(const char *path, const char *topdir);
+#endif
+/* Removes a directory; fails if it isn't empty. */
+mc_status mc_rmdir(const char *path);
+/* Deletes path and, for a directory, everything in it, outright (no trash). Links and
+ * junctions inside are removed, never followed. MC_OK if path doesn't exist. */
+mc_status mc_remove_tree(const char *path);
+/* The user's folder for temporary files, without a trailing separator: GetTempPath on
+ * Windows, else $TMPDIR or /tmp. malloc'd, or NULL. */
+char *mc_temp_dir(void);
+/* Whether two paths name the same file as far as the file system is concerned: compared
+ * case-insensitively on Windows. Doesn't resolve links. */
+int mc_same_path(const char *a, const char *b);
+/* Renames a file or directory without ever copying it: fails (MC_ERR_IO) if src and dst are
+ * on different volumes, or if dst exists. */
+mc_status mc_rename_in_place(const char *src, const char *dst);
+/* Whether two existing paths are on the same volume, so one can be renamed into the other. */
+int mc_same_volume(const char *a, const char *b);
+/* path made absolute, without "." or ".." parts or a trailing separator; on Linux, links in
+ * the part of it that exists are resolved too. malloc'd, or NULL. */
+char *mc_full_path(const char *path);
+/* path, which must exist, with every link and junction on the way resolved: the folder or file
+ * it really is. Two paths to one thing give the same result, as mc_same_path() sees it. malloc'd,
+ * or NULL. */
+char *mc_real_path(const char *path);
+/* The running executable's full path: malloc'd, or NULL where there's no telling. */
+char *mc_exe_path(void);
+
+#endif

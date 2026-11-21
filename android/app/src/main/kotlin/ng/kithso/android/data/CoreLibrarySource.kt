@@ -1,0 +1,1121 @@
+package ng.kithso.android.data
+
+import android.content.SharedPreferences
+import android.os.SystemClock
+import android.util.Log
+import ng.kithso.core.AlbumInfo
+import ng.kithso.core.ArtistInfo
+import ng.kithso.core.CoreImport
+import ng.kithso.core.CoreLibrary
+import ng.kithso.core.CorePlayer
+import ng.kithso.core.CoreSync
+import ng.kithso.core.DeleteKind
+import ng.kithso.core.DeviceKind
+import ng.kithso.core.HomePicks
+import ng.kithso.core.HomeRowId
+import ng.kithso.core.ItemKind
+import ng.kithso.core.KithCoreException
+import ng.kithso.core.LibraryStats
+import ng.kithso.core.NativeCore
+import ng.kithso.core.SearchHit
+import ng.kithso.core.SearchKind
+import ng.kithso.core.TrackInfo
+import ng.kithso.core.addToAlbumGroup
+import ng.kithso.core.albumGroupAlbums
+import ng.kithso.core.albumGroupArt
+import ng.kithso.core.appendToPlaylist
+import ng.kithso.core.createAlbumGroup
+import ng.kithso.core.createPlaylist
+import ng.kithso.core.credit
+import ng.kithso.core.BinEntry
+import ng.kithso.core.binEntries as coreBinEntries
+import ng.kithso.core.deleteAlbumGroup
+import ng.kithso.core.deletePermanently
+import ng.kithso.core.deleteToBin
+import ng.kithso.core.deletePlaylist
+import ng.kithso.core.deletePreview
+import ng.kithso.core.homePicks
+import ng.kithso.core.deleteTakesAny
+import ng.kithso.core.moveInAlbumGroup
+import ng.kithso.core.movePlaylistEntry
+import ng.kithso.core.playlistEntries
+import ng.kithso.core.removeFromAlbumGroup
+import ng.kithso.core.removePlaylistEntry
+import ng.kithso.core.renameAlbumGroup
+import ng.kithso.core.renamePlaylist
+import ng.kithso.core.artistAlbums
+import ng.kithso.core.artistSingles
+import ng.kithso.core.artistTracks
+import ng.kithso.core.clearRecents
+import ng.kithso.core.recents
+import ng.kithso.core.recordOpened
+import ng.kithso.core.removeRecent
+import ng.kithso.core.reshuffle
+import ng.kithso.core.search
+import ng.kithso.core.searchPrepare
+import ng.kithso.core.smartAlbums
+import ng.kithso.core.stats
+import ng.kithso.core.track
+import ng.kithso.core.smartArt
+import ng.kithso.core.countSmart
+import ng.kithso.core.createSmart
+import ng.kithso.core.deleteSmart
+import ng.kithso.core.describeSmart
+import ng.kithso.core.previewSmartTracks
+import ng.kithso.core.renameSmart
+import ng.kithso.core.setSmartRule
+import ng.kithso.android.playback.QueueAddition
+import ng.kithso.playback.CoreMediaPlayer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import kotlin.random.Random
+
+/**
+ * The library as kithcore has it, in library folder [dir]. A library handle isn't
+ * thread-safe, so every core call runs on one background thread ([core]); [library] is read
+ * whole when this is created and again on [refresh], which is cheap enough to do after every
+ * sync: one query for the albums, one for the tracks on this phone (for the artists), and
+ * one per smart list.
+ *
+ * Recents are the core's (mc_library_list_recents): what was last started playing, on any
+ * device.
+ *
+ * Sync brings the whole library's data but only some of its files, so only what has a file
+ * here is listed: albums with a folder here, tracks with a file, and artists with either.
+ * Playlists, album groups and smart lists are listed unless they're empty only here
+ * (MC_LIST_PLAYABLE). The sync profile editor's choices ([profileChoices]) still list every
+ * playlist. [unknownArtist] is looked up on every read so it follows the app's language.
+ *
+ * Playlist and album group pictures are the core's, cached in [artDir]. Making one decodes four
+ * covers, so they're looked up after each read on a thread and library connection of their own
+ * ([art]); meanwhile each shows the picture it last had, kept in [prefs] across launches.
+ *
+ * The Home page's rows ([home]) read every album, smart list and the play log, so they too have
+ * their own thread and connection ([homeReader]) and are read only while something collects
+ * them; otherwise a change just marks them stale. Random's selection comes from [homeSeed],
+ * picked once per app start.
+ *
+ * Edits ([PlaylistEditor], [SmartListEditor], [LibraryDeleter]) run on [core], each followed by
+ * a [refresh].
+ */
+class CoreLibrarySource(
+    private val dir: File,
+    private val artDir: File,
+    coverDraftDir: File,
+    private val prefs: SharedPreferences,
+    private val scope: CoroutineScope,
+    private val unknownArtist: () -> String,
+) : LibrarySource, PlaylistEditor, SmartListEditor, LibraryDeleter, RecentsEditor {
+    private val core = Dispatchers.IO.limitedParallelism(1)
+    private val state = MutableStateFlow<Library?>(null)
+    override val library: StateFlow<Library?> = state
+
+    /** Called after a change made here, for sync to pass on soon. */
+    var onChanged: () -> Unit = {}
+
+    /** Whether a delete goes to the recycle bin: in a sync group, as sync says ([RecycleBin]). */
+    var binOffered: suspend () -> Boolean = { false }
+
+    // Only touched on [core].
+    private var lib: CoreLibrary? = null
+    private var contents = Contents.Empty
+    private var artLookups = 0 // bumped by each read, so only the latest read's lookup is used
+
+    private val art = Dispatchers.IO.limitedParallelism(1)
+    private var artLib: CoreLibrary? = null // only touched on [art]
+
+    private val homeState = MutableStateFlow<Home?>(null)
+    override val home: StateFlow<Home?> = homeState
+    private val homeReader = Dispatchers.IO.limitedParallelism(1)
+    private var homeLib: CoreLibrary? = null // only touched on [homeReader]
+    private var homeRead: Job? = null
+    @Volatile private var homeStale = true
+    private val homeSeed = Random.nextInt()
+    private var homePicks: HomePicks? = null // only touched on [core]
+
+    // The smart list editor's counts and previews, likewise ([SmartListEditor]).
+    private val counting = Dispatchers.IO.limitedParallelism(1)
+    private var countLib: CoreLibrary? = null // only touched on [counting]
+
+    /** Editing tags, on threads of its own. */
+    val tagEditor: TagEditor = CoreTagEditor(
+        dir,
+        coverDraftDir,
+        scope,
+        changed = {
+            refresh().join()
+            editCount.value++
+            onChanged()
+        },
+        fresh = ::freshTracks,
+    )
+
+    // Covers found before, by folder, only touched on [core]: every read asks for every
+    // album's, and a stat is far cheaper than listing the folder. A folder without one is
+    // listed again each time, as a cover may yet arrive.
+    private val knownCovers = HashMap<String, File>()
+
+    init {
+        refresh()
+        scope.launch(art) { pruneArt() }
+        // The rows are read when something starts collecting them, if they've changed since.
+        scope.launch {
+            homeState.subscriptionCount.map { it > 0 }.distinctUntilChanged().collect { watched ->
+                if (watched && homeStale) refreshHome()
+            }
+        }
+    }
+
+    fun refresh(): Job = scope.launch(core) {
+        val start = SystemClock.elapsedRealtime()
+        contents = open()?.let { lib ->
+            try {
+                read(lib)
+            } catch (e: KithCoreException) {
+                Log.e(TAG, "Couldn't read the library", e)
+                null
+            }
+        } ?: Contents.Empty
+        handOverRecents()
+        state.value = contents.library(recents())
+        Log.i(TAG, "Read ${contents.albums.size} albums in ${SystemClock.elapsedRealtime() - start} ms")
+        try {
+            lib?.searchPrepare()
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't prepare search", e)
+        }
+        lookUpArt(contents.playlists.keys + contents.albumGroups.keys, ++artLookups)
+        refreshHome()
+    }
+
+    /**
+     * Reads the Home page's rows again, in the background, if something is collecting them, and
+     * otherwise marks them to be read when something next does.
+     */
+    @Synchronized
+    fun refreshHome() {
+        if (homeState.subscriptionCount.value == 0) {
+            homeStale = true
+            return
+        }
+        homeStale = false
+        homeRead?.cancel() // waiting its turn, or it'd read everything only to be read again
+        homeRead = scope.launch(homeReader) {
+            val start = SystemClock.elapsedRealtime()
+            val picks = try {
+                val lib = homeLib ?: CoreLibrary(dir.path).also { homeLib = it }
+                lib.homePicks(homeSeed)
+            } catch (e: KithCoreException) {
+                Log.e(TAG, "Couldn't read the Home page's rows", e)
+                return@launch
+            }
+            Log.i(TAG, "Read the Home page's rows in ${SystemClock.elapsedRealtime() - start} ms")
+            withContext(core) {
+                homePicks = picks
+                homeState.value = home(picks)
+            }
+        }
+    }
+
+    // On [core]. Looks up the pictures of playlists and album groups [uids] on [art], then puts
+    // those that changed in [contents], unless another read has started a lookup since.
+    private fun lookUpArt(uids: Set<String>, lookup: Int) {
+        if (uids.isEmpty()) return
+        val groups = contents.albumGroups.keys
+        val smart = contents.smart
+        scope.launch(art) {
+            val start = SystemClock.elapsedRealtime()
+            val found = uids.associateWith { uid -> pictureOf(uid, uid in groups, uid in smart) }
+            Log.i(TAG, "Looked up ${uids.size} pictures in ${SystemClock.elapsedRealtime() - start} ms")
+            withContext(core) {
+                if (lookup != artLookups) return@withContext
+                saveArt(savedArt().filterKeys { it in contents.playlists || it in contents.albumGroups } + found)
+                fun picture(uid: String, name: String, old: ArtRef): ArtRef {
+                    val file = found[uid] ?: return old
+                    val picture = artRef(uid, name, file.takeIf { it.path.isNotEmpty() })
+                    return if (picture == old) old else picture
+                }
+                val playlists = contents.playlists.mapValues { (uid, p) -> p.copy(art = picture(uid, p.name, p.art)) }
+                val albumGroups = contents.albumGroups.mapValues { (uid, g) -> g.copy(art = picture(uid, g.name, g.art)) }
+                if (playlists == contents.playlists && albumGroups == contents.albumGroups) return@withContext
+                contents = contents.copy(playlists = playlists, albumGroups = albumGroups)
+                state.value = contents.library(recents())
+                homePicks?.let { homeState.value = home(it) }
+            }
+        }
+    }
+
+    // On [art]. [uid]'s picture, a playlist's or if [group] an album group's, a smart one's if
+    // [smart], or an empty path for none (the placeholder).
+    private fun pictureOf(uid: String, group: Boolean, smart: Boolean): File {
+        val lib = artLib ?: try {
+            CoreLibrary(dir.path).also { artLib = it }
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't open the library in $dir for pictures", e)
+            return File("")
+        }
+        return try {
+            val path = when {
+                smart -> lib.smartArt(uid, artDir.path)
+                group -> lib.albumGroupArt(uid, artDir.path)
+                else -> lib.playlistArt(uid, artDir.path)
+            }
+            File(path.orEmpty())
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't make $uid's picture", e)
+            File("")
+        }
+    }
+
+    // On [art]. Clears out the pictures of playlists and album groups (smart ones too) that have gone.
+    private fun pruneArt() {
+        try {
+            CoreLibrary(dir.path).use { it.playlistArtPrune(artDir.path) }
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't prune pictures in $artDir", e)
+        }
+    }
+
+    // The playlists' and album groups' pictures as last looked up: lines of "uid:path", with an
+    // empty path for none. On [core].
+    private fun savedArt(): Map<String, File> =
+        prefs.getString(KEY_PLAYLIST_ART, null).orEmpty().lines().filter { ':' in it }
+            .associate { it.substringBefore(':') to File(it.substringAfter(':')) }
+
+    private fun saveArt(art: Map<String, File>) {
+        prefs.edit().putString(KEY_PLAYLIST_ART, art.entries.joinToString("\n") { (uid, file) -> "$uid:${file.path}" }).apply()
+    }
+
+    /** Starts importing [paths] into the library; see [CoreImport]. Close it when done. */
+    suspend fun startImport(
+        paths: List<String>,
+        options: CoreImport.Options,
+        listener: (CoreImport.Event, Int) -> Unit,
+    ): CoreImport? = withContext(core) { open()?.let { CoreImport(it, paths, options, listener) } }
+
+    /** Opens this phone's sync state in [configDir] for the library; see [CoreSync]. */
+    suspend fun openSync(configDir: String, deviceName: String, listener: (CoreSync.Event) -> Unit): CoreSync? =
+        withContext(core) { open()?.let { CoreSync(it, configDir, deviceName, DeviceKind.Phone, listener) } }
+
+    /**
+     * What a sync profile can select (see [ProfileChoices]); smart playlists and album groups
+     * are left out, as profiles only take manual ones. Throws KithCoreException.
+     */
+    suspend fun profileChoices(): ProfileChoices = withContext(core) {
+        val lib = open() ?: throw KithCoreException(CoreSync.ERR_NOT_FOUND)
+        val artists = lib.artists()
+        ProfileChoices(
+            albums = lib.albums().byTitle().map { ProfileChoice(it.uid, it.title, it.artist ?: unknownArtist(), it.year) },
+            artists = artists.map { ProfileChoice(it.uid, it.name, albumCount = it.albumCount, sortKey = it.sortName) },
+            playlists = lib.playlists().map { ProfileChoice(it.uid, it.name) },
+            albumGroups = lib.albumGroups().map { ProfileChoice(it.uid, it.name, albumCount = it.albumCount) },
+        )
+    }
+
+    override suspend fun trackList(ref: CollectionRef): TrackList? = withContext(core) {
+        val lib = open() ?: return@withContext null
+        val covers = Covers()
+        try {
+            when (ref.kind) {
+                CollectionRef.Kind.Album -> contents.albums[ref.uid]?.let { album ->
+                    TrackList(album.title, album.art, lib.albumTracks(album.uid).here().map { covers.track(it) }, album.artist, album.year, mix = album.mix)
+                }
+                // The albums it's on, its own first, its singles, then every track credited to it.
+                CollectionRef.Kind.Artist -> contents.artists[ref.uid]?.let { artist ->
+                    val albums = lib.artistAlbums(artist.uid).mapNotNull { contents.albums[it.uid] }
+                    val singles = lib.artistSingles(artist.uid).here().map { covers.track(it) }
+                    val tracks = lib.artistTracks(artist.uid).here().map { covers.track(it) }
+                    TrackList(artist.name, artist.art, tracks, albumCount = albums.size, albums = albums, singles = singles)
+                }
+                CollectionRef.Kind.Playlist -> contents.playlists[ref.uid]?.let { playlist ->
+                    val tracks = if (ref.uid in contents.smart) {
+                        lib.smartTracks(ref.uid).here().map { covers.track(it) }
+                    } else {
+                        // With their entries, for editing.
+                        lib.playlistTracks(ref.uid).zip(lib.playlistEntries(ref.uid))
+                            .filter { (track, _) -> track.path != null }
+                            .map { (track, entry) -> covers.track(track).copy(entryUid = entry) }
+                    }
+                    TrackList(playlist.name, playlist.art, tracks, canReshuffle = ref.uid in contents.random)
+                }
+                // Its albums, and their tracks one album after another to play it.
+                CollectionRef.Kind.AlbumGroup -> contents.albumGroups[ref.uid]?.let { group ->
+                    val infos = if (ref.uid in contents.smart) lib.smartAlbums(ref.uid) else lib.albumGroupAlbums(ref.uid)
+                    val albums = infos.mapNotNull { contents.albums[it.uid] }
+                    val tracks = albums.flatMap { album -> lib.albumTracks(album.uid).here().map { covers.track(it) } }
+                    TrackList(
+                        group.name, group.art, tracks,
+                        albumCount = albums.size, albums = albums, canReshuffle = ref.uid in contents.random,
+                    )
+                }
+            }
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't list $ref", e)
+            null
+        }
+    }
+
+    override suspend fun tracks(uids: List<String>): List<Track?> = withContext(core) {
+        val lib = open()
+        val covers = Covers()
+        uids.map { uid ->
+            try {
+                lib?.track(uid)?.let { covers.track(it) }
+            } catch (e: KithCoreException) {
+                Log.e(TAG, "Couldn't read track $uid", e)
+                null
+            }
+        }
+    }
+
+    /**
+     * Adds [what] to [player]'s up next, at the front if [next], as a row per track if [asTracks].
+     * False if it has no track with a file here.
+     */
+    suspend fun addUpNext(player: CoreMediaPlayer, what: QueueAddition, next: Boolean, asTracks: Boolean): Boolean = withContext(core) {
+        val lib = open() ?: return@withContext false
+        val smart = what.uid in contents.smart
+        val kind = when (what.kind) {
+            null -> CorePlayer.UpNextKind.Track
+            CollectionRef.Kind.Album -> CorePlayer.UpNextKind.Album
+            CollectionRef.Kind.Artist -> CorePlayer.UpNextKind.Artist
+            CollectionRef.Kind.Playlist -> if (smart) CorePlayer.UpNextKind.SmartPlaylist else CorePlayer.UpNextKind.Playlist
+            CollectionRef.Kind.AlbumGroup -> if (smart) CorePlayer.UpNextKind.SmartAlbumGroup else CorePlayer.UpNextKind.AlbumGroup
+        }
+        try {
+            player.addUpNext(lib, kind, what.uid, what.name, asTracks, next)
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't add ${what.uid} to the queue", e)
+            false
+        }
+    }
+
+    override fun notePlayed(ref: CollectionRef) {
+        scope.launch(core) {
+            val lib = open() ?: return@launch
+            try {
+                lib.recordOpened(ref.kind.itemKind, ref.uid)
+            } catch (e: KithCoreException) {
+                Log.e(TAG, "Couldn't add $ref to the recents", e)
+                return@launch
+            }
+            state.value = state.value?.copy(recents = recents())
+            refreshHome()
+            onChanged()
+        }
+    }
+
+    override fun removeRecent(ref: CollectionRef) = changeRecents("take $ref out of the recents") {
+        it.removeRecent(ref.uid)
+    }
+
+    override fun clearRecents() = changeRecents("clear the recents") { it.clearRecents() }
+
+    private fun changeRecents(what: String, change: (CoreLibrary) -> Unit) {
+        scope.launch(core) {
+            val lib = open() ?: return@launch
+            try {
+                change(lib)
+            } catch (e: KithCoreException) {
+                Log.e(TAG, "Couldn't $what", e)
+                return@launch
+            }
+            state.value = state.value?.copy(recents = recents())
+            refreshHome()
+            onChanged()
+        }
+    }
+
+    override fun recordPlay(trackUid: String) {
+        scope.launch(core) {
+            val lib = open() ?: return@launch
+            try {
+                lib.recordPlay(trackUid)
+            } catch (e: KithCoreException) {
+                Log.e(TAG, "Couldn't record a play of $trackUid", e)
+                return@launch
+            }
+            onChanged()
+        }
+    }
+
+    override fun logPlay(event: CorePlayer.PlayEvent) {
+        scope.launch(core) {
+            val lib = open() ?: return@launch
+            try {
+                lib.logPlay(event)
+                // The rows that go by plays read the log.
+                refreshHome()
+            } catch (e: KithCoreException) {
+                Log.w(TAG, "Couldn't log a play of ${event.trackUid}", e)
+            }
+        }
+    }
+
+    // --- PlaylistEditor ---
+
+    private val editCount = MutableStateFlow(0)
+    override val edits: StateFlow<Int> = editCount
+    private val failed = MutableSharedFlow<EditFailure>(extraBufferCapacity = 8)
+    override val failures: SharedFlow<EditFailure> = failed
+
+    override suspend fun playlistChoices(): List<PlaylistChoice>? = withContext(core) {
+        try {
+            open()?.playlists()?.map { PlaylistChoice(it.uid, it.name) }
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't list the playlists", e)
+            null
+        }
+    }
+
+    override suspend fun isEditable(playlistUid: String): Boolean = withContext(core) {
+        playlistUid in contents.playlists && playlistUid !in contents.smart
+    }
+
+    override fun addToPlaylist(playlistUid: String, what: Addition) =
+        edit(EditFailure.PlaylistAdd, "add to playlist $playlistUid") {
+            it.appendToPlaylist(playlistUid, trackUids(it, what))
+            changed(it, ItemKind.Playlist, playlistUid)
+        }
+
+    override fun newPlaylist(name: String) = edit(EditFailure.PlaylistCreate, "make playlist $name") { it.createPlaylist(name) }
+
+    override fun addToNewPlaylist(name: String, what: Addition) = edit(EditFailure.PlaylistCreate, "make playlist $name") {
+        val uid = it.createPlaylist(name)
+        it.appendToPlaylist(uid, trackUids(it, what))
+        changed(it, ItemKind.Playlist, uid)
+    }
+
+    override fun renamePlaylist(playlistUid: String, name: String) =
+        edit(EditFailure.PlaylistRename, "rename playlist $playlistUid") { it.renamePlaylist(playlistUid, name) }
+
+    override fun deletePlaylist(playlistUid: String) =
+        edit(EditFailure.PlaylistDelete, "delete playlist $playlistUid") { it.deletePlaylist(playlistUid) }
+
+    override fun removeEntry(playlistUid: String, entryUid: String) =
+        edit(EditFailure.PlaylistRemove, "remove playlist entry $entryUid") {
+            it.removePlaylistEntry(entryUid)
+            changed(it, ItemKind.Playlist, playlistUid)
+        }
+
+    override fun moveEntry(playlistUid: String, entryUid: String, afterEntryUid: String?) =
+        edit(EditFailure.PlaylistMove, "move playlist entry $entryUid") {
+            it.movePlaylistEntry(entryUid, afterEntryUid)
+            changed(it, ItemKind.Playlist, playlistUid)
+        }
+
+    override suspend fun albumGroupChoices(): List<PlaylistChoice>? = withContext(core) {
+        try {
+            open()?.albumGroups()?.map { PlaylistChoice(it.uid, it.name) }
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't list the album groups", e)
+            null
+        }
+    }
+
+    override suspend fun isEditableGroup(groupUid: String): Boolean = withContext(core) {
+        groupUid in contents.albumGroups && groupUid !in contents.smart
+    }
+
+    override fun addToAlbumGroup(groupUid: String, albumUid: String) =
+        edit(EditFailure.GroupAdd, "add album $albumUid to album group $groupUid") {
+            it.addToAlbumGroup(groupUid, albumUid)
+            changed(it, ItemKind.AlbumGroup, groupUid)
+        }
+
+    override fun newAlbumGroup(name: String) = edit(EditFailure.GroupCreate, "make album group $name") { it.createAlbumGroup(name) }
+
+    override fun addToNewAlbumGroup(name: String, albumUid: String) = edit(EditFailure.GroupCreate, "make album group $name") {
+        val uid = it.createAlbumGroup(name)
+        it.addToAlbumGroup(uid, albumUid)
+        changed(it, ItemKind.AlbumGroup, uid)
+    }
+
+    override fun renameAlbumGroup(groupUid: String, name: String) =
+        edit(EditFailure.GroupRename, "rename album group $groupUid") { it.renameAlbumGroup(groupUid, name) }
+
+    override fun deleteAlbumGroup(groupUid: String) =
+        edit(EditFailure.GroupDelete, "delete album group $groupUid") { it.deleteAlbumGroup(groupUid) }
+
+    override fun removeFromAlbumGroup(groupUid: String, albumUid: String) =
+        edit(EditFailure.GroupRemove, "remove album $albumUid from album group $groupUid") {
+            it.removeFromAlbumGroup(groupUid, albumUid)
+            changed(it, ItemKind.AlbumGroup, groupUid)
+        }
+
+    override fun moveInAlbumGroup(groupUid: String, albumUid: String, afterAlbumUid: String?) =
+        edit(EditFailure.GroupMove, "move album $albumUid in album group $groupUid") {
+            it.moveInAlbumGroup(groupUid, albumUid, afterAlbumUid)
+            changed(it, ItemKind.AlbumGroup, groupUid)
+        }
+
+    // On [core], after a change to playlist or album group [uid] went through: puts it first
+    // in the recents, as the desktops do. A failure here doesn't fail the change; the edit's
+    // refresh reads the recents again.
+    private fun changed(lib: CoreLibrary, kind: ItemKind, uid: String) {
+        try {
+            lib.recordOpened(kind, uid)
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't put $uid first in the recents", e)
+        }
+    }
+
+    // On [core]. The tracks [what] adds: an album's that have a file here, as the album lists
+    // them, since that's what this phone shows of it.
+    private fun trackUids(lib: CoreLibrary, what: Addition): List<String> = when (what) {
+        is Addition.Tracks -> what.uids
+        is Addition.Album -> lib.albumTracks(what.uid).here().map { it.uid }
+    }
+
+    // Makes a change on [core], then reads the library again and passes the change on to sync.
+    // A failure is reported as [failure].
+    private fun edit(failure: EditFailure, what: String, change: (CoreLibrary) -> Unit) {
+        scope.launch(core) {
+            val lib = open() ?: run {
+                failed.tryEmit(failure)
+                return@launch
+            }
+            try {
+                change(lib)
+            } catch (e: KithCoreException) {
+                Log.e(TAG, "Couldn't $what", e)
+                failed.tryEmit(failure)
+            }
+            refresh().join()
+            editCount.value++
+            onChanged()
+        }
+    }
+
+    // --- SmartListEditor ---
+
+    override suspend fun isSmart(uid: String): Boolean = withContext(core) { uid in contents.smart }
+
+    override suspend fun smartList(uid: String): SmartListInfo? = withContext(core) {
+        try {
+            // Every one, as one with nothing to play here can still be edited from its sentence.
+            open()?.smartLists()?.firstOrNull { it.uid == uid }?.let { SmartListInfo(it.uid, it.name, it.isAlbums, it.rule) }
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't read smart list $uid", e)
+            null
+        }
+    }
+
+    override suspend fun smartChoices(): Pair<List<PlaylistChoice>, List<PlaylistChoice>>? = withContext(core) {
+        try {
+            val lib = open() ?: return@withContext null
+            lib.playlists().map { PlaylistChoice(it.uid, it.name) } to lib.albumGroups().map { PlaylistChoice(it.uid, it.name) }
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't list the playlists and album groups", e)
+            null
+        }
+    }
+
+    override suspend fun describeRule(isAlbums: Boolean, rule: String): String? = withContext(core) {
+        try {
+            open()?.describeSmart(isAlbums, rule)
+        } catch (e: KithCoreException) {
+            null // a rule being edited, which may not be valid yet
+        }
+    }
+
+    override suspend fun countRule(isAlbums: Boolean, rule: String): Int? = withContext(counting) {
+        try {
+            countingLib()?.countSmart(isAlbums, rule)
+        } catch (e: KithCoreException) {
+            null
+        }
+    }
+
+    override suspend fun previewRule(isAlbums: Boolean, rule: String, max: Int): SmartPreview? = withContext(counting) {
+        try {
+            val lib = countingLib() ?: return@withContext null
+            if (isAlbums) {
+                val albums = lib.previewSmartAlbums(rule)
+                SmartPreview(albums.take(max).map { SmartPreviewItem(it.title, it.artist ?: unknownArtist()) }, albums.size)
+            } else {
+                val tracks = lib.previewSmartTracks(rule)
+                SmartPreview(tracks.take(max).map { SmartPreviewItem(it.title, it.artist ?: unknownArtist()) }, tracks.size)
+            }
+        } catch (e: KithCoreException) {
+            null
+        }
+    }
+
+    // On [counting]: its own library connection, opened once.
+    private fun countingLib(): CoreLibrary? = countLib ?: try {
+        CoreLibrary(dir.path).also { countLib = it }
+    } catch (e: KithCoreException) {
+        Log.e(TAG, "Couldn't open the library in $dir for the smart list editor", e)
+        null
+    }
+
+    // In [scope], so it's seen through and the library read again even if the editor goes away.
+    override suspend fun createSmart(name: String, isAlbums: Boolean, rule: String): String? = scope.async(core) {
+        val uid = open()?.let { lib ->
+            try {
+                lib.createSmart(name, isAlbums, rule).also {
+                    changed(lib, if (isAlbums) ItemKind.AlbumGroup else ItemKind.Playlist, it)
+                }
+            } catch (e: KithCoreException) {
+                Log.e(TAG, "Couldn't make smart list $name", e)
+                null
+            }
+        }
+        if (uid == null) failed.tryEmit(EditFailure.SmartCreate)
+        refresh().join()
+        editCount.value++
+        onChanged()
+        uid
+    }.await()
+
+    override suspend fun saveSmart(uid: String, name: String?, rule: String?): Boolean = scope.async(core) {
+        val lib = open()
+        var failure: EditFailure? = if (lib == null) EditFailure.SmartSave else null
+        if (lib != null) {
+            try {
+                if (name != null) {
+                    failure = EditFailure.SmartRename
+                    lib.renameSmart(uid, name)
+                }
+                if (rule != null) {
+                    failure = EditFailure.SmartSave
+                    lib.setSmartRule(uid, rule)
+                }
+                failure = null
+            } catch (e: KithCoreException) {
+                Log.e(TAG, "Couldn't save smart list $uid", e)
+            }
+        }
+        failure?.let { failed.tryEmit(it) }
+        refresh().join()
+        editCount.value++
+        onChanged()
+        failure == null
+    }.await()
+
+    override fun renameSmart(uid: String, name: String) =
+        edit(EditFailure.SmartRename, "rename smart list $uid") { it.renameSmart(uid, name) }
+
+    override fun deleteSmart(uid: String) = edit(EditFailure.SmartDelete, "delete smart list $uid") { it.deleteSmart(uid) }
+
+    // --- LibraryDeleter ---
+
+    override suspend fun deleteSize(what: Deletion): DeleteSize? = withContext(core) {
+        try {
+            val toBin = binOffered()
+            open()?.deletePreview(what.kind.core, what.uid)?.let { DeleteSize(it.tracks, it.files, toBin) }
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't find out what deleting $what takes", e)
+            null
+        }
+    }
+
+    override suspend fun takesAny(what: Deletion, trackUids: List<String>): Boolean = withContext(core) {
+        try {
+            open()?.deleteTakesAny(what.kind.core, what.uid, trackUids) == true
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't find out what deleting $what takes", e)
+            false
+        }
+    }
+
+    // In [scope], so it's seen through and the library read again even if the screen that
+    // asked goes away.
+    override suspend fun delete(what: Deletion): DeleteOutcome = scope.async(core) {
+        val lib = open() ?: return@async DeleteOutcome.Failed
+        val toBin = binOffered()
+        val outcome = try {
+            val result = if (toBin) lib.deleteToBin(what.kind.core, what.uid) else lib.deletePermanently(what.kind.core, what.uid)
+            Log.i(
+                TAG,
+                "Deleted $what${if (toBin) " to the recycle bin" else ""}: ${result.tracksDeleted} tracks, " +
+                    "${result.filesRemoved} files, ${result.tracksKept} kept",
+            )
+            if (result.tracksKept > 0) DeleteOutcome.Kept(result.tracksKept) else DeleteOutcome.Deleted
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't delete $what", e)
+            DeleteOutcome.Failed
+        }
+        // Even after a failure: some files may have gone.
+        refresh().join()
+        editCount.value++
+        onChanged()
+        outcome
+    }.await()
+
+    /** Sync took tracks out of the library ([ng.kithso.android.sync.Syncer.removeLost]): reads it again, and tells the group. */
+    suspend fun tracksRemoved() = withContext(core) {
+        refresh().join()
+        editCount.value++
+        onChanged()
+    }
+
+    // [queue] as the library has its tracks now, those it can't find as they were: by album, or
+    // for one on no album by itself, as a single made a mix has one now.
+    private suspend fun freshTracks(queue: List<Track>): List<Track> = withContext(core) {
+        val lib = open() ?: return@withContext queue
+        val covers = Covers()
+        try {
+            val albums = queue.mapNotNull { it.albumUid }.distinct().flatMap { lib.albumTracks(it) }
+            val singles = queue.filter { it.albumUid == null }.mapNotNull { lib.track(it.uid) }
+            val fresh = (albums + singles).here().associate { it.uid to covers.track(it) }
+            queue.map { fresh[it.uid] ?: it }
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't read the queue's tracks again", e)
+            queue
+        }
+    }
+
+    /** The recycle bin's entries, newest first ([RecycleBin]); empty if they couldn't be read. */
+    suspend fun binEntries(): List<BinEntry> = withContext(core) {
+        try {
+            open()?.coreBinEntries().orEmpty()
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't read the recycle bin", e)
+            emptyList()
+        }
+    }
+
+    override suspend fun search(query: String): SearchResults = withContext(core) {
+        val lib = open()
+        val hits = try {
+            lib?.search(query, SEARCH_LIMIT).orEmpty()
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't search for \"$query\"", e)
+            emptyList()
+        }
+        // The index can be a little behind the library, and knows what isn't on this phone:
+        // only what's listed here is shown, as it was last read.
+        val c = contents
+        val covers = Covers()
+        val order = ArrayList<SearchResults.Kind>()
+        val artists = ArrayList<Artist>()
+        val albums = ArrayList<Album>()
+        val tracks = ArrayList<FoundTrack>()
+        val playlists = ArrayList<Playlist>()
+        val albumGroups = ArrayList<AlbumGroup>()
+        // The singles of the artists found tracks are by, looked up once each.
+        val singlesBy = HashMap<String, List<TrackInfo>>()
+        fun single(hit: SearchHit): Track? {
+            val artists = c.artists.values.filter { it.name == hit.artist }
+            val info = artists.firstNotNullOfOrNull { artist ->
+                singlesBy.getOrPut(artist.uid) {
+                    try {
+                        lib?.artistSingles(artist.uid)?.here().orEmpty()
+                    } catch (e: KithCoreException) {
+                        Log.e(TAG, "Couldn't list the singles of ${artist.name}", e)
+                        emptyList()
+                    }
+                }.firstOrNull { it.uid == hit.uid }
+            }
+            return info?.let { covers.track(it) }
+        }
+        for (hit in hits) {
+            val kind = when (hit.kind) {
+                SearchKind.Artist -> c.artists[hit.uid]?.let(artists::add)?.let { SearchResults.Kind.Artists }
+                SearchKind.Album -> c.albums[hit.uid]?.let(albums::add)?.let { SearchResults.Kind.Albums }
+                SearchKind.Track -> {
+                    // A track is found by its album, whose art and tracks are here; a single
+                    // (alone on its album, or on none) among its artist's singles, to play alone.
+                    val album = hit.albumUid?.let { c.albums[it] }
+                    if (album != null) {
+                        tracks += FoundTrack(
+                            hit.uid, hit.name, hit.artist ?: unknownArtist(), hit.album.orEmpty(), album.uid,
+                            covers.found(album),
+                        )
+                    } else {
+                        val track = single(hit) ?: continue
+                        tracks += FoundTrack(hit.uid, hit.name, track.artist, track.album, null, track.art, track)
+                    }
+                    SearchResults.Kind.Tracks
+                }
+                SearchKind.Playlist -> c.playlists[hit.uid]?.let(playlists::add)?.let { SearchResults.Kind.Playlists }
+                SearchKind.AlbumGroup -> c.albumGroups[hit.uid]?.let(albumGroups::add)?.let { SearchResults.Kind.AlbumGroups }
+            } ?: continue
+            if (kind !in order) order += kind
+        }
+        SearchResults(order, artists, albums, tracks, playlists, albumGroups)
+    }
+
+    override suspend fun trackArtists(trackUid: String): List<Artist> = withContext(core) {
+        val lib = open() ?: return@withContext emptyList()
+        val credit = try {
+            lib.credit(trackUid)
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't read the credit of $trackUid", e)
+            return@withContext emptyList()
+        }
+        // As listed here, which an artist with nothing on this phone isn't; once each.
+        val c = contents
+        credit.mapNotNull { c.artists[it.uid] }.distinctBy { it.uid }
+    }
+
+    override suspend fun reshuffle(ref: CollectionRef) {
+        withContext(core) {
+            val lib = open() ?: return@withContext
+            try {
+                lib.reshuffle(ref.uid)
+            } catch (e: KithCoreException) {
+                Log.e(TAG, "Couldn't reshuffle $ref", e)
+                return@withContext
+            }
+            onChanged()
+        }
+        // A smart list's picture is made from what it holds, which may have changed.
+        refresh().join()
+    }
+
+    override suspend fun stats(): LibraryStats = withContext(core) {
+        try {
+            open()?.stats() ?: LibraryStats()
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't read the library's stats", e)
+            LibraryStats()
+        }
+    }
+
+    // On [core]. Null if the library can't be opened.
+    private fun open(): CoreLibrary? {
+        lib?.let { return it }
+        return try {
+            CoreLibrary(dir.path).also { lib = it }
+        } catch (e: KithCoreException) {
+            Log.e(TAG, "Couldn't open the library in $dir", e)
+            null
+        }
+    }
+
+    private fun read(lib: CoreLibrary): Contents {
+        val covers = Covers()
+        val albumInfos = lib.albums().filter { it.folder != null }.byTitle()
+        val artistInfos = lib.artistsHere()
+        val albums = albumInfos.map { info ->
+            Album(info.uid, info.title, info.artist ?: unknownArtist(), info.year, covers.album(info), info.mix)
+        }
+
+        // The core's artists with an album or track here, each with the picture the core picks
+        // for them (one of their albums' covers).
+        val artists = artistInfos.map { info ->
+            Artist(info.uid, info.name, info.albumCount, covers.artist(info), info.trackCount, info.sortName)
+        }
+
+        // Smart playlists sit among the others, and smart album groups among the manual ones.
+        // Not those empty only here, which also keeps them out of Recents. Each shows the
+        // picture it last had until [lookUpArt] finds it again.
+        val here = albums.associateBy { it.uid }
+        val smart = lib.smartLists(playableOnly = true)
+        val known = savedArt()
+        fun knownArt(uid: String, name: String) = artRef(uid, name, known[uid]?.takeIf { it.path.isNotEmpty() && it.isFile })
+        val playlists = lib.playlists(playableOnly = true).map { info ->
+            Playlist(info.uid, info.name, info.playableCount, knownArt(info.uid, info.name))
+        } + smart.filter { !it.isAlbums }.map { info ->
+            val tracks = lib.smartTracks(info.uid).here()
+            Playlist(info.uid, info.name, tracks.size, knownArt(info.uid, info.name))
+        }
+        val albumGroups = lib.albumGroups(playableOnly = true).map { info ->
+            AlbumGroup(info.uid, info.name, info.playableCount, knownArt(info.uid, info.name))
+        } + smart.filter { it.isAlbums }.map { info ->
+            val count = lib.smartAlbums(info.uid).count { it.uid in here }
+            AlbumGroup(info.uid, info.name, count, knownArt(info.uid, info.name))
+        }
+
+        return Contents(
+            here,
+            artists.associateBy { it.uid },
+            playlists.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }).associateBy { it.uid },
+            albumGroups.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }).associateBy { it.uid },
+            smart.mapTo(HashSet()) { it.uid },
+            smart.filter { it.isRandom }.mapTo(HashSet()) { it.uid },
+        )
+    }
+
+    // On [core]. Moves recents an older version kept in [prefs] ("kind:time:uid" or "kind:uid"
+    // lines, newest first) to the core, oldest first so the newest ends up first. An artist's
+    // uid was its name then, which the core doesn't know, so those are dropped.
+    private fun handOverRecents() {
+        val saved = prefs.getString(KEY_RECENTS, null) ?: return
+        val lib = open() ?: return
+        for (line in saved.lines().reversed()) {
+            val kind = CollectionRef.Kind.entries.firstOrNull { it.name == line.substringBefore(':') } ?: continue
+            if (kind == CollectionRef.Kind.Artist) continue
+            val rest = line.substringAfter(':')
+            val uid = if (rest.substringBefore(':').toLongOrNull() != null) rest.substringAfter(':') else rest
+            try {
+                lib.recordOpened(kind.itemKind, uid)
+            } catch (e: KithCoreException) {
+                Log.i(TAG, "Left $kind $uid out of the recents", e)
+            }
+        }
+        prefs.edit().remove(KEY_RECENTS).apply()
+        onChanged()
+    }
+
+    // On [core]. The core's recents that are on this phone, newest first. Its list leaves out
+    // playlists with nothing here, but not albums or artists, so it's asked for more than are
+    // shown.
+    private fun recents(): List<Recent> = try {
+        val lib = open()
+        lib?.recents(MAX_RECENTS * 4, playableOnly = true).orEmpty().asSequence()
+            .mapNotNull { recent(CollectionRef(it.kind.refKind, it.uid)) }
+            .take(MAX_RECENTS)
+            .toList()
+    } catch (e: KithCoreException) {
+        Log.e(TAG, "Couldn't list the recents", e)
+        emptyList()
+    }
+
+    private fun recent(ref: CollectionRef): Recent? = when (ref.kind) {
+        CollectionRef.Kind.Album -> contents.albums[ref.uid]?.let { Recent(ref, it.title, it.artist, it.art) }
+        CollectionRef.Kind.Artist -> contents.artists[ref.uid]?.let { Recent(ref, it.name, null, it.art) }
+        CollectionRef.Kind.Playlist -> contents.playlists[ref.uid]?.let { Recent(ref, it.name, null, it.art) }
+        CollectionRef.Kind.AlbumGroup -> contents.albumGroups[ref.uid]?.let { Recent(ref, it.name, null, it.art) }
+    }
+
+    // On [core]. The Home page's rows from [picks], each tile as it's listed here: the core's
+    // rows have albums and playlists with nothing on this phone, which [recent] leaves out.
+    private fun home(picks: HomePicks): Home {
+        val rows = HomeRowId.entries.mapNotNull { id ->
+            val items = picks.rows[id].orEmpty()
+                .mapNotNull { pick -> recent(CollectionRef(pick.kind.refKind, pick.uid)) }
+                .distinctBy { it.ref }
+            if (items.isEmpty()) null else HomeRow(id.kind, items)
+        }
+        return Home(rows, hasMusic = rows.isNotEmpty(), hasPlays = picks.hasPlays)
+    }
+
+    // The tracks with a file on this phone.
+    private fun List<TrackInfo>.here() = filter { it.path != null }
+
+    /**
+     * What the last read found, for building [Library] and looking things up by uid. [smart]
+     * are the smart lists among the playlists and album groups, and [random] those of them
+     * ordered by random.
+     */
+    private data class Contents(
+        val albums: Map<String, Album>,
+        val artists: Map<String, Artist>,
+        val playlists: Map<String, Playlist>,
+        val albumGroups: Map<String, AlbumGroup>,
+        val smart: Set<String>,
+        val random: Set<String>,
+    ) {
+        fun library(recents: List<Recent>) = Library(
+            recents,
+            playlists.values.toList(),
+            albums.values.toList(),
+            artists.values.toList(),
+            albumGroups.values.toList(),
+        )
+
+        companion object {
+            val Empty = Contents(emptyMap(), emptyMap(), emptyMap(), emptyMap(), emptySet(), emptySet())
+        }
+    }
+
+    /**
+     * Makes [ArtRef]s for covers in album folders, as the core finds them ([NativeCore.coverFile]).
+     * Each folder is looked at once. Inner, for [unknownArtist].
+     */
+    private inner class Covers {
+        private val found = HashMap<String, File?>()
+
+        fun album(info: AlbumInfo): ArtRef {
+            val folder = info.folder ?: return ArtRef(info.uid, info.title)
+            // Embedded art is never shown: the cover file is the album's art.
+            val file = if (info.hasArt) found.getOrPut(folder) { coverIn(folder) } else null
+            return ref(info.uid, info.title, file)
+        }
+
+        // A track's album cover.
+        fun track(info: TrackInfo): Track {
+            val album = info.album.orEmpty()
+            val file = info.coverDir?.let { dir -> found.getOrPut(dir) { coverIn(dir) } }
+            return Track(
+                uid = info.uid,
+                title = info.title,
+                artist = info.artist ?: unknownArtist(),
+                album = album,
+                trackNo = info.trackNo,
+                durationMs = info.durationMs.toLong(),
+                art = ref(album.ifEmpty { info.uid }, album.ifEmpty { info.title }, file),
+                path = info.path,
+                albumUid = info.albumUid,
+                artistUid = info.artistUid,
+            )
+        }
+
+        /** An artist's picture: the cover in [ArtistInfo.coverDir], keyed by the artist. */
+        fun artist(info: ArtistInfo): ArtRef =
+            ref(info.uid, info.name, info.coverDir?.let { dir -> found.getOrPut(dir) { coverIn(dir) } })
+
+        /** A found track's art: its album's, keyed by the album's title as a track's is. */
+        fun found(album: Album): ArtRef = album.art.copy(uid = album.title, label = album.title)
+
+        private fun ref(uid: String, label: String, file: File?) = artRef(uid, label, file)
+
+        private fun coverIn(dir: String): File? {
+            knownCovers[dir]?.takeIf { it.isFile }?.let { return it }
+            val found = NativeCore.coverFile(dir)?.let(::File)
+            if (found != null) knownCovers[dir] = found else knownCovers.remove(dir)
+            return found
+        }
+    }
+
+    private companion object {
+        const val TAG = "kithsong"
+        const val KEY_RECENTS = "recents" // only read once, to hand them to the core
+        const val KEY_PLAYLIST_ART = "playlist_art"
+        const val MAX_RECENTS = 40 // as many as a tablet's sidebar could fit
+        const val SEARCH_LIMIT = 20 // of each kind, as the desktops show
+
+        fun artRef(uid: String, label: String, file: File?) = ArtRef(uid, label, file?.path, file?.lastModified() ?: 0)
+
+        val Deletion.Kind.core: DeleteKind
+            get() = when (this) {
+                Deletion.Kind.Track -> DeleteKind.Track
+                Deletion.Kind.Album -> DeleteKind.Album
+            }
+
+        val CollectionRef.Kind.itemKind: ItemKind
+            get() = when (this) {
+                CollectionRef.Kind.Album -> ItemKind.Album
+                CollectionRef.Kind.Artist -> ItemKind.Artist
+                CollectionRef.Kind.Playlist -> ItemKind.Playlist
+                CollectionRef.Kind.AlbumGroup -> ItemKind.AlbumGroup
+            }
+
+        val HomeRowId.kind: HomeRow.Kind
+            get() = when (this) {
+                HomeRowId.Recents -> HomeRow.Kind.Recents
+                HomeRowId.PlayedLately -> HomeRow.Kind.PlayedLately
+                HomeRowId.NotPlayedLately -> HomeRow.Kind.NotPlayedLately
+                HomeRowId.Random -> HomeRow.Kind.Random
+            }
+
+        val ItemKind.refKind: CollectionRef.Kind
+            get() = when (this) {
+                ItemKind.Album -> CollectionRef.Kind.Album
+                ItemKind.Artist -> CollectionRef.Kind.Artist
+                ItemKind.Playlist -> CollectionRef.Kind.Playlist
+                ItemKind.AlbumGroup -> CollectionRef.Kind.AlbumGroup
+            }
+    }
+}
+
+/**
+ * Albums as the app lists them, by title. The core has them by artist, and albums of the same
+ * title stay in that order.
+ */
+private fun List<AlbumInfo>.byTitle(): List<AlbumInfo> = sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })

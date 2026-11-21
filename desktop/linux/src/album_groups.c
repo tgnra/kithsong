@@ -1,0 +1,692 @@
+#include "album_groups.h"
+
+#include <string.h>
+
+#include "album_group_dialogs.h"
+#include "delete_dialog.h"
+#include "devices.h"
+#include "edit_dialog.h"
+#include "playback.h"
+#include "playlist_dialogs.h"
+#include "recents.h"
+#include "remove_here.h"
+#include "smart_editor.h"
+#include "track_menu.h"
+
+static struct {
+  app *a;
+  void (*album_changed)(void *user);
+  void (*navigated)(void *user);
+  GtkWidget *stack;        /* "list" (the header and list_stack) | "group" page */
+  GtkWidget *list_stack;   /* "none" status page | "groups" grid */
+  GtkWidget *none; /* its page while no groups are listed */
+  GtkWidget *choose_sync; /* its Choose what to sync button */
+  int hidden;      /* groups left out, with nothing to play here */
+  GtkWidget *groups;       /* the groups' grid */
+  GtkWidget *albums;       /* the open group's albums' grid */
+  GtkWidget *albums_stack; /* "empty" status page | "albums" */
+  GtkWidget *name, *more;  /* the open group's header: its name and menu */
+  GtkWidget *reshuffle;    /* in place of the menu, for a smart group in random order */
+  GtkWidget *play;         /* Play, Shuffle albums and Shuffle tracks, under the header */
+  char open[MC_UID_STRLEN];       /* the open group, or "" */
+  gboolean smart;                 /* it's a smart group: nothing to rename, delete or remove */
+  char menu_album[MC_UID_STRLEN]; /* the album a menu was opened on */
+  char menu_group[MC_UID_STRLEN]; /* and the group it's in there, or "" */
+  char up_after[MC_UID_STRLEN];   /* where Move up puts it: after this album, or first if "" */
+  char down_after[MC_UID_STRLEN]; /* and Move down */
+  char *menu_title;               /* and the album's title */
+  gboolean actions;               /* the "albumgroup." actions are on the window */
+} v;
+
+static void on_library_changed(void *user) {
+  app_reload_library(user);
+}
+
+static void fail(const char *heading) {
+  AdwDialog *alert = adw_alert_dialog_new(heading, NULL);
+  adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", mc_str_mnemonic(MC_STR_CLOSE));
+  adw_dialog_present(alert, GTK_WIDGET(v.a->win));
+}
+
+/* A name as a menu item's label, its underscores kept rather than taken as mnemonics.
+ * g_free it. */
+static char *menu_label(const char *name) {
+  GString *s = g_string_new(NULL);
+  for (const char *p = name && *name ? name : mc_str(MC_STR_UNTITLED); *p; p++) {
+    if (*p == '_') g_string_append_c(s, '_');
+    g_string_append_c(s, *p);
+  }
+  return g_string_free(s, FALSE);
+}
+
+/* The group's name as the groups' grid has it, or "". */
+static char *group_name(const char *uid) {
+  AlbumItem *group = album_grid_find(v.groups, uid);
+  char *name = g_strdup(group ? group->title : "");
+  if (group) g_object_unref(group);
+  return name;
+}
+
+static gboolean group_is_smart(const char *uid) {
+  AlbumItem *group = album_grid_find(v.groups, uid);
+  gboolean smart = group && group->is_smart;
+  if (group) g_object_unref(group);
+  return smart;
+}
+
+/* --- Actions: albumgroup.add(uid), .new, .remove, .move-up, .move-down, .rename(uid),
+ * .delete(uid), and .delete-album, which deletes the menu's album from the library
+ * (delete_dialog.h), and .remove-here and .sync-here, which take it off this computer or
+ * bring it back (remove_here.h) --- */
+
+static void on_add(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  app *a = user;
+  if (!a->lib || !v.menu_album[0]) return;
+  const char *group = g_variant_get_string(param, NULL);
+  if (mc_album_group_add(a->lib, group, v.menu_album) != MC_OK) fail(mc_str(MC_STR_ALBUM_GROUP_ADD_FAILED));
+  else mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, group); /* changed: first in the recents */
+  app_reload_library(a);
+}
+
+static void on_new(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (a->lib && v.menu_album[0])
+    album_group_create_present(GTK_WIDGET(a->win), a->lib, v.menu_album, on_library_changed, a);
+}
+
+static void on_remove(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (!a->lib || !v.menu_album[0] || !v.menu_group[0]) return;
+  if (mc_album_group_remove(a->lib, v.menu_group, v.menu_album) != MC_OK) fail(mc_str(MC_STR_ALBUM_GROUP_REMOVE_FAILED));
+  else mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, v.menu_group);
+  app_reload_library(a);
+}
+
+static void move(app *a, const char *after) {
+  if (!a->lib || !v.menu_album[0] || !v.menu_group[0]) return;
+  if (mc_album_group_move(a->lib, v.menu_group, v.menu_album, after[0] ? after : NULL) != MC_OK)
+    fail(mc_str(MC_STR_ALBUM_GROUP_MOVE_FAILED));
+  else mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, v.menu_group);
+  app_reload_library(a);
+}
+
+static void on_move_up(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  move(user, v.up_after);
+}
+
+static void on_move_down(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  move(user, v.down_after);
+}
+
+static void on_rename(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  app *a = user;
+  const char *uid = g_variant_get_string(param, NULL);
+  char *name = group_name(uid);
+  if (group_is_smart(uid))
+    smart_rename_present(GTK_WIDGET(a->win), a->lib, uid, name, MC_SMART_ALBUMS, on_library_changed, a);
+  else
+    album_group_rename_present(GTK_WIDGET(a->win), a->lib, uid, name, on_library_changed, a);
+  g_free(name);
+}
+
+static void on_delete(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  app *a = user;
+  const char *uid = g_variant_get_string(param, NULL);
+  char *name = group_name(uid);
+  if (group_is_smart(uid))
+    smart_delete_present(GTK_WIDGET(a->win), a->lib, uid, name, MC_SMART_ALBUMS, on_library_changed, a);
+  else
+    album_group_delete_present(GTK_WIDGET(a->win), a->lib, uid, name, on_library_changed, a);
+  g_free(name);
+}
+
+static void on_smart_saved(void *user, const char *uid) {
+  (void)uid;
+  app_reload_library(user);
+}
+
+/* A smart group's Edit rules…. */
+static void on_edit_rules(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  app *a = user;
+  if (a->lib) smart_editor_edit(GTK_WIDGET(a->win), a->lib, g_variant_get_string(param, NULL), on_smart_saved, a);
+}
+
+static void on_group_created(void *user, const char *uid);
+
+/* The header's New smart album group…: the new group opens, if it has something to play
+ * here. */
+static void on_new_smart(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (a->lib) smart_editor_new(GTK_WIDGET(a->win), a->lib, MC_SMART_ALBUMS, on_group_created, a);
+}
+
+static void on_edit_album(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  if (v.menu_album[0]) edit_dialog_present(user, EDIT_ALBUM, v.menu_album);
+}
+
+static void on_delete_album(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (a->lib && v.menu_album[0])
+    delete_dialog_present(GTK_WIDGET(a->win), a->lib, a->settings_dir, MC_DELETE_ALBUMS, v.menu_album,
+                          v.menu_title, on_library_changed, a);
+}
+
+static void on_remove_here(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (v.menu_album[0])
+    remove_here_present(GTK_WIDGET(a->win), MC_PROFILE_ALBUM, v.menu_album, v.menu_title, on_library_changed, a);
+}
+
+static void on_sync_here(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
+  (void)param;
+  app *a = user;
+  if (v.menu_album[0]) remove_here_restore(GTK_WIDGET(a->win), MC_PROFILE_ALBUM, v.menu_album, on_library_changed, a);
+}
+
+/* On the window, so the album grids' menus and the header's find them. */
+static void ensure_actions(void) {
+  if (v.actions || !v.a->win) return;
+  const GActionEntry entries[] = {
+    {"add", on_add, "s", NULL, NULL, {0}},
+    {"new", on_new, NULL, NULL, NULL, {0}},
+    {"remove", on_remove, NULL, NULL, NULL, {0}},
+    {"move-up", on_move_up, NULL, NULL, NULL, {0}},
+    {"move-down", on_move_down, NULL, NULL, NULL, {0}},
+    {"rename", on_rename, "s", NULL, NULL, {0}},
+    {"delete", on_delete, "s", NULL, NULL, {0}},
+    {"edit-rules", on_edit_rules, "s", NULL, NULL, {0}},
+    {"new-smart", on_new_smart, NULL, NULL, NULL, {0}},
+    {"delete-album", on_delete_album, NULL, NULL, NULL, {0}},
+    {"edit-album", on_edit_album, NULL, NULL, NULL, {0}},
+    {"remove-here", on_remove_here, NULL, NULL, NULL, {0}},
+    {"sync-here", on_sync_here, NULL, NULL, NULL, {0}},
+  };
+  GSimpleActionGroup *group = g_simple_action_group_new();
+  g_action_map_add_action_entries(G_ACTION_MAP(group), entries, G_N_ELEMENTS(entries), v.a);
+  gtk_widget_insert_action_group(GTK_WIDGET(v.a->win), "albumgroup", G_ACTION_GROUP(group));
+  g_object_unref(group);
+  v.actions = TRUE;
+}
+
+static void append_for(GMenu *menu, enum mc_str_id label, const char *action, const char *uid) {
+  GMenuItem *item = g_menu_item_new(mc_str_mnemonic(label), NULL);
+  g_menu_item_set_action_and_target_value(item, action, g_variant_new_string(uid));
+  g_menu_append_item(menu, item);
+  g_object_unref(item);
+}
+
+/* Play next, Play last, then Rename... and Delete album group... for group uid, called name; for a
+ * smart one, Edit rules... before those. */
+static GMenuModel *group_menu(const char *uid, const char *name, gboolean smart) {
+  GMenu *menu = g_menu_new(), *section = g_menu_new();
+  track_menu_append_queue(menu, smart ? MC_UP_NEXT_SMART_ALBUM_GROUP : MC_UP_NEXT_ALBUM_GROUP, uid, name);
+  if (smart) append_for(section, MC_STR_SMART_EDIT_MENU, "albumgroup.edit-rules", uid);
+  append_for(section, MC_STR_PLAYLIST_RENAME_MENU, "albumgroup.rename", uid);
+  append_for(section, smart ? MC_STR_SMART_DELETE_GROUP_MENU : MC_STR_ALBUM_GROUP_DELETE_MENU, "albumgroup.delete", uid);
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  return G_MENU_MODEL(menu);
+}
+
+GMenuModel *album_groups_group_model(const char *uid, const char *name, gboolean smart) {
+  ensure_actions();
+  return group_menu(uid, name, smart);
+}
+
+/* The album's menu; grid is what it's shown in if in_group isn't NULL, for where it can move. */
+static GMenuModel *album_menu(app *a, GtkWidget *grid, const char *uid, const char *title, const char *in_group) {
+  ensure_actions();
+  g_strlcpy(v.menu_album, uid, sizeof v.menu_album);
+  g_strlcpy(v.menu_group, in_group ? in_group : "", sizeof v.menu_group);
+  g_free(v.menu_title);
+  v.menu_title = g_strdup(title);
+
+  GMenu *menu = g_menu_new(), *add = g_menu_new();
+  track_menu_append_queue(menu, MC_UP_NEXT_ALBUM, uid, title);
+  mc_album_group_list *groups = NULL;
+  if (mc_library_list_album_groups(a->lib, 0, &groups) == MC_OK && groups->count) {
+    GMenu *section = g_menu_new();
+    for (int i = 0; i < groups->count; i++) {
+      char *label = menu_label(groups->items[i].name);
+      GMenuItem *item = g_menu_item_new(label, NULL);
+      g_menu_item_set_action_and_target_value(item, "albumgroup.add", g_variant_new_string(groups->items[i].uid));
+      g_menu_append_item(section, item);
+      g_object_unref(item);
+      g_free(label);
+    }
+    g_menu_append_section(add, NULL, G_MENU_MODEL(section));
+    g_object_unref(section);
+  }
+  mc_album_group_list_free(groups);
+  GMenu *section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_NEW_ALBUM_GROUP_MENU), "albumgroup.new");
+  g_menu_append_section(add, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  g_menu_append_submenu(menu, mc_str_mnemonic(MC_STR_ADD_TO_ALBUM_GROUP), G_MENU_MODEL(add));
+  g_object_unref(add);
+  if (in_group) {
+    /* Move up and Move down where it can go: before the one before it, or after the next. */
+    int i = album_grid_index(grid, uid);
+    const char *up = album_grid_uid_at(grid, i - 2), *down = i >= 0 ? album_grid_uid_at(grid, i + 1) : NULL;
+    g_strlcpy(v.up_after, up ? up : "", sizeof v.up_after);
+    g_strlcpy(v.down_after, down ? down : "", sizeof v.down_after);
+    section = g_menu_new();
+    if (i > 0) g_menu_append(section, mc_str_mnemonic(MC_STR_MOVE_UP), "albumgroup.move-up");
+    if (down) g_menu_append(section, mc_str_mnemonic(MC_STR_MOVE_DOWN), "albumgroup.move-down");
+    g_menu_append(section, mc_str_mnemonic(MC_STR_REMOVE_FROM_ALBUM_GROUP), "albumgroup.remove");
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
+    g_object_unref(section);
+  }
+  section = g_menu_new();
+  g_menu_append(section, mc_str_mnemonic(MC_STR_EDIT_MENU), "albumgroup.edit-album");
+  remove_here_append(section, MC_PROFILE_ALBUM, v.menu_album, "albumgroup.remove-here", "albumgroup.sync-here");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_DELETE_FROM_LIBRARY_MENU), "albumgroup.delete-album");
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
+  g_object_unref(section);
+  return G_MENU_MODEL(menu);
+}
+
+GMenuModel *album_groups_album_model(app *a, const char *uid, const char *title) {
+  return a->lib ? album_menu(a, NULL, uid, title, NULL) : NULL;
+}
+
+void album_groups_album_menu(app *a, GtkWidget *grid, AlbumItem *album, const char *in_group, double x, double y) {
+  ensure_actions();
+  if (!a->lib || !album || album->is_playlist || album->is_group) return;
+  GMenuModel *menu = album_menu(a, grid, album->uid, album->title, in_group);
+  album_grid_popup(grid, menu, x, y);
+  g_object_unref(menu); /* the popover keeps it */
+}
+
+/* --- Opening a group and going back --- */
+
+static void show_open(void) {
+  gtk_stack_set_visible_child_name(GTK_STACK(v.stack), "group");
+}
+
+/* Empties the albums' grid, so the next group's start at the top with nothing selected. */
+static void clear_albums(void) {
+  gboolean found;
+  album_grid_unselect(v.albums);
+  album_grid_reload_group_albums(v.albums, NULL, NULL, &found);
+}
+
+/* Lists the open group's albums again; FALSE if it has gone. */
+static gboolean reload_open(app *a) {
+  gboolean found = FALSE;
+  int n = album_grid_reload_group_albums(v.albums, a->lib, v.open, &found);
+  if (!found) return FALSE;
+  gtk_stack_set_visible_child_name(GTK_STACK(v.albums_stack), n ? "albums" : v.smart ? "smart-empty" : "empty");
+  gboolean here = FALSE;
+  for (int i = 0; i < n && !here; i++) {
+    AlbumItem *album = album_grid_find(v.albums, album_grid_uid_at(v.albums, i));
+    here = album && album->here;
+    if (album) g_object_unref(album);
+  }
+  gtk_widget_set_visible(v.play, n > 0);
+  gtk_widget_set_sensitive(v.play, here);
+  char *name = group_name(v.open);
+  if (*name) gtk_label_set_text(GTK_LABEL(v.name), name); /* renamed, maybe */
+  g_free(name);
+  return TRUE;
+}
+
+gboolean album_groups_open(app *a, const char *uid) {
+  AlbumItem *group = album_grid_find(v.groups, uid);
+  if (!group) return FALSE;
+  ensure_actions();
+  g_strlcpy(v.open, group->uid, sizeof v.open);
+  gtk_label_set_text(GTK_LABEL(v.name), group->title);
+  v.smart = group->is_smart;
+  gtk_widget_set_tooltip_text(v.more, mc_str(v.smart ? MC_STR_SMART_GROUP_MENU : MC_STR_ALBUM_GROUP_MENU));
+  gtk_widget_set_visible(v.reshuffle, group->is_smart && group->random);
+  g_object_unref(group);
+  GMenuModel *menu = group_menu(v.open, gtk_label_get_text(GTK_LABEL(v.name)), v.smart);
+  gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(v.more), menu);
+  g_object_unref(menu);
+  clear_albums();
+  reload_open(a);
+  show_open();
+  album_grid_focus(v.albums); /* so Alt+Left and the arrow keys work from the start */
+  if (a->lib && mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, v.open) == MC_OK) recents_refresh(a);
+  if (v.navigated) v.navigated(a);
+  return TRUE;
+}
+
+static void go_back(void) {
+  if (!v.open[0]) return;
+  char was[MC_UID_STRLEN];
+  memcpy(was, v.open, sizeof was);
+  v.open[0] = '\0';
+  clear_albums();
+  album_grid_select(v.groups, was);
+  album_groups_reload(v.a);
+  if (v.navigated) v.navigated(v.a);
+}
+
+static void on_back(GtkButton *button, gpointer user) {
+  (void)button;
+  (void)user;
+  go_back();
+}
+
+static gboolean on_back_key(GtkWidget *widget, GVariant *args, gpointer user) {
+  (void)widget;
+  (void)args;
+  (void)user;
+  go_back();
+  return TRUE;
+}
+
+/* The mouse's back button. */
+static void on_back_click(GtkGestureClick *click, int n_press, double x, double y, gpointer user) {
+  (void)n_press;
+  (void)x;
+  (void)y;
+  (void)user;
+  gtk_gesture_set_state(GTK_GESTURE(click), GTK_EVENT_SEQUENCE_CLAIMED);
+  go_back();
+}
+
+static void on_group_activated(void *user, AlbumItem *group) {
+  char uid[MC_UID_STRLEN];
+  g_strlcpy(uid, group->uid, sizeof uid); /* opening reloads the grid, and the item may go */
+  album_groups_open(user, uid);
+}
+
+static void on_group_menu(void *user, GtkWidget *grid, AlbumItem *group, double x, double y) {
+  (void)user;
+  ensure_actions();
+  GMenuModel *menu = group_menu(group->uid, group->title, group->is_smart);
+  album_grid_popup(grid, menu, x, y);
+  g_object_unref(menu);
+}
+
+static void on_album_menu(void *user, GtkWidget *grid, AlbumItem *album, double x, double y) {
+  album_groups_album_menu(user, grid, album, v.open[0] && !v.smart ? v.open : NULL, x, y);
+}
+
+/* The header's Reshuffle, for a smart group in random order: its albums in a new order. */
+static void on_reshuffle(GtkButton *button, gpointer user) {
+  (void)button;
+  app *a = user;
+  if (!a->lib || !v.open[0] || !v.smart) return;
+  if (mc_smart_reshuffle(a->lib, v.open) != MC_OK) fail(mc_str(MC_STR_RESHUFFLE_FAILED));
+  app_reload_library(a);
+}
+
+static void on_album_changed(void *user) {
+  if (v.album_changed) v.album_changed(user);
+}
+
+/* --- Drops (drag.h) --- */
+
+/* An album dragged onto a manual group's tile is added to it. */
+static GdkDragAction on_group_drop_over(void *user, AlbumItem *target, const drag_item *item) {
+  (void)user;
+  return item->kind == DRAG_ALBUM && target->is_group && !target->is_smart ? GDK_ACTION_COPY : 0;
+}
+
+static gboolean on_group_dropped(void *user, AlbumItem *target, const drag_item *item, gboolean after) {
+  (void)after;
+  app *a = user;
+  if (!a->lib || !on_group_drop_over(a, target, item)) return FALSE;
+  if (mc_album_group_add(a->lib, target->uid, item->uid) != MC_OK) {
+    fail(mc_str(MC_STR_ALBUM_GROUP_ADD_FAILED));
+    return FALSE;
+  }
+  mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, target->uid);
+  app_reload_library(a);
+  return TRUE;
+}
+
+/* In a manual group, its own albums move to before or after the one they're dropped on. */
+static GdkDragAction on_album_drop_over(void *user, AlbumItem *target, const drag_item *item) {
+  (void)user;
+  (void)target;
+  return v.open[0] && !v.smart && item->kind == DRAG_ALBUM && album_grid_index(v.albums, item->uid) >= 0
+           ? GDK_ACTION_MOVE
+           : 0;
+}
+
+static gboolean on_album_dropped(void *user, AlbumItem *target, const drag_item *item, gboolean after) {
+  app *a = user;
+  if (!a->lib || !on_album_drop_over(a, target, item)) return FALSE;
+  char group[MC_UID_STRLEN], to_after[MC_UID_STRLEN] = "";
+  g_strlcpy(group, v.open, sizeof group);
+  int at = album_grid_index(v.albums, target->uid);
+  const char *before = after ? target->uid : album_grid_uid_at(v.albums, at - 1);
+  if (before) g_strlcpy(to_after, before, sizeof to_after);
+  /* Dropped where it is already: on its own tile, or the gap either side of it. */
+  if (!strcmp(target->uid, item->uid) || !strcmp(to_after, item->uid)) return FALSE;
+  if (mc_album_group_move(a->lib, group, item->uid, to_after[0] ? to_after : NULL) != MC_OK) {
+    fail(mc_str(MC_STR_ALBUM_GROUP_MOVE_FAILED));
+    return FALSE;
+  }
+  mc_library_record_opened(a->lib, MC_RECENT_ALBUM_GROUP, group);
+  app_reload_library(a);
+  return TRUE;
+}
+
+/* --- Playing a group --- */
+
+static void on_play(GtkButton *button, gpointer user) {
+  (void)user;
+  app_play_album_group(v.a, (app_group_play)GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "how")));
+}
+
+/* A button with an icon and a label, a third of the row, as the track list's Play and
+ * Shuffle are half of theirs. */
+static GtkWidget *play_button(const char *icon, enum mc_str_id label, app_group_play how) {
+  GtkWidget *content = adw_button_content_new();
+  adw_button_content_set_icon_name(ADW_BUTTON_CONTENT(content), icon);
+  adw_button_content_set_label(ADW_BUTTON_CONTENT(content), mc_str(label));
+  GtkWidget *b = gtk_button_new();
+  gtk_button_set_child(GTK_BUTTON(b), content);
+  gtk_widget_set_hexpand(b, TRUE);
+  g_object_set_data(G_OBJECT(b), "how", GINT_TO_POINTER(how));
+  g_signal_connect(b, "clicked", G_CALLBACK(on_play), NULL);
+  return b;
+}
+
+/* Play, the suggested action, then Shuffle albums and Shuffle tracks, across the page. */
+static GtkWidget *build_play(void) {
+  v.play = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+  gtk_box_set_homogeneous(GTK_BOX(v.play), TRUE);
+  gtk_widget_set_margin_start(v.play, 18);
+  gtk_widget_set_margin_end(v.play, 18);
+  gtk_widget_set_margin_top(v.play, 12);
+  gtk_widget_set_margin_bottom(v.play, 6);
+  GtkWidget *play = play_button("media-playback-start-symbolic", MC_STR_PLAY, APP_PLAY_IN_ORDER);
+  gtk_widget_add_css_class(play, "suggested-action");
+  gtk_box_append(GTK_BOX(v.play), play);
+  gtk_box_append(GTK_BOX(v.play), play_button("media-playlist-shuffle-symbolic", MC_STR_SHUFFLE_ALBUMS, APP_PLAY_SHUFFLE_ALBUMS));
+  gtk_box_append(GTK_BOX(v.play), play_button("media-playlist-shuffle-symbolic", MC_STR_SHUFFLE_TRACKS, APP_PLAY_SHUFFLE_TRACKS));
+  gtk_widget_set_visible(v.play, FALSE); /* until a group with albums opens */
+  return v.play;
+}
+
+/* --- The page --- */
+
+static void on_choose_sync(GtkButton *button, gpointer user) {
+  (void)button, (void)user;
+  devices_open_self();
+}
+
+static GtkWidget *status_page(const char *icon, enum mc_str_id title, enum mc_str_id text) {
+  GtkWidget *page = adw_status_page_new();
+  adw_status_page_set_icon_name(ADW_STATUS_PAGE(page), icon);
+  adw_status_page_set_title(ADW_STATUS_PAGE(page), mc_str(title));
+  adw_status_page_set_description(ADW_STATUS_PAGE(page), mc_str(text));
+  return page;
+}
+
+static GtkWidget *round_button(GtkWidget *b, const char *tooltip) {
+  gtk_widget_set_tooltip_text(b, tooltip);
+  gtk_widget_add_css_class(b, "flat");
+  gtk_widget_add_css_class(b, "circular");
+  gtk_widget_set_valign(b, GTK_ALIGN_CENTER);
+  return b;
+}
+
+static GtkWidget *build_group_page(app *a) {
+  GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+  gtk_widget_set_margin_start(header, 18);
+  gtk_widget_set_margin_end(header, 18);
+  gtk_widget_set_margin_top(header, 12);
+  GtkWidget *back = round_button(gtk_button_new_from_icon_name("go-previous-symbolic"), mc_str(MC_STR_BACK));
+  app_set_tooltip(back, mc_str(MC_STR_BACK), "<Alt>Left");
+  g_signal_connect(back, "clicked", G_CALLBACK(on_back), NULL);
+  gtk_box_append(GTK_BOX(header), back);
+  v.name = gtk_label_new(NULL);
+  gtk_widget_add_css_class(v.name, "title-2");
+  gtk_label_set_xalign(GTK_LABEL(v.name), 0);
+  gtk_label_set_ellipsize(GTK_LABEL(v.name), PANGO_ELLIPSIZE_END);
+  gtk_widget_set_hexpand(v.name, TRUE);
+  gtk_box_append(GTK_BOX(header), v.name);
+  v.more = gtk_menu_button_new();
+  gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(v.more), "view-more-symbolic");
+  gtk_box_append(GTK_BOX(header), round_button(v.more, mc_str(MC_STR_ALBUM_GROUP_MENU)));
+  v.reshuffle = round_button(gtk_button_new_from_icon_name("view-refresh-symbolic"), mc_str(MC_STR_RESHUFFLE));
+  gtk_widget_set_visible(v.reshuffle, FALSE);
+  g_signal_connect(v.reshuffle, "clicked", G_CALLBACK(on_reshuffle), a);
+  gtk_box_append(GTK_BOX(header), v.reshuffle);
+
+  v.albums = album_grid_new(mc_str(MC_STR_ALBUM_GROUP), on_album_changed, a);
+  album_grid_set_menu(v.albums, on_album_menu, a);
+  album_grid_set_drop(v.albums, on_album_drop_over, on_album_dropped, a);
+  v.albums_stack = gtk_stack_new();
+  gtk_widget_set_vexpand(v.albums_stack, TRUE);
+  gtk_stack_add_named(GTK_STACK(v.albums_stack),
+                      status_page("media-optical-symbolic", MC_STR_ALBUM_GROUP_EMPTY_TITLE, MC_STR_ALBUM_GROUP_EMPTY_TEXT),
+                      "empty");
+  gtk_stack_add_named(GTK_STACK(v.albums_stack),
+                      status_page("media-optical-symbolic", MC_STR_SMART_LIST_EMPTY_TITLE, MC_STR_SMART_LIST_EMPTY_TEXT),
+                      "smart-empty");
+  gtk_stack_add_named(GTK_STACK(v.albums_stack), v.albums, "albums");
+
+  GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_add_css_class(page, "view"); /* the header on the grid's background */
+  gtk_box_append(GTK_BOX(page), header);
+  gtk_box_append(GTK_BOX(page), build_play());
+  gtk_box_append(GTK_BOX(page), v.albums_stack);
+
+  GtkEventController *keys = gtk_shortcut_controller_new();
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Left, GDK_ALT_MASK), gtk_callback_action_new(on_back_key, NULL, NULL)));
+  gtk_shortcut_controller_add_shortcut(
+    GTK_SHORTCUT_CONTROLLER(keys),
+    gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_BackSpace, 0), gtk_callback_action_new(on_back_key, NULL, NULL)));
+  gtk_widget_add_controller(page, keys);
+  GtkGesture *click = gtk_gesture_click_new();
+  gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 8); /* back */
+  g_signal_connect(click, "pressed", G_CALLBACK(on_back_click), NULL);
+  gtk_widget_add_controller(page, GTK_EVENT_CONTROLLER(click));
+  return page;
+}
+
+/* The header's +: a new, empty group, which opens. */
+static void on_group_created(void *user, const char *uid) {
+  app_reload_library(user);
+  app_open_album_group(user, uid);
+}
+
+static void on_new_group(GtkButton *button, gpointer user) {
+  app *a = user;
+  album_group_new_present(GTK_WIDGET(button), a->lib, on_group_created, a);
+}
+
+GtkWidget *album_groups_new(app *a, void (*album_changed)(void *user), void (*navigated)(void *user)) {
+  v.a = a;
+  v.album_changed = album_changed;
+  v.navigated = navigated;
+  v.groups = album_grid_new(mc_str(MC_STR_SECTION_ALBUM_GROUPS), NULL, NULL);
+  album_grid_set_activate(v.groups, TRUE, on_group_activated, a);
+  album_grid_set_menu(v.groups, on_group_menu, a);
+  album_grid_set_drop(v.groups, on_group_drop_over, on_group_dropped, a);
+
+  /* The groups under a header with the page's name and New album group (+). */
+  v.list_stack = gtk_stack_new();
+  gtk_widget_set_vexpand(v.list_stack, TRUE);
+  v.none = status_page("folder-symbolic", MC_STR_NO_ALBUM_GROUPS_TITLE, MC_STR_NO_ALBUM_GROUPS_TEXT);
+  v.choose_sync = gtk_button_new_with_label(mc_str(MC_STR_CHOOSE_WHAT_TO_SYNC));
+  gtk_widget_add_css_class(v.choose_sync, "pill");
+  gtk_widget_set_halign(v.choose_sync, GTK_ALIGN_CENTER);
+  gtk_widget_set_visible(v.choose_sync, FALSE);
+  g_signal_connect(v.choose_sync, "clicked", G_CALLBACK(on_choose_sync), NULL);
+  adw_status_page_set_child(ADW_STATUS_PAGE(v.none), v.choose_sync);
+  gtk_stack_add_named(GTK_STACK(v.list_stack), v.none, "none");
+  gtk_stack_add_named(GTK_STACK(v.list_stack), v.groups, "groups");
+  GtkWidget *list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_add_css_class(list, "view");
+  GMenu *new_menu = g_menu_new();
+  g_menu_append(new_menu, mc_str_mnemonic(MC_STR_SMART_NEW_GROUP_MENU), "albumgroup.new-smart");
+  gtk_box_append(GTK_BOX(list), app_list_header(mc_str(MC_STR_SECTION_ALBUM_GROUPS), mc_str(MC_STR_NEW_ALBUM_GROUP),
+                                                NULL, G_CALLBACK(on_new_group), a, G_MENU_MODEL(new_menu),
+                                                mc_str(MC_STR_SMART_NEW_GROUP_TITLE)));
+  g_object_unref(new_menu);
+  gtk_box_append(GTK_BOX(list), v.list_stack);
+
+  v.stack = gtk_stack_new();
+  gtk_stack_add_named(GTK_STACK(v.stack), list, "list");
+  gtk_stack_add_named(GTK_STACK(v.stack), build_group_page(a), "group");
+  return v.stack;
+}
+
+void album_groups_update_empty(void) {
+  if (v.choose_sync) gtk_widget_set_visible(v.choose_sync, v.hidden > 0 && devices_sync_state() == DEVICES_GROUPED);
+}
+
+int album_groups_reload(app *a) {
+  ensure_actions();
+  int n = album_grid_reload_groups(v.groups, a->lib, a->art_dir, &v.hidden);
+  /* Groups with nothing to play here are hidden; say so rather than "No album groups yet". */
+  adw_status_page_set_title(ADW_STATUS_PAGE(v.none), mc_str(v.hidden ? MC_STR_NO_PLAYABLE_ALBUM_GROUPS_TITLE
+                                                                     : MC_STR_NO_ALBUM_GROUPS_TITLE));
+  adw_status_page_set_description(ADW_STATUS_PAGE(v.none), mc_str(v.hidden ? MC_STR_NO_PLAYABLE_ALBUM_GROUPS_TEXT
+                                                                           : MC_STR_NO_ALBUM_GROUPS_TEXT));
+  album_groups_update_empty();
+  if (v.open[0] && !reload_open(a)) { /* deleted, maybe on another device: back to the groups */
+    v.open[0] = '\0';
+    clear_albums();
+  }
+  gtk_stack_set_visible_child_name(GTK_STACK(v.list_stack), n ? "groups" : "none");
+  gtk_stack_set_visible_child_name(GTK_STACK(v.stack), v.open[0] ? "group" : "list");
+  return n;
+}
+
+const char *album_groups_open_group(void) {
+  return v.open[0] ? v.open : NULL;
+}
+
+gboolean album_groups_shows(const char *uid) {
+  AlbumItem *item = v.groups ? album_grid_find(v.groups, uid) : NULL;
+  if (item) g_object_unref(item);
+  return item != NULL;
+}
+
+GtkWidget *album_groups_album_grid(void) {
+  return v.open[0] ? v.albums : NULL;
+}

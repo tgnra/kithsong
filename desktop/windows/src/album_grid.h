@@ -1,0 +1,174 @@
+/* The album grid: covers with title and artist beneath, in as many columns as fit. The same
+ * grid shows the playlists and the album groups and a group's albums.
+ *
+ * Built for large libraries:
+ *  - virtualised: only the tiles in view are painted, into an off-screen buffer.
+ *  - covers are decoded on a background thread with WIC, scaled during decoding to exactly the
+ *    tile size, visible tiles first and one screen ahead in each direction. Playlists' pictures
+ *    are made there too (mc_playlist_art()), on its own connection.
+ *  - thumbnails far from the view are freed, so memory stays flat however many albums.
+ *  - pixel scrolling, the wheel eased over a few frames, with a thin overlay scrollbar.
+ *
+ * The grid also draws the content area's border and rounded top-left corner, which shows Mica
+ * outside it. Screen readers see the tiles as a list, and a group's header buttons (uia.h).
+ */
+#ifndef KITHSONG_ALBUM_GRID_H
+#define KITHSONG_ALBUM_GRID_H
+
+#include <windows.h>
+
+#include "kithcore/kithcore.h"
+
+/* Creates the grid as a child of parent. Fonts arrive through WM_SETFONT. Only one grid
+ * exists at a time. */
+HWND album_grid_create(HWND parent, int id);
+
+/* Shows the albums of lib (NULL shows "Could not open the library"). The list is reloaded
+ * the next time the grid paints, so calling this while it's hidden (e.g. after each item of
+ * an import) costs nothing. Call it again whenever the library changes. */
+void album_grid_set_library(mc_library *lib);
+/* While the first run asks where the library goes, there's no library yet, and the grid
+ * shows nothing rather than that it couldn't be opened. */
+void album_grid_set_first_run(BOOL first_run);
+
+/* What the grid shows. Playlists and album groups show their pictures (or a placeholder) with
+ * the track or album count beneath the name. Clicking a group (or Enter on it) opens it:
+ * AGV_GROUP, its albums under a header with Back (also Backspace, Alt+Left and the mouse's
+ * back button), its name, and a More button with Rename and Delete. Under that, across the
+ * grid, Play, Shuffle Albums and Shuffle Tracks play its albums (AGN_PLAY_GROUP), greyed out
+ * when none of them has a file here. An album played from the track list here is played as
+ * part of the group too, going on into the albums after it.
+ *
+ * Smart playlists and smart album groups (smartlist.h) follow the others, those with
+ * something to play here, with a placeholder and "Smart playlist" or "Smart album group"
+ * beneath the name. A smart group opens like a group, with the albums its rule picks and the
+ * rule as a sentence under its name; its More button offers Edit Rules... (smart_editor.h),
+ * Rename... and Delete..., and in random order a Reshuffle button sits beside it (which the
+ * grid does itself, notifying AGN_LIBRARY_CHANGED). Its albums can't be removed from it.
+ *
+ * Playlists and album groups have a header too, with the page's name and a + button: New
+ * Playlist or New Album Group, which asks for a name (playlist_dialogs.c) and makes an empty
+ * one. A new group opens; a new playlist is selected, and stays on the page (though playlists
+ * with nothing to play here are hidden) until the grid shows another view. */
+typedef enum album_grid_view {
+  AGV_ALBUMS,
+  AGV_PLAYLISTS,
+  AGV_GROUPS, /* the album groups */
+  AGV_GROUP,  /* one group's albums; see album_grid_open_group() */
+} album_grid_view;
+
+/* Switches the grid to view (not AGV_GROUP), which drops the selection. */
+void album_grid_show(album_grid_view view);
+album_grid_view album_grid_shown(void);
+/* album_grid_show(AGV_PLAYLISTS or AGV_ALBUMS), and whether it's AGV_PLAYLISTS. */
+void album_grid_show_playlists(BOOL playlists);
+BOOL album_grid_showing_playlists(void);
+/* Shows album group uid's albums, as a click on it does (notifying AGN_OPEN_GROUP). If the
+ * group goes, the grid goes back to the groups. */
+void album_grid_open_group(const char *uid);
+/* The shown group's uid, or NULL outside AGV_GROUP. */
+const char *album_grid_group(void);
+/* In a group, goes back to the groups with it selected, as Backspace there does. FALSE outside
+ * AGV_GROUP. */
+BOOL album_grid_back(void);
+
+/* Right-clicking an album (on Albums or in a group) offers Add to Album Group, Edit...
+ * (edit_dialog.h), and in a group Remove from Album Group; right-clicking a group (or its header) offers Rename and
+ * Delete, and a smart playlist or group Edit Rules..., Rename... and Delete.... F2 renames
+ * the open group, or the selected playlist or group, and Delete asks to delete the selected
+ * playlist or group (smart ones too). Right-clicking the Playlists or
+ * Album Groups page away from the tiles (or the menu key with nothing selected) offers New
+ * Smart Playlist... or New Smart Album Group.... The grid makes those changes itself
+ * (add_to_playlist.c, playlist_dialogs.c, smart_editor.c), then notifies
+ * AGN_LIBRARY_CHANGED. */
+
+/* New Smart Playlist... on the Playlists page, New Smart Album Group... on the Album Groups
+ * page, as their menus do: then selects the new playlist, or opens the new group. */
+void album_grid_new_smart(void);
+/* The header's + on the Playlists page (Ctrl+N): New Playlist, which asks for a name, then
+ * selects the new, empty playlist. Nothing on other pages. */
+void album_grid_new_playlist(void);
+
+/* This PC's place in sync, for the empty pages: with no albums and no group, Albums suggests
+ * importing, with an Import button (AGN_IMPORT); with no albums in a group, it
+ * suggests choosing what to sync, with a Choose What to Sync button (AGN_SYNC_SETTINGS), as
+ * Playlists does when every playlist is hidden for having nothing to play here. */
+typedef enum album_grid_sync {
+  AG_SYNC_OFF,     /* sync isn't running: neither */
+  AG_SYNC_ALONE,   /* running, and this PC isn't in a group */
+  AG_SYNC_GROUPED, /* this PC is in a group */
+} album_grid_sync;
+void album_grid_set_sync_state(album_grid_sync state);
+
+/* Where playlists' pictures are cached (UTF-8; see mc_playlist_art()). Without one,
+ * playlists show the placeholder. */
+void album_grid_set_playlist_art_dir(const char *dir);
+
+/* Sent to the parent as a WM_COMMAND notification code (posted) when the selected album
+ * changes, by a click or because it left the library, or when it was renamed or its cover
+ * changed. */
+#define AGN_SELCHANGE 1
+/* Sent the same way when a group is opened (album_grid_group() says which). */
+#define AGN_OPEN_GROUP 2
+/* Sent the same way after the grid changed the library (see above), for the parent to
+ * refresh what shows it. */
+#define AGN_LIBRARY_CHANGED 3
+/* Sent the same way when the empty page's Import is pressed, for the parent to show the
+ * Import page. */
+#define AGN_IMPORT 4
+/* Sent the same way when Choose What to Sync is pressed, for the parent to show this PC's
+ * page. */
+#define AGN_SYNC_SETTINGS 5
+/* Sent the same way when one of a group's play buttons is pressed, for the parent to queue
+ * its albums' tracks (album_grid_count(), album_grid_uid_at()) as album_grid_play_how()
+ * says. */
+#define AGN_PLAY_GROUP 6
+
+typedef enum album_grid_play {
+  AG_PLAY_IN_ORDER,       /* Play: the albums in the group's order, each in its own */
+  AG_PLAY_SHUFFLE_ALBUMS, /* the albums in a random order, each in its own */
+  AG_PLAY_SHUFFLE_TRACKS, /* every track, shuffled */
+} album_grid_play;
+album_grid_play album_grid_play_how(void);
+/* In AGV_GROUP, the group's albums in its order (a smart one's as its rule picks them now);
+ * 0 elsewhere. A uid is valid until the grid next reloads. */
+int album_grid_count(void);
+const char *album_grid_uid_at(int i);
+
+/* The selected album (or playlist): copies its uid and returns its title, or returns NULL
+ * if there's none. */
+const wchar_t *album_grid_selection(char uid[MC_UID_STRLEN]);
+/* The selected album's artist, or NULL. Valid until the grid next reloads. */
+const wchar_t *album_grid_selection_artist(void);
+/* The folder holding the selected album's cover, or for a playlist its picture file, or
+ * NULL if it has none (or none is selected). Valid until the grid next reloads or loads
+ * the cover. */
+const wchar_t *album_grid_selection_cover(void);
+/* Whether the selected playlist is a smart one, and if so in *random (may be NULL) whether
+ * it's in random order. */
+BOOL album_grid_selection_smart(BOOL *random);
+/* The selected album's year, or 0 if it's unknown (or none is selected). */
+int album_grid_selection_year(void);
+/* Whether it's a continuous mix. */
+BOOL album_grid_selection_mix(void);
+/* Clears the selection, which notifies the parent (AGN_SELCHANGE) as a click would. */
+void album_grid_unselect(void);
+/* Selects the album (or playlist, on the Playlists page) with uid and scrolls it into view,
+ * which notifies the parent as a click would. FALSE if the grid hasn't got it. */
+BOOL album_grid_select(const char *uid);
+
+/* Sizes the tiles for a grid full_w wide, even while it's narrower, so a pane beside it
+ * that comes and goes takes whole columns without resizing the tiles. Returns the width the
+ * pane should take from the grid to be at least min_w: a whole number of columns, or 0 if
+ * that would leave the grid none. Call before each layout. */
+int album_grid_set_full_width(int full_w, int min_w);
+
+/* Whether the grid is below the waiting banner (waiting_banner.h), which then draws the
+ * content area's top border and rounded corner: the grid draws only its left border. */
+void album_grid_set_below_banner(BOOL below);
+/* Call after theme_update. */
+void album_grid_theme_changed(void);
+/* For a scroll test. */
+struct scroller *album_grid_scroller(void);
+
+#endif
