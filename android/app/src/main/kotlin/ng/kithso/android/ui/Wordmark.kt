@@ -23,3 +23,29 @@ fun Wordmark(height: Dp, description: String?, modifier: Modifier = Modifier) {
         modifier = modifier.height(height).aspectRatio(352f / 100f),
     )
 }
+
+/**
+ * The wordmark's tile alone (R.drawable.ic_logo). At the same [height] it's the size the
+ * [Wordmark] draws it, margin and all.
+ */
+@Composable
+fun Logo(height: Dp, description: String?, modifier: Modifier = Modifier) {
+    Image(
+        painterResource(R.drawable.ic_logo),
+        contentDescription = description,
+        modifier = modifier.height(height).aspectRatio(1f),
+    )
+}
+
+/**
+ * The wordmark's name alone (R.drawable.ic_name, with a night version), cropped to its ink, so
+ * [height] is the letters' own, from the h's top to the g's tail.
+ */
+@Composable
+fun WordmarkName(height: Dp, description: String?, modifier: Modifier = Modifier) {
+    Image(
+        painterResource(R.drawable.ic_name),
+        contentDescription = description,
+        modifier = modifier.height(height).aspectRatio(236f / 74f),
+    )
+}

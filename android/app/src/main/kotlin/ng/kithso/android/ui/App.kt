@@ -64,6 +64,7 @@ import ng.kithso.android.AppSettings
 import ng.kithso.android.data.Addition
 import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.CoreLibrarySource
+import ng.kithso.android.data.FoundTrack
 import ng.kithso.android.data.LibraryDeleter
 import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.data.PlaylistEditor
@@ -80,6 +81,7 @@ import ng.kithso.android.sync.Syncer
 import ng.kithso.android.ui.theme.ArtColors
 import ng.kithso.android.ui.theme.ArtTheme
 import ng.kithso.core.CorePlayer
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -337,6 +339,9 @@ fun App(
     val audio = remember(context) { context.getSystemService(AudioManager::class.java) }
     // A page the sidebar or the rail opens, as picking it there does: by itself, where picked
     // again it stays as it is; on top of what's open on the phone.
+    // Opens the phone's header search: from the keyboard shortcut, as the main screen's own pull
+    // and menu open it there.
+    val phoneSearchRequests = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1) }
     val showPage = { page: Page ->
         nav = if (hasSections) {
             if (nav.pages == listOf(page)) nav else nav.removeAll { true }.push(page)
@@ -370,7 +375,15 @@ fun App(
                     playback.setShuffle(!playback.shuffle)
                     Toast.makeText(context, if (playback.shuffle) R.string.shuffle_on else R.string.shuffle_off, Toast.LENGTH_SHORT).show()
                 }
-                Shortcut.Search -> if (free) showPage(Page.Search)
+                // The phone searches in its header, over the main screen.
+                Shortcut.Search -> if (free) {
+                    if (hasSections) {
+                        showPage(Page.Search)
+                    } else {
+                        nav = nav.removeAll { true }
+                        phoneSearchRequests.tryEmit(Unit)
+                    }
+                }
                 Shortcut.Settings -> if (free) showPage(Page.Settings)
                 Shortcut.Albums -> if (free && hasSections) showSection(TabletSection.Albums)
                 Shortcut.Artists -> if (free && hasSections) showSection(TabletSection.Artists)
@@ -388,6 +401,26 @@ fun App(
         }
     }
     DisposableEffect(shortcuts) { onDispose { shortcuts.perform = null } }
+
+    // A search result's track, in Search or the phone's header: its album, from the track on; a
+    // single by itself.
+    val playFound: (FoundTrack) -> Unit = { found ->
+        val album = found.albumUid?.let { CollectionRef(CollectionRef.Kind.Album, it) }
+        if (album != null) scope.launch {
+            val tracks = source.trackList(album)?.tracks.orEmpty()
+            if (tracks.isEmpty()) return@launch
+            playback.play(tracks, tracks.indexOfFirst { it.uid == found.uid }.coerceAtLeast(0), album.origin)
+            source.notePlayed(album)
+            onPlay()
+        } else if (found.track != null) {
+            playback.play(listOf(found.track), 0, CorePlayer.Origin(CorePlayer.PlayContext.Manual))
+            onPlay()
+        }
+    }
+    // Its menu, once its artists are looked up, for Go to album and artist.
+    val foundTrackMenu: (FoundTrack) -> Unit = { found ->
+        scope.launch { actions.foundTrackMenu(found, source.trackArtists(found.uid)) }
+    }
 
     // Each page but the player, made the same way in every layout: the phone's layers below,
     // the rail and tablet layouts' content, and the tablet layout's pane. [pagePadding] is what
@@ -425,24 +458,8 @@ fun App(
                 source,
                 pagePadding,
                 onOpen = pageOpen,
-                onPlayTrack = { found ->
-                    // Its album, from the track on; a single by itself.
-                    val album = found.albumUid?.let { CollectionRef(CollectionRef.Kind.Album, it) }
-                    if (album != null) scope.launch {
-                        val tracks = source.trackList(album)?.tracks.orEmpty()
-                        if (tracks.isEmpty()) return@launch
-                        playback.play(tracks, tracks.indexOfFirst { it.uid == found.uid }.coerceAtLeast(0), album.origin)
-                        source.notePlayed(album)
-                        onPlay()
-                    } else if (found.track != null) {
-                        playback.play(listOf(found.track), 0, CorePlayer.Origin(CorePlayer.PlayContext.Manual))
-                        onPlay()
-                    }
-                },
-                // Its menu, once its artists are looked up, for Go to album and artist.
-                onTrackMenu = { found ->
-                    scope.launch { actions.foundTrackMenu(found, source.trackArtists(found.uid)) }
-                },
+                onPlayTrack = playFound,
+                onTrackMenu = foundTrackMenu,
                 onBack = dismiss,
             )
             is Page.Collection -> DetailScreen(
@@ -573,7 +590,10 @@ fun App(
                     library,
                     bottomPadding,
                     onOpen = open,
-                    onSearch = { nav = nav.push(Page.Search) },
+                    source = source,
+                    searchRequests = phoneSearchRequests,
+                    onPlayTrack = playFound,
+                    onTrackMenu = foundTrackMenu,
                     onSync = { nav = nav.push(Page.Sync) },
                     onSettings = { nav = nav.push(Page.Settings) },
                     onStats = { nav = nav.push(Page.Stats) },

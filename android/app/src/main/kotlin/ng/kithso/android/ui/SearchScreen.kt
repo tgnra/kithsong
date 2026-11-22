@@ -27,6 +27,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -75,17 +76,7 @@ fun SearchScreen(
     onBack: () -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    // Null until the first search is back. A new query keeps the last one's results until
-    // its own are back, so the list doesn't blink with each letter.
-    var results by remember { mutableStateOf<SearchResults?>(null) }
-    LaunchedEffect(query) {
-        if (query.isBlank()) {
-            results = null
-            return@LaunchedEffect
-        }
-        delay(SEARCH_DELAY_MS)
-        results = source.search(query)
-    }
+    val results = rememberSearchResults(source, query)
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     val focusManager = LocalFocusManager.current
@@ -129,20 +120,49 @@ fun SearchScreen(
                     modifier = Modifier.weight(1f).padding(start = 4.dp).focusRequester(focus),
                 )
             }
-            val found = results
             LazyColumn(
                 contentPadding = pageSides()
                     .add(WindowInsets(bottom = bottomPadding))
                     .asPaddingValues(),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                when {
-                    found == null || query.isBlank() -> Unit
-                    found.isEmpty -> item(key = "none") { NoResults(query) }
-                    else -> for (kind in found.order) results(kind, found, onOpen, onPlayTrack, onTrackMenu)
-                }
+                searchResults(query, results, onOpen, onPlayTrack, onTrackMenu)
             }
         }
+    }
+}
+
+/**
+ * What the core found for [query], following the typing after a short pause. Null until the
+ * first search is back, and for a blank query. A new query keeps the last one's results until
+ * its own are back, so the list doesn't blink with each letter.
+ */
+@Composable
+fun rememberSearchResults(source: LibrarySource, query: String): SearchResults? {
+    var results by remember { mutableStateOf<SearchResults?>(null) }
+    LaunchedEffect(query) {
+        if (query.isBlank()) {
+            results = null
+            return@LaunchedEffect
+        }
+        delay(SEARCH_DELAY_MS)
+        results = source.search(query)
+    }
+    return results.takeIf { query.isNotBlank() }
+}
+
+/** [found]'s results by kind, the kind with the best match first, or that nothing matched [query]. */
+fun LazyListScope.searchResults(
+    query: String,
+    found: SearchResults?,
+    onOpen: (CollectionRef) -> Unit,
+    onPlayTrack: (FoundTrack) -> Unit,
+    onTrackMenu: (FoundTrack) -> Unit,
+) {
+    when {
+        found == null || query.isBlank() -> Unit
+        found.isEmpty -> item(key = "none") { NoResults(query) }
+        else -> for (kind in found.order) results(kind, found, onOpen, onPlayTrack, onTrackMenu)
     }
 }
 
@@ -214,6 +234,8 @@ private fun ResultRow(
         headlineContent = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = { Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         leadingContent = { AlbumArt(art, contentDescription = null, shape = artShape, modifier = Modifier.size(48.dp)) },
+        // Over what's behind: the Search page's surface, or the phone's art backdrop under its header.
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier.listItemKeys(ListRowFocusShape, onLongClick).menuClickable(onLongClick, onClick, drag),
     )
 }

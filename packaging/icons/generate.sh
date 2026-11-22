@@ -241,4 +241,32 @@ EOF
   } >"$APP_RES/$dir/ic_wordmark.xml"
 done
 
+# The wordmark's halves apart, for the phone's header: the tile beside the search bar, the name
+# inside it. ic_logo is the wordmark's first 100 x 100, margin and all, so the same height draws
+# the tile the same size; it doesn't change with the theme. ic_name is the name alone, cropped
+# to its ink (y 22..96, x 106..342 of the wordmark), at the wordmark's scale.
+{
+  vd_open 40 40 100 100 "The Kithsong logo: the wordmark's tile alone, with its margin."
+  cat <<EOF
+    <group android:translateX="10" android:translateY="10" android:scaleX="0.7407" android:scaleY="0.7407">
+$(vd_sky 25 "        ")
+$(vd_mark 17.36 17.36 0.733 "$MARK" "        ")
+    </group>
+</vector>
+EOF
+} >"$APP_RES/drawable/ic_logo.xml"
+for theme in light dark; do
+  if [ $theme = light ]; then word=("${WORD_LIGHT[@]}"); dir=drawable; else word=("${WORD_DARK[@]}"); dir=drawable-night; fi
+  {
+    vd_open 94.4 29.6 236 74 "The Kithsong name for a $theme surface, in Merienda Bold: the wordmark without its tile."
+    cat <<EOF
+    <group android:translateX="2" android:translateY="53" android:scaleX="0.054" android:scaleY="0.054">
+        <path android:fillColor="${word[0]}" android:pathData="$KITH" />
+        <path android:fillColor="${word[1]}" android:pathData="$SONG" />
+    </group>
+</vector>
+EOF
+  } >"$APP_RES/$dir/ic_name.xml"
+done
+
 echo "Wrote the icon, wordmark, site images and Android drawables. Now run render.py."

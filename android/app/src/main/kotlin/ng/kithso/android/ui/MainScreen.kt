@@ -42,6 +42,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -85,6 +86,32 @@ import ng.kithso.android.ui.art.PrefetchArt
 import ng.kithso.android.ui.theme.ArtBackdrop
 import ng.kithso.android.ui.theme.rememberOnScreenArtColors
 import kotlinx.coroutines.launch
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import ng.kithso.android.data.FoundTrack
+import ng.kithso.android.data.LibrarySource
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.dropWhile
+import kotlinx.coroutines.flow.first
 
 enum class Section(@StringRes val title: Int) {
     Recents(R.string.section_recents),
@@ -256,16 +283,23 @@ private val AlbumLabelsHeight = 58.dp
  * coloured from the art on screen. [bottomPadding] keeps the last items clear of the mini
  * player and navigation bar. [banner], if any, goes under the header: how an import is going.
  * The header's menu and the empty library's button open [importPickers], and what's picked joins an
- * import that's [importRunning]. [onSearch] is the header's menu's Search, and pulling the list down
- * from its top (see [pullToSearch]). With [onNewList], the Playlists and Album groups headings
- * have a + for a new playlist or (with true) album group.
+ * import that's [importRunning]. With [onNewList], the Playlists and Album groups headings have a +
+ * for a new playlist or (with true) album group.
+ *
+ * Search is in the header: typing there slides the library down and away and shows [source]'s
+ * results in its place, and closing the keyboard (or Back) closes them and brings it back. The
+ * header's menu, pulling the list down from its top (see [pullToSearch]) and [searchRequests]
+ * all go to the header's field. [onPlayTrack] and [onTrackMenu] are for a found track.
  */
 @Composable
 fun MainScreen(
     library: Library?,
     bottomPadding: Dp,
     onOpen: (CollectionRef) -> Unit,
-    onSearch: () -> Unit,
+    source: LibrarySource,
+    searchRequests: Flow<Unit>,
+    onPlayTrack: (FoundTrack) -> Unit,
+    onTrackMenu: (FoundTrack) -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
     onStats: () -> Unit,
@@ -329,8 +363,37 @@ fun MainScreen(
         val other = stringResource(R.string.fast_scroll_other)
         val titles = Section.entries.associateWith { stringResource(it.title) }
         val scrollEntries = remember(items, titles, other) { fastScrollEntries(items, titles, other) }
+        // The header's search. Its field is the list's first item, so the list is held at its
+        // top while searching; [focusWanted] focuses it once it's on screen.
+        var query by rememberSaveable { mutableStateOf("") }
+        var focused by remember { mutableStateOf(false) }
+        var focusWanted by remember { mutableStateOf(false) }
+        val searching = focused || query.isNotEmpty()
+        val showResults = query.isNotBlank()
+        val focusManager = LocalFocusManager.current
+        val openSearch: () -> Unit = {
+            focusWanted = true
+            scope.launch { listState.animateScrollToItem(0) }
+        }
+        val closeSearch: () -> Unit = {
+            query = ""
+            focusManager.clearFocus()
+        }
+        LaunchedEffect(searchRequests) { searchRequests.collect { openSearch() } }
+        // Closing the keyboard closes the results. Only once it's been open, so a hardware
+        // keyboard, with none on screen, doesn't close them straight away.
+        val ime = WindowInsets.ime
+        LaunchedEffect(searching) {
+            if (!searching) return@LaunchedEffect
+            snapshotFlow { ime.getBottom(density) > 0 }.dropWhile { !it }.first { !it }
+            closeSearch()
+        }
+        BackHandler(enabled = searching) { closeSearch() }
+        // The library slides down and fades as the results come in over it.
+        val slide by animateFloatAsState(if (showResults) 1f else 0f, label = "searchSlide")
+        val slidePx = constraints.maxHeight * LIBRARY_SLIDE
         // Pulling down from the top opens search, as the header's menu does.
-        val pull = rememberPullToSearch(onSearch)
+        val pull = rememberPullToSearch(openSearch)
 
         PrefetchArt(listState, cellPx) { index -> items.getOrNull(index)?.art.orEmpty() }
         ArtBackdrop(
@@ -344,11 +407,37 @@ fun MainScreen(
             contentPadding = sides
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
+            userScrollEnabled = !searching,
             modifier = Modifier.fillMaxSize().pullToSearch(pull, listState),
         ) {
             items(items, key = { it.key }, contentType = { it.contentType }) { item ->
+                if (item == MainItem.Header) {
+                    Header(
+                        query = query,
+                        onQueryChange = { query = it },
+                        onClear = { query = "" },
+                        focusWanted = focusWanted,
+                        onFocusTaken = { focusWanted = false },
+                        focused = focused,
+                        onFocusChange = { focused = it },
+                        onSearch = openSearch,
+                        onSync = onSync,
+                        onSettings = onSettings,
+                        onStats = onStats,
+                        importPickers = importPickers,
+                        importRunning = importRunning,
+                        syncDot = syncDot,
+                    )
+                    return@items
+                }
+                Box(
+                    Modifier.graphicsLayer {
+                        translationY = slide * slidePx
+                        alpha = 1f - slide
+                    },
+                ) {
                 when (item) {
-                    MainItem.Header -> Header(onSearch, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
+                    MainItem.Header -> Unit
                     MainItem.Banner -> banner?.invoke(Modifier.padding(horizontal = Gutter).padding(bottom = 8.dp))
                     MainItem.Empty -> EmptyLibrary(importPickers, inGroup, onSync, onChooseWhatToSync)
                     is MainItem.Heading -> SectionHeading(
@@ -404,9 +493,10 @@ fun MainScreen(
                         onLongClick = { onArtistMenu(item.artist) },
                     ) { onOpen(CollectionRef(CollectionRef.Kind.Artist, item.artist.uid)) }
                 }
+                }
             }
         }
-        FastScroller(
+        if (slide == 0f) FastScroller(
             listState,
             scrollEntries,
             scrollOffset = -statusBarPx,
@@ -431,12 +521,57 @@ fun MainScreen(
             pull,
             Modifier.matchParentSize().padding(top = with(density) { statusBarPx.toDp() }),
         )
+        // The last query typed, kept while its results slide away after the field's cleared.
+        val kept = remember { object { var query = "" } }
+        if (showResults) kept.query = query
+        val found = rememberSearchResults(source, kept.query)
+        AnimatedVisibility(
+            visible = showResults,
+            enter = fadeIn() + slideInVertically { -it / 8 },
+            exit = fadeOut() + slideOutVertically { -it / 8 },
+            modifier = Modifier
+                .matchParentSize()
+                .padding(top = with(density) { statusBarPx.toDp() } + HeaderHeight),
+        ) {
+            LazyColumn(
+                // Clear of the keyboard as well as the mini player.
+                contentPadding = sides
+                    .add(WindowInsets(bottom = bottomPadding).union(WindowInsets.ime))
+                    .asPaddingValues(),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                searchResults(
+                    kept.query,
+                    found,
+                    // A page opened from the results closes them, as the keyboard goes with it.
+                    onOpen = { ref ->
+                        closeSearch()
+                        onOpen(ref)
+                    },
+                    onPlayTrack = onPlayTrack,
+                    onTrackMenu = onTrackMenu,
+                )
+            }
+        }
     }
 }
 
-/** The wordmark and the menu. It scrolls away with the list. */
+/** How far down the library slides as search results come in, of the screen's height. */
+private const val LIBRARY_SLIDE = 0.25f
+
+/**
+ * The logo, the search field with the name in it, and the menu. It scrolls away with the list.
+ * [focusWanted] focuses the field, and [onFocusTaken] says so. [onSearch] is the menu's Search.
+ */
 @Composable
 private fun Header(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit,
+    focusWanted: Boolean,
+    onFocusTaken: () -> Unit,
+    focused: Boolean,
+    onFocusChange: (Boolean) -> Unit,
     onSearch: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
@@ -454,14 +589,92 @@ private fun Header(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // The tile's own margin lines it up with the gutter's content, as the title text did.
-        Box(Modifier.weight(1f)) {
-            Wordmark(
-                height = 48.dp,
-                description = stringResource(R.string.app_name),
-                modifier = Modifier.offset(x = (-4).dp).semantics { heading() },
-            )
-        }
+        Logo(
+            height = 48.dp,
+            description = stringResource(R.string.app_name),
+            modifier = Modifier.offset(x = (-4).dp).semantics { heading() },
+        )
+        HeaderSearchField(
+            query, onQueryChange, onClear, focusWanted, onFocusTaken, focused, onFocusChange,
+            Modifier.weight(1f),
+        )
         HeaderMenu(onSearch, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
+    }
+}
+
+/**
+ * The header's search field, in Material's search bar's shape and colour. The name stands in
+ * for the placeholder until it's focused; screen readers hear Search.
+ */
+@Composable
+private fun HeaderSearchField(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit,
+    focusWanted: Boolean,
+    onFocusTaken: () -> Unit,
+    focused: Boolean,
+    onFocusChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(focusWanted) {
+        if (focusWanted) {
+            focus.requestFocus()
+            onFocusTaken()
+        }
+    }
+    val label = stringResource(R.string.search)
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        shape = CircleShape,
+        color = colors.surfaceContainerHigh,
+        // The whole bar focuses the field, not only its text.
+        modifier = modifier
+            .height(48.dp)
+            .clickable(interactionSource = null, indication = null) { focus.requestFocus() },
+    ) {
+        Row(Modifier.padding(start = 20.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.onSurface),
+                cursorBrush = SolidColor(colors.primary),
+                // Search keeps the keyboard up, as closing it closes the results.
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = {}),
+                decorationBox = { field ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) {
+                            if (focused) {
+                                Text(
+                                    stringResource(R.string.search_placeholder),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = colors.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            } else {
+                                WordmarkName(height = 24.dp, description = null)
+                            }
+                        }
+                        field()
+                    }
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp)
+                    .focusRequester(focus)
+                    .onFocusChanged { onFocusChange(it.isFocused) }
+                    .semantics { contentDescription = label },
+            )
+            if (query.isNotEmpty()) {
+                IconButton(onClick = onClear) {
+                    Icon(Icons.Clear, contentDescription = stringResource(R.string.clear))
+                }
+            }
+        }
     }
 }
 
