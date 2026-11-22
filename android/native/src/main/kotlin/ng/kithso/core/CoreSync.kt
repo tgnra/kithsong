@@ -204,6 +204,9 @@ data class SyncOutlook(
     val upToDate: Boolean get() = receiveTracks == 0 && sendTracks == 0
 }
 
+/** Tracks this device is transcoding for the member [uid] ("" if not said): mc_sync_transcode_target. */
+data class TranscodeTarget(val uid: String, val tracks: Int)
+
 /** mc_profile_item_kind. */
 enum class ProfileItemKind {
     Album,
@@ -755,6 +758,18 @@ class CoreSync(
      */
     fun verifyWeekly(budgetMs: Long): Boolean = nativeVerifyWeekly(handle, budgetMs)
 
+    /**
+     * Who this device is transcoding for now, and how many tracks are queued or being encoded
+     * for each, those under way first (mc_sync_transcoding_for()). A uid of "" stands for
+     * tracks that didn't say. Empty between the encodes of a session that asks one at a time.
+     */
+    fun transcodingFor(): List<TranscodeTarget> {
+        val uids = arrayOfNulls<String>(MAX_TARGETS)
+        val tracks = IntArray(MAX_TARGETS)
+        val n = nativeTranscodingFor(handle, uids, tracks)
+        return List(n) { TranscodeTarget(uids[it].orEmpty(), tracks[it]) }
+    }
+
     private fun SyncProfile.itemKinds() = IntArray(items.size) { items[it].kind.ordinal }
 
     private fun SyncProfile.itemUids() = Array(items.size) { items[it].uid }
@@ -869,6 +884,9 @@ class CoreSync(
         /** MC_ERR_VERSION: the other device's Kithsong can't sync with this one's; its versionText says which to update. */
         const val ERR_VERSION = -17
 
+        // The most members transcodingFor() lists.
+        private const val MAX_TARGETS = 16
+
         // nativeWithDevice's calls
         private const val CALL_PAIR_REQUEST = 0
         private const val CALL_REMOVE_DEVICE = 1
@@ -942,5 +960,6 @@ class CoreSync(
         )
         @JvmStatic private external fun nativeVerify(handle: Long, deep: Boolean, out: LongArray)
         @JvmStatic private external fun nativeVerifyWeekly(handle: Long, budgetMs: Long): Boolean
+        @JvmStatic private external fun nativeTranscodingFor(handle: Long, uids: Array<String?>, tracks: IntArray): Int
     }
 }

@@ -64,6 +64,8 @@ sealed interface PillState {
      * group or while sync is off ([running]). [finished]: the last session ended with tracks still
      * missing ("Finished, but 3 tracks are still missing"), shown in the summary's place with
      * Details; "" otherwise. [reason]: why nothing is syncing, under the summary; null for none.
+     * [upToDate]: nothing's wrong and there's nothing to copy either way, nor deletes waiting to
+     * go, so a press finds nothing to do (and shakes the pill, though it still asks).
      */
     data class Idle(
         val outlook: SyncOutlook?,
@@ -72,9 +74,13 @@ sealed interface PillState {
         val canSync: Boolean,
         val finished: String = "",
         val reason: PillReason? = null,
+        val upToDate: Boolean = false,
     ) : PillState {
-        /** Sync now can't get anywhere: a press shakes the pill (and still asks, if it can). */
-        val blocked: Boolean get() = !canSync || reason?.blocking == true
+        /**
+         * Sync now can't get anywhere, or has nothing to do: a press shakes the pill (and still
+         * asks, if it can, for what the outlook doesn't count, such as playlists and plays).
+         */
+        val blocked: Boolean get() = !canSync || reason?.blocking == true || upToDate
     }
 
     /**
@@ -133,13 +139,16 @@ fun pillReason(status: SyncStatus): PillReason? {
 fun pillState(status: SyncStatus): PillState {
     val sessions = status.sessions.values
     if (sessions.isEmpty()) {
+        val reason = pillReason(status)
         return PillState.Idle(
             outlook = status.outlook.takeIf { status.running },
             needsChoice = status.needsChoice,
             running = status.running,
             canSync = status.running && status.members.isNotEmpty(),
             finished = status.finished.takeIf { status.running && !status.needsChoice }.orEmpty(),
-            reason = pillReason(status),
+            reason = reason,
+            upToDate = status.running && status.inGroup && !status.needsChoice && reason == null &&
+                status.outlook?.upToDate == true && status.binCount == 0 && status.finished.isEmpty(),
         )
     }
     val moving = sessions.sumOf { it.moving }
@@ -171,7 +180,7 @@ fun pillPace(sessions: Collection<SyncProgress>): String = sessions.singleOrNull
  *
  * Sync now always answers a press: its icon turns once when the press goes ahead, and the
  * pill shakes when it can't get anywhere (sync off, not on Wi-Fi, no device online), with
- * why under the summary.
+ * why under the summary, or when there's nothing to do (up to date).
  */
 @Composable
 fun SyncPillContent(

@@ -19,6 +19,7 @@ class SyncPillTest {
         expected = 0, ok = 0, missing = 0, corrupt = 0, bytes = 0,
     )
     private val upToDate = SyncOutlook(true, 0, 0, 0, 0, 0, "Up to date")
+    private val toFetch = SyncOutlook(true, 3, 30_000_000, 0, 0, 0, "3 tracks to fetch")
     private val group = SyncStatus(
         "Phone",
         running = true,
@@ -56,9 +57,28 @@ class SyncPillTest {
 
     @Test
     fun nothingWrongNoReason() {
-        val state = pillState(group) as PillState.Idle
+        val state = pillState(group.copy(outlook = toFetch)) as PillState.Idle
         assertNull(state.reason)
+        assertFalse(state.upToDate)
         assertFalse(state.blocked)
+    }
+
+    @Test
+    fun upToDateShakesButStillAsks() {
+        val state = pillState(group) as PillState.Idle
+        assertTrue(state.upToDate)
+        assertTrue(state.blocked)
+        assertTrue(state.canSync) // playlists and plays aren't in the outlook
+    }
+
+    @Test
+    fun deletesWaitingAreSomethingToDo() {
+        assertFalse((pillState(group.copy(binCount = 2)) as PillState.Idle).upToDate)
+    }
+
+    @Test
+    fun tracksStillMissingAreSomethingToDo() {
+        assertFalse((pillState(group.copy(finished = "Finished, but 3 tracks are still missing")) as PillState.Idle).upToDate)
     }
 
     @Test

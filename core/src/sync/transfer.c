@@ -564,17 +564,22 @@ static int find_transcode(mc_library *lib, const char *track, int kbps, held *h)
 /* The one way to the encode pool: Opus at kbps from orig (from find_original()) into the
  * transcode cache. With MC_ENCODE_NOW it waits and *out is the cached file (hold the pool
  * around it and the sending); owner is then the session, which keeps reporting progress.
- * Otherwise the job is queued at prio for owner and out is unused. Anything but an original
- * is refused (see the top of this file). */
+ * Otherwise the job is queued at prio for owner and out is unused. device: the member it's
+ * for (mc_sync_transcoding_for()). Anything but an original is refused (see the top of this
+ * file). */
 static mc_status encode_original(mc_sync *sync, const held *orig, int kbps, mc_encode_prio prio,
-                                 const void *owner, char **out) {
+                                 const void *owner, const char *device, char **out) {
   if (out) *out = NULL;
   if (orig->transcode) return MC_ERR_INVALID_ARG;
   if (prio == MC_ENCODE_NOW)
-    return out ? mc_encode_pool_encode(sync->enc, orig->file_uid, orig->path, kbps, idle_progress,
-                                       (void *)owner, out)
+    return out ? mc_encode_pool_encode_for(sync->enc, orig->file_uid, orig->path, kbps, idle_progress,
+                                           (void *)owner, device, out)
                : MC_ERR_INVALID_ARG;
-  return mc_encode_pool_queue(sync->enc, orig->file_uid, orig->path, kbps, prio, owner);
+  mc_transcode_opts opts;
+  memset(&opts, 0, sizeof opts);
+  opts.format = MC_FORMAT_OPUS;
+  opts.bitrate_kbps = kbps;
+  return mc_encode_pool_queue_for(sync->enc, orig->file_uid, orig->path, &opts, prio, owner, device);
 }
 
 /* Whether some file of track here is in the format t wants, and not stale. The statement is
@@ -1085,7 +1090,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
       /* Its encode-ahead job if it has one (queued or running), else a job of its own. */
       char *out = NULL;
       note_copying(s);
-      mc_status enc = encode_original(s->sync, &h, kbps, MC_ENCODE_NOW, s, &out);
+      mc_status enc = encode_original(s->sync, &h, kbps, MC_ENCODE_NOW, s, s->peer_uid, &out);
       if (enc == MC_OK) {
         held c = cached_copy(&h, out);
         st = send_file(s, track, &c, "opus", kbps);
@@ -1123,8 +1128,8 @@ static mc_status serve_plan(mc_session *s, const unsigned char *payload, size_t 
 /* --- PREPARE_REQ, serving --- */
 
 /* Queues the encode of track at kbps on the pool, unless it can be sent without one: for the
- * peer itself (ahead) as the session's encode-ahead, else in the background. */
-static void queue_encode(mc_session *s, const char *track, int kbps, int ahead) {
+ * peer itself (ahead) as the session's encode-ahead, else in the background for device. */
+static void queue_encode(mc_session *s, const char *track, int kbps, int ahead, const char *device) {
   mc_library *lib = s->conn->lib;
   held h, tr;
   if (!find_original(lib, track, &h)) return; /* a transcode is no source */
@@ -1138,7 +1143,7 @@ static void queue_encode(mc_session *s, const char *track, int kbps, int ahead) 
   if (needed) {
     note_copying(s);
     encode_original(s->sync, &h, kbps, ahead ? MC_ENCODE_AHEAD : MC_ENCODE_BACKGROUND,
-                    ahead ? s : NULL, NULL);
+                    ahead ? s : NULL, ahead ? s->peer_uid : device, NULL);
   }
   free(cached);
   held_free(&h);
@@ -1161,7 +1166,7 @@ static void queue_ahead(mc_session *s, int from) {
   if (again) mc_sync_trace("serve: encode-ahead queued again from %d of %d", from, s->ahead_n);
   s->ahead_queued = 1;
   s->ahead_closings = closings;
-  for (int i = from; i < s->ahead_n; i++) queue_encode(s, s->ahead[i].track, s->ahead[i].kbps, 1);
+  for (int i = from; i < s->ahead_n; i++) queue_encode(s, s->ahead[i].track, s->ahead[i].kbps, 1, NULL);
 }
 
 /* How far the peer has got through its encode-ahead: past track, if it's among the next few
@@ -1201,7 +1206,7 @@ static mc_status serve_prepare(mc_session *s, const unsigned char *payload, size
     const char *track = yyjson_get_str(v);
     if (!is_uid(track)) continue;
     if (!ahead) {
-      queue_encode(s, track, kbps, 0);
+      queue_encode(s, track, kbps, 0, is_uid(device) ? device : NULL);
       continue;
     }
     if (s->ahead_n == s->ahead_cap) {
@@ -2182,7 +2187,9 @@ static mc_status fetch_covers(mc_session *s) {
 
 /* For each member that is offline and wants Opus copies, asks the peer to fill its cache if
  * the peer is the best online holder of the originals (by cpu_score), once per change in
- * what that member wants. */
+ * what that member wants. Not for a member whose own report (sync_status) says it holds its
+ * whole set, as planned here: the peer would only encode copies nobody fetches, in the
+ * background after the session, over and over once they're more than its cache keeps. */
 static mc_status send_prepares(mc_session *s) {
   mc_sync_db *sdb = s->conn->sdb;
   int64_t peer_score;
@@ -2200,13 +2207,17 @@ static mc_status send_prepares(mc_session *s) {
   typedef struct member {
     char uid[MC_UID_STRLEN];
     int64_t free_bytes;
+    int64_t complete; /* its sync_status: how many tracks it holds all of; -1 if it lacks some */
   } member;
   member *ms = NULL;
   int n = 0;
   sqlite3_stmt *stmt;
   if (sqlite3_prepare_v2(mc_sync_db_handle(sdb),
-                         "SELECT d.uid, c.free_bytes FROM devices d"
+                         "SELECT d.uid, c.free_bytes,"
+                         " CASE WHEN s.missing = 0 AND s.corrupt = 0 THEN s.expected END"
+                         " FROM devices d"
                          " LEFT JOIN capabilities c ON c.device_uid = d.uid"
+                         " LEFT JOIN sync_status s ON s.device_uid = d.uid"
                          " WHERE d.removed = 0 AND d.uid <> ?1 AND d.uid <> ?2",
                          -1, &stmt, NULL) != SQLITE_OK)
     return MC_ERR_DB;
@@ -2220,6 +2231,7 @@ static mc_status send_prepares(mc_session *s) {
     ms = more;
     memcpy(ms[n].uid, uid, MC_UID_STRLEN);
     ms[n].free_bytes = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? -1 : sqlite3_column_int64(stmt, 1);
+    ms[n].complete = sqlite3_column_type(stmt, 2) == SQLITE_NULL ? -1 : sqlite3_column_int64(stmt, 2);
     n++;
   }
   sqlite3_finalize(stmt);
@@ -2228,6 +2240,12 @@ static mc_status send_prepares(mc_session *s) {
   for (int m = 0; st == MC_OK && m < n; m++) {
     mc_plan *plan = NULL;
     if (mc_plan_compute(sdb, s->conn->lib, ms[m].uid, ms[m].free_bytes, &plan) != MC_OK) continue;
+    /* Its report covers the set as it stands (the same count), and it lacks none of it. A set
+     * that grew since counts differently, and is asked for as before. */
+    if (plan->status == MC_PLAN_OK && ms[m].complete >= 0 && ms[m].complete == plan->count) {
+      mc_plan_free(plan);
+      continue;
+    }
     uint64_t sig = 14695981039346656037u;
     int count = 0;
     if (plan->status == MC_PLAN_OK && plan->kbps) {

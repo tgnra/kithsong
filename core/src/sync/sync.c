@@ -2097,6 +2097,19 @@ int mc_sync_transcoding(mc_sync *sync) {
   return copying || mc_encode_pool_busy(sync->enc);
 }
 
+int mc_sync_transcoding_for(mc_sync *sync, mc_sync_transcode_target *out, int max) {
+  if (!sync || !sync->enc || !out || max <= 0) return 0;
+  mc_encode_device *ds = calloc((size_t)max, sizeof *ds);
+  if (!ds) return 0;
+  int n = mc_encode_pool_devices(sync->enc, ds, max);
+  for (int i = 0; i < n; i++) {
+    memcpy(out[i].device_uid, ds[i].device, MC_UID_STRLEN);
+    out[i].tracks = ds[i].jobs;
+  }
+  free(ds);
+  return n;
+}
+
 mc_status mc_sync_new(mc_library *lib, const char *config_dir, const char *device_name,
                       mc_device_kind kind, const mc_sync_events *events, void *user,
                       mc_sync **out) {

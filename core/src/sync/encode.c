@@ -23,6 +23,7 @@ typedef struct job {
   mc_encode_prio prio;
   int background;    /* also asked for as MC_ENCODE_BACKGROUND */
   const void *owner; /* who asked for it ahead, or NULL */
+  char device[MC_UID_STRLEN]; /* the member it's for, as last asked; "" if not said */
   int state;
   mc_status st; /* once DONE */
   int waiters;  /* a DONE job is freed by its last waiter */
@@ -255,15 +256,26 @@ void mc_encode_pool_set_size(mc_encode_pool *p, int n) {
   mc_mutex_unlock(&p->lock);
 }
 
+/* Under lock: j is (also) for device, if it says. */
+static void tag(job *j, const char *device) {
+  if (device && device[0]) snprintf(j->device, sizeof j->device, "%s", device);
+}
+
 mc_status mc_encode_pool_queue(mc_encode_pool *p, const char *file_uid, const char *src,
                                int kbps, mc_encode_prio prio, const void *owner) {
   mc_transcode_opts opts = opus_opts(kbps);
-  return mc_encode_pool_queue_as(p, file_uid, src, &opts, prio, owner);
+  return mc_encode_pool_queue_for(p, file_uid, src, &opts, prio, owner, NULL);
 }
 
 mc_status mc_encode_pool_queue_as(mc_encode_pool *p, const char *file_uid, const char *src,
                                   const mc_transcode_opts *opts, mc_encode_prio prio,
                                   const void *owner) {
+  return mc_encode_pool_queue_for(p, file_uid, src, opts, prio, owner, NULL);
+}
+
+mc_status mc_encode_pool_queue_for(mc_encode_pool *p, const char *file_uid, const char *src,
+                                   const mc_transcode_opts *opts, mc_encode_prio prio,
+                                   const void *owner, const char *device) {
   mc_mutex_lock(&p->lock);
   mc_status st = MC_OK;
   job *j = find(p->queue, file_uid, opts);
@@ -275,9 +287,12 @@ mc_status mc_encode_pool_queue_as(mc_encode_pool *p, const char *file_uid, const
   } else if (j) {
     if (prio == MC_ENCODE_BACKGROUND) j->background = 1;
     if (prio == MC_ENCODE_AHEAD && j->state == QUEUED && j->prio > prio) j->owner = owner;
+    /* For whoever wants it soonest: a background job isn't retagged over a session's. */
+    if (prio <= j->prio || !j->device[0]) tag(j, device);
     raise_prio(p, j, prio);
   } else if ((j = add(p, file_uid, src, opts, prio)) != NULL) {
     if (prio == MC_ENCODE_AHEAD) j->owner = owner;
+    tag(j, device);
     spawn(p);
   } else {
     st = MC_ERR_NOMEM;
@@ -323,6 +338,10 @@ void mc_encode_pool_drop(mc_encode_pool *p, const void *owner) {
   notify(p, flip);
 }
 
+static mc_status encode_for(mc_encode_pool *p, const char *file_uid, const char *src,
+                            const mc_transcode_opts *opts, int (*idle)(void *user), void *user,
+                            const char *device, char **out);
+
 /* mc_encode_pool_encode()'s idle, as mc_encode_pool_encode_as() takes it. */
 typedef struct idle_call {
   void (*idle)(void *user);
@@ -337,14 +356,26 @@ static int call_idle(void *user) {
 
 mc_status mc_encode_pool_encode(mc_encode_pool *p, const char *file_uid, const char *src,
                                 int kbps, void (*idle)(void *user), void *user, char **out) {
+  return mc_encode_pool_encode_for(p, file_uid, src, kbps, idle, user, NULL, out);
+}
+
+mc_status mc_encode_pool_encode_for(mc_encode_pool *p, const char *file_uid, const char *src,
+                                    int kbps, void (*idle)(void *user), void *user,
+                                    const char *device, char **out) {
   mc_transcode_opts opts = opus_opts(kbps);
   idle_call c = {idle, user};
-  return mc_encode_pool_encode_as(p, file_uid, src, &opts, idle ? call_idle : NULL, &c, out);
+  return encode_for(p, file_uid, src, &opts, idle ? call_idle : NULL, &c, device, out);
 }
 
 mc_status mc_encode_pool_encode_as(mc_encode_pool *p, const char *file_uid, const char *src,
                                    const mc_transcode_opts *opts, int (*idle)(void *user),
                                    void *user, char **out) {
+  return encode_for(p, file_uid, src, opts, idle, user, NULL, out);
+}
+
+static mc_status encode_for(mc_encode_pool *p, const char *file_uid, const char *src,
+                            const mc_transcode_opts *opts, int (*idle)(void *user), void *user,
+                            const char *device, char **out) {
   *out = NULL;
   mc_mutex_lock(&p->lock);
   job *j = find(p->queue, file_uid, opts);
@@ -354,8 +385,10 @@ mc_status mc_encode_pool_encode_as(mc_encode_pool *p, const char *file_uid, cons
     return p->stopping ? MC_ERR_INVALID_ARG : MC_ERR_CANCELLED;
   }
   if (j) {
+    tag(j, device);
     raise_prio(p, j, MC_ENCODE_NOW);
   } else if ((j = add(p, file_uid, src, opts, MC_ENCODE_NOW)) != NULL) {
+    tag(j, device);
     p->stats.unasked++;
   } else {
     mc_mutex_unlock(&p->lock);
@@ -466,6 +499,28 @@ void mc_encode_pool_set_closed(mc_encode_pool *p, int closed) {
 unsigned mc_encode_pool_closings(mc_encode_pool *p) {
   mc_mutex_lock(&p->lock);
   unsigned n = p->closings;
+  mc_mutex_unlock(&p->lock);
+  return n;
+}
+
+/* Adds j's device to out[0..*n), or one more to its count. */
+static void count_device(const job *j, mc_encode_device *out, int max, int *n) {
+  for (int i = 0; i < *n; i++)
+    if (!strcmp(out[i].device, j->device)) {
+      out[i].jobs++;
+      return;
+    }
+  if (*n == max) return;
+  memcpy(out[*n].device, j->device, MC_UID_STRLEN);
+  out[*n].jobs = 1;
+  (*n)++;
+}
+
+int mc_encode_pool_devices(mc_encode_pool *p, mc_encode_device *out, int max) {
+  int n = 0;
+  mc_mutex_lock(&p->lock);
+  for (const job *j = p->running; j; j = j->next) count_device(j, out, max, &n);
+  for (const job *j = p->queue; j; j = j->next) count_device(j, out, max, &n);
   mc_mutex_unlock(&p->lock);
   return n;
 }

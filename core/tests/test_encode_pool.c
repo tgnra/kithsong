@@ -175,6 +175,41 @@ int main(int argc, char **argv) {
     mc_encode_pool_free(p);
   }
 
+  /* Who the jobs are for: one worker, slowed, so the rest stay queued. Two in the background
+   * for C, one for B; one of C's asked for again by B's session ahead is B's now (B 2, C 1),
+   * and C asking again in the background doesn't take it back. Jobs that don't say count
+   * under "". */
+  {
+    snprintf(cache, sizeof cache, "%s/cache4", root);
+    mc_encode_pool *p = NULL;
+    CHECK(mc_encode_pool_new(cache, INT64_MAX, &p) == MC_OK);
+    if (!p) return TEST_RESULT();
+    mc_encode_test_delay_ms = 2000;
+    char b[MC_UID_STRLEN], c[MC_UID_STRLEN];
+    CHECK(mc_uid_new(b) == MC_OK && mc_uid_new(c) == MC_OK);
+    mc_transcode_opts opus = {.format = MC_FORMAT_OPUS, .bitrate_kbps = 64};
+    int owner = 0;
+    CHECK(mc_encode_pool_queue_for(p, g_uids[0], g_srcs[0], &opus, MC_ENCODE_BACKGROUND, NULL, c) == MC_OK);
+    CHECK(mc_encode_pool_queue_for(p, g_uids[1], g_srcs[1], &opus, MC_ENCODE_BACKGROUND, NULL, c) == MC_OK);
+    CHECK(mc_encode_pool_queue_for(p, g_uids[2], g_srcs[2], &opus, MC_ENCODE_BACKGROUND, NULL, b) == MC_OK);
+    CHECK(mc_encode_pool_queue_for(p, g_uids[1], g_srcs[1], &opus, MC_ENCODE_AHEAD, &owner, b) == MC_OK);
+    CHECK(mc_encode_pool_queue_for(p, g_uids[1], g_srcs[1], &opus, MC_ENCODE_BACKGROUND, NULL, c) == MC_OK);
+    CHECK(mc_encode_pool_queue(p, g_uids[3], g_srcs[3], 64, MC_ENCODE_BACKGROUND, NULL) == MC_OK);
+    mc_encode_device ds[8];
+    int n = mc_encode_pool_devices(p, ds, 8);
+    int for_b = 0, for_c = 0, unsaid = 0;
+    for (int i = 0; i < n; i++) {
+      if (!strcmp(ds[i].device, b)) for_b = ds[i].jobs;
+      if (!strcmp(ds[i].device, c)) for_c = ds[i].jobs;
+      if (!ds[i].device[0]) unsaid = ds[i].jobs;
+    }
+    CHECK(n == 3 && for_b == 2 && for_c == 1 && unsaid == 1);
+    CHECK(mc_encode_pool_devices(p, ds, 1) == 1); /* no more than asked for */
+    mc_encode_pool_set_closed(p, 1); /* the queued ones go; the running one finishes */
+    mc_encode_pool_free(p);
+    mc_encode_test_delay_ms = 0;
+  }
+
   mc_remove_tree(root);
   return TEST_RESULT();
 }

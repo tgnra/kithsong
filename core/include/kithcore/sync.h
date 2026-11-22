@@ -336,6 +336,16 @@ void mc_sync_set_power(mc_sync *sync, int on_power, int may_transcode);
  * or asked for an encode in its turn, or encodes are queued or running. on_transcoding says
  * when it changes. Any thread. */
 int mc_sync_transcoding(mc_sync *sync);
+/* Who this device is transcoding for now, and how much: the tracks queued or being encoded
+ * for each member, those under way first. A track is for the member that asked for it
+ * soonest; device_uid "" for any that didn't say. Up to max; returns how many. Empty between
+ * the encodes of a session that asks for one at a time, while mc_sync_transcoding() stays
+ * on. Any thread; poll it while mc_sync_transcoding() is on. */
+typedef struct mc_sync_transcode_target {
+  char device_uid[MC_UID_STRLEN];
+  int tracks;
+} mc_sync_transcode_target;
+int mc_sync_transcoding_for(mc_sync *sync, mc_sync_transcode_target *out, int max);
 
 /* --- Choosing a profile ---
  * Each device sets its own profile; other devices' profiles are read-only (MC_ERR_LOCKED from

@@ -52,6 +52,11 @@ mc_status mc_encode_pool_queue(mc_encode_pool *p, const char *file_uid, const ch
 mc_status mc_encode_pool_queue_as(mc_encode_pool *p, const char *file_uid, const char *src,
                                   const mc_transcode_opts *opts, mc_encode_prio prio,
                                   const void *owner);
+/* The same, saying which member it's for (device, a uid; NULL if not said), for
+ * mc_encode_pool_devices(). A job asked for again is for whoever wants it soonest. */
+mc_status mc_encode_pool_queue_for(mc_encode_pool *p, const char *file_uid, const char *src,
+                                   const mc_transcode_opts *opts, mc_encode_prio prio,
+                                   const void *owner, const char *device);
 /* Drops owner's queued jobs that nobody waits for; one also queued as MC_ENCODE_BACKGROUND
  * goes back to that. Running jobs finish. */
 void mc_encode_pool_drop(mc_encode_pool *p, const void *owner);
@@ -61,12 +66,24 @@ void mc_encode_pool_drop(mc_encode_pool *p, const void *owner);
  * idle, unless NULL, runs now and then during the wait. */
 mc_status mc_encode_pool_encode(mc_encode_pool *p, const char *file_uid, const char *src,
                                 int kbps, void (*idle)(void *user), void *user, char **out);
+/* mc_encode_pool_encode() saying which member it's for, as mc_encode_pool_queue_for(). */
+mc_status mc_encode_pool_encode_for(mc_encode_pool *p, const char *file_uid, const char *src,
+                                    int kbps, void (*idle)(void *user), void *user,
+                                    const char *device, char **out);
 /* The same for any format, and idle may give up: once it returns non-zero, this returns
  * MC_ERR_CANCELLED without waiting for the job, which still runs if it has started (or
  * another wants it). */
 mc_status mc_encode_pool_encode_as(mc_encode_pool *p, const char *file_uid, const char *src,
                                    const mc_transcode_opts *opts, int (*idle)(void *user),
                                    void *user, char **out);
+/* The jobs queued or running for each member they're for. */
+typedef struct mc_encode_device {
+  char device[MC_UID_STRLEN]; /* "" for jobs that didn't say */
+  int jobs;
+} mc_encode_device;
+
+/* Fills out with up to max members, those running first; returns how many. */
+int mc_encode_pool_devices(mc_encode_pool *p, mc_encode_device *out, int max);
 /* Keeps the trim from running until the matching release (waiting for one that runs). */
 void mc_encode_pool_hold(mc_encode_pool *p);
 void mc_encode_pool_release(mc_encode_pool *p);

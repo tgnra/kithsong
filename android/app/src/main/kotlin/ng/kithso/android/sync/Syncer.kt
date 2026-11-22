@@ -30,6 +30,7 @@ import ng.kithso.core.SyncOutlook
 import ng.kithso.core.SyncProblems
 import ng.kithso.core.SyncProfile
 import ng.kithso.core.SyncWaiting
+import ng.kithso.core.TranscodeTarget
 import ng.kithso.core.VerifyResult
 import ng.kithso.core.excludeItem as coreExcludeItem
 import ng.kithso.core.selectItems as coreSelectItems
@@ -51,6 +52,7 @@ import java.net.Inet4Address
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -172,6 +174,12 @@ data class SyncStatus(
     /** Transcoding for another member now, on the charger, while a sync screen is open, or in [background]. */
     val transcoding: Boolean = false,
     /**
+     * Who it transcodes for while [transcoding], and how many tracks each is still to get, those
+     * under way first; read every few seconds. Empty between the encodes of a session that asks
+     * for one at a time, and while not transcoding.
+     */
+    val transcodingFor: List<TranscodeTarget> = emptyList(),
+    /**
      * Background was pressed ([Syncer.keepInBackground]): the session and its transcoding go on
      * off screen, on battery too, through [SyncService], until they're over or cancelled.
      */
@@ -279,6 +287,9 @@ open class Syncer(
     // Members that refused a press of Sync as busy, tried once more since. Only touched on [thread].
     private val busyRetried = HashSet<String>()
 
+    // Reads who this phone transcodes for, every few seconds while it does. Only touched on [thread].
+    private var transcodingWatch: Job? = null
+
     // When the app last went to the background (elapsed realtime), 0 for not yet. Only
     // touched on [thread].
     private var backgroundedAt = 0L
@@ -313,6 +324,21 @@ open class Syncer(
             for (event in events) onEvent(event)
         }
         watchPower()
+    }
+
+    // On [thread]: [SyncStatus.transcodingFor] kept current while [active].
+    private fun watchTranscoding(active: Boolean) {
+        transcodingWatch?.cancel()
+        transcodingWatch = null
+        if (!active) return
+        transcodingWatch = scope.launch(thread) {
+            while (true) {
+                val sync = sync?.takeIf { state.value.running && state.value.transcoding } ?: break
+                val targets = sync.transcodingFor()
+                if (targets != state.value.transcodingFor) update { copy(transcodingFor = targets) }
+                delay(TRANSCODING_POLL_MS)
+            }
+        }
     }
 
     /**
@@ -838,7 +864,10 @@ open class Syncer(
         sync.stop()
         multicastLock?.release()
         update {
-            copy(running = false, sessions = emptyMap(), nearby = emptyList(), port = 0, transcoding = false, background = false)
+            copy(
+                running = false, sessions = emptyMap(), nearby = emptyList(), port = 0, transcoding = false,
+                transcodingFor = emptyList(), background = false,
+            )
         }
         Log.i(TAG, "Sync stopped")
     }
@@ -852,7 +881,8 @@ open class Syncer(
             // Read by refreshLists below, with the problems; a version, with the devices.
             CoreSync.Event.Waiting -> Unit
             is CoreSync.Event.Transcoding -> {
-                update { copy(transcoding = event.active) }
+                update { copy(transcoding = event.active, transcodingFor = if (event.active) transcodingFor else emptyList()) }
+                watchTranscoding(event.active)
                 endBackgroundIfDone()
                 return
             }
@@ -1064,6 +1094,7 @@ open class Syncer(
         private const val BUSY_RETRY_MS = 2_000L
         // Away at least this long, the network is checked again on coming back (see [hold]).
         private const val RECHECK_AFTER_MS = 10_000L
+        private const val TRANSCODING_POLL_MS = 2_000L
     }
 }
 

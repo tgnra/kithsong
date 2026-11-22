@@ -72,6 +72,7 @@ import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
 import ng.kithso.core.SyncProblems
 import ng.kithso.core.SyncWaiting
+import ng.kithso.core.TranscodeTarget
 import ng.kithso.android.sync.LostRemoval
 import ng.kithso.android.sync.SyncProgress
 import ng.kithso.android.sync.SyncStatus
@@ -669,12 +670,34 @@ private fun BinNotice(count: Int, onOpenBin: () -> Unit, modifier: Modifier = Mo
 fun TranscodingNotice(syncer: Syncer, modifier: Modifier = Modifier) {
     val background by remember(syncer) { syncer.status.map { it.background }.distinctUntilChanged() }
         .collectAsState(syncer.status.value.background)
-    TranscodingNotice(background, onBackground = syncer::keepInBackground, modifier)
+    val targets by remember(syncer) {
+        syncer.status.map { status -> transcodeTargets(status.transcodingFor, status.members) }.distinctUntilChanged()
+    }.collectAsState(emptyList())
+    val lines = targets.map { (tracks, name) -> pluralStringResource(R.plurals.sync_transcoding_for, tracks, tracks, name) }
+    TranscodingNotice(background, onBackground = syncer::keepInBackground, modifier, lines)
 }
 
-/** [TranscodingNotice] for [background] as it stands, with [onBackground] for its button. */
+/**
+ * Who [targets] are for, by the names of [members], with how many tracks each: those of a
+ * member that isn't one (any more), or that didn't say, are left out.
+ */
+fun transcodeTargets(targets: List<TranscodeTarget>, members: List<SyncDevice>): List<Pair<Int, String>> =
+    targets.mapNotNull { target ->
+        members.firstOrNull { it.uid == target.uid }?.let { target.tracks to it.name }
+    }
+
+/**
+ * [TranscodingNotice] for [background] as it stands, with [onBackground] for its button. [lines]:
+ * "Transcoding 42 tracks for Desk", one per member, the first in the title's place; none
+ * while that isn't known, for the plain title.
+ */
 @Composable
-fun TranscodingNotice(background: Boolean, onBackground: () -> Unit, modifier: Modifier = Modifier) {
+fun TranscodingNotice(
+    background: Boolean,
+    onBackground: () -> Unit,
+    modifier: Modifier = Modifier,
+    lines: List<String> = emptyList(),
+) {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer,
@@ -683,7 +706,8 @@ fun TranscodingNotice(background: Boolean, onBackground: () -> Unit, modifier: M
         modifier = modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
     ) {
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Text(stringResource(R.string.sync_transcoding_title), style = MaterialTheme.typography.titleMedium)
+            Text(lines.firstOrNull() ?: stringResource(R.string.sync_transcoding_title), style = MaterialTheme.typography.titleMedium)
+            for (line in lines.drop(1)) Text(line, style = MaterialTheme.typography.titleSmall)
             Text(
                 stringResource(if (background) R.string.sync_transcoding_background_text else R.string.sync_transcoding_text),
                 style = MaterialTheme.typography.bodyMedium,

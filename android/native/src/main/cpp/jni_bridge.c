@@ -1552,6 +1552,31 @@ JNI_FN(void, CoreSync, nativeVerify, jlong handle, jboolean deep, jlongArray out
   (*env)->SetLongArrayRegion(env, out, 0, 4, values);
 }
 
+/* Who this device transcodes for now (mc_sync_transcoding_for()): fills uids and tracks, as
+ * long as both, and returns how many. */
+JNI_FN(jint, CoreSync, nativeTranscodingFor, jlong handle, jobjectArray uids, jintArray tracks) {
+  jsize max = (*env)->GetArrayLength(env, uids);
+  jsize room = (*env)->GetArrayLength(env, tracks);
+  if (room < max) max = room;
+  if (max <= 0) return 0;
+  mc_sync_transcode_target *t = calloc((size_t)max, sizeof *t);
+  if (!t) return 0;
+  int n = mc_sync_transcoding_for(sync_of(handle), t, (int)max);
+  for (int i = 0; i < n; i++) {
+    jstring uid = (*env)->NewStringUTF(env, t[i].device_uid);
+    if (!uid) {
+      n = i;
+      break;
+    }
+    (*env)->SetObjectArrayElement(env, uids, i, uid);
+    (*env)->DeleteLocalRef(env, uid);
+    jint count = t[i].tracks;
+    (*env)->SetIntArrayRegion(env, tracks, i, 1, &count);
+  }
+  free(t);
+  return n;
+}
+
 /* Goes on with the weekly deep check for up to budget_ms; true once it's over for this week. */
 JNI_FN(jboolean, CoreSync, nativeVerifyWeekly, jlong handle, jlong budget_ms) {
   int done = 0;
