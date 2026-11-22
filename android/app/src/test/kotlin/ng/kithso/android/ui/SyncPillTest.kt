@@ -50,6 +50,58 @@ class SyncPillTest {
     }
 
     @Test
+    fun syncOffStillTakesAPressToShake() {
+        assertTrue((pillState(group.copy(running = false)) as PillState.Idle).blocked)
+    }
+
+    @Test
+    fun nothingWrongNoReason() {
+        val state = pillState(group) as PillState.Idle
+        assertNull(state.reason)
+        assertFalse(state.blocked)
+    }
+
+    @Test
+    fun offWifiComesFirst() {
+        val state = pillState(group.copy(onLan = false, cancelled = true)) as PillState.Idle
+        assertEquals(PillReason.NotOnLan, state.reason)
+        assertTrue(state.blocked)
+    }
+
+    @Test
+    fun cancelledSaysSoButSyncNowGoesAhead() {
+        val state = pillState(group.copy(cancelled = true)) as PillState.Idle
+        assertEquals(PillReason.Cancelled, state.reason)
+        assertFalse(state.blocked)
+    }
+
+    @Test
+    fun theOnlyMemberOfflineIsNamed() {
+        val state = pillState(group.copy(members = listOf(member.copy(online = false)))) as PillState.Idle
+        assertEquals(PillReason.Offline("Desk"), state.reason)
+        assertTrue(state.blocked)
+        assertTrue(state.canSync) // the press still goes to the core, which may reach it anyway
+    }
+
+    @Test
+    fun severalOfflineAreNotNamed() {
+        val away = member.copy(online = false)
+        val state = pillState(group.copy(members = listOf(away, away.copy(uid = "tab", name = "Tab")))) as PillState.Idle
+        assertEquals(PillReason.Offline(null), state.reason)
+    }
+
+    @Test
+    fun aFailedSessionIsShownButNotACancelledOne() {
+        val done = CoreSync.Event.SyncDone("desk", CoreSync.ERR_LOCKED, false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        assertEquals(
+            PillReason.Failed("Desk", CoreSync.ERR_LOCKED),
+            (pillState(group.copy(results = mapOf("desk" to done))) as PillState.Idle).reason,
+        )
+        val cancelled = done.copy(cancelled = true)
+        assertNull((pillState(group.copy(results = mapOf("desk" to cancelled))) as PillState.Idle).reason)
+    }
+
+    @Test
     fun neverProgressWithoutASession() {
         // Transcoding, a pairing, or waiting tracks: still no progress while nothing syncs.
         assertTrue(pillState(group.copy(transcoding = true)) is PillState.Idle)

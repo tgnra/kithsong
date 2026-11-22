@@ -3,6 +3,8 @@ package ng.kithso.android.ui
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -26,9 +28,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -41,7 +50,9 @@ import ng.kithso.android.R
 import ng.kithso.android.sync.SyncProgress
 import ng.kithso.android.sync.SyncStatus
 import ng.kithso.android.sync.Syncer
+import ng.kithso.core.CoreSync
 import ng.kithso.core.SyncOutlook
+import kotlinx.coroutines.launch
 
 /** What the sync pill shows, worked out from [SyncStatus] alone. */
 @Immutable
@@ -51,7 +62,7 @@ sealed interface PillState {
      * user hasn't chosen what it syncs, so it fetches nothing yet. [outlook] is null outside a
      * group or while sync is off ([running]). [finished]: the last session ended with tracks still
      * missing ("Finished, but 3 tracks are still missing"), shown in the summary's place with
-     * Details; "" otherwise.
+     * Details; "" otherwise. [reason]: why nothing is syncing, under the summary; null for none.
      */
     data class Idle(
         val outlook: SyncOutlook?,
@@ -59,7 +70,11 @@ sealed interface PillState {
         val running: Boolean,
         val canSync: Boolean,
         val finished: String = "",
-    ) : PillState
+        val reason: PillReason? = null,
+    ) : PillState {
+        /** Sync now can't get anywhere: a press shakes the pill (and still asks, if it can). */
+        val blocked: Boolean get() = !canSync || reason?.blocking == true
+    }
 
     /**
      * Sessions running: how far the files have come ([fraction], null before any are counted),
@@ -75,6 +90,44 @@ sealed interface PillState {
     ) : PillState
 }
 
+/** Why no session is running, shown under the idle pill's summary. */
+@Immutable
+sealed interface PillReason {
+    /** Nothing can sync from here as things are, so a press of Sync now shakes the pill. */
+    val blocking: Boolean get() = false
+
+    data object NotOnLan : PillReason {
+        override val blocking get() = true
+    }
+
+    /** Cancelled here or by the other device, and nothing has synced since. */
+    data object Cancelled : PillReason
+
+    /** No other member can be seen: [name] is the only one's, null for several. */
+    data class Offline(val name: String?) : PillReason {
+        override val blocking get() = true
+    }
+
+    /** The last session with [name] failed with [status] (a CoreSync status). */
+    data class Failed(val name: String, val status: Int) : PillReason
+}
+
+/** Why [status] has no session running, most pressing first; null if nothing's wrong. */
+fun pillReason(status: SyncStatus): PillReason? {
+    if (!status.running || !status.inGroup || status.needsChoice) return null
+    if (!status.onLan) return PillReason.NotOnLan
+    if (status.cancelled) return PillReason.Cancelled
+    if (status.members.isNotEmpty() && status.members.none { it.online }) {
+        return PillReason.Offline(status.members.singleOrNull()?.name)
+    }
+    // A version refusal is on the device's row and page, with what to update.
+    return status.members.firstNotNullOfOrNull { member ->
+        status.results[member.uid]
+            ?.takeIf { it.status != 0 && it.status != CoreSync.ERR_VERSION && !it.cancelled && !it.peerCancelled }
+            ?.let { PillReason.Failed(member.name, it.status) }
+    }
+}
+
 /** Progress only while a session runs: never otherwise, whatever else is going on. */
 fun pillState(status: SyncStatus): PillState {
     val sessions = status.sessions.values
@@ -85,6 +138,7 @@ fun pillState(status: SyncStatus): PillState {
             running = status.running,
             canSync = status.running && status.members.isNotEmpty(),
             finished = status.finished.takeIf { status.running && !status.needsChoice }.orEmpty(),
+            reason = pillReason(status),
         )
     }
     val moving = sessions.sumOf { it.moving }
@@ -113,6 +167,10 @@ fun pillPace(sessions: Collection<SyncProgress>): String = sessions.singleOrNull
  * as the pill changes between the two: only what's in them fades from one to the other, and the
  * height follows the left side. It goes in a surface of its own: [DockSurface] on the phone,
  * the sidebar's on a tablet.
+ *
+ * Sync now always answers a press: its icon turns once when the press goes ahead, and the
+ * pill shakes when it can't get anywhere (sync off, not on Wi-Fi, no device online), with
+ * why under the summary.
  */
 @Composable
 fun SyncPillContent(
@@ -123,8 +181,38 @@ fun SyncPillContent(
     onDetails: (() -> Unit)? = null,
 ) {
     val state = pillState(status)
+    val shake = remember { Animatable(0f) }
+    val spin = remember { Animatable(0f) }
+    val haptics = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val press: () -> Unit = press@{
+        val idle = state as? PillState.Idle ?: return@press
+        if (idle.canSync) onSyncNow()
+        if (idle.blocked) {
+            haptics.performHapticFeedback(HapticFeedbackType.Reject)
+            scope.launch {
+                shake.animateTo(0f, keyframes {
+                    durationMillis = 400
+                    -10f at 50
+                    10f at 120
+                    -7f at 190
+                    7f at 260
+                    -3f at 330
+                })
+            }
+        } else {
+            scope.launch {
+                spin.snapTo(0f)
+                spin.animateTo(360f, tween(600))
+            }
+        }
+    }
     Row(
-        modifier.fillMaxWidth().heightIn(min = PillHeight).animateContentSize(),
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = PillHeight)
+            .animateContentSize()
+            .graphicsLayer { translationX = shake.value * density },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AnimatedContent(
@@ -143,7 +231,7 @@ fun SyncPillContent(
             }
         }
         VerticalDivider(Modifier.height(28.dp), color = MaterialTheme.colorScheme.outlineVariant)
-        PillButton(state, onSyncNow, onCancel)
+        PillButton(state, press, onCancel, spin.value)
     }
 }
 
@@ -163,20 +251,43 @@ private fun IdleSummary(state: PillState.Idle, onDetails: (() -> Unit)?) {
         state.finished.isNotEmpty() -> state.finished
         else -> state.outlook?.text.orEmpty()
     }
+    val reason = state.reason?.let { reasonText(it) }
     // Why tracks are still missing, from the problems.
     val details = onDetails?.takeIf { state.finished.isNotEmpty() && state.running && !state.needsChoice }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            summary,
-            style = MaterialTheme.typography.titleSmall,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(start = 20.dp, end = 12.dp).semantics { liveRegion = LiveRegionMode.Polite },
-        )
+        Column(
+            Modifier.weight(1f).padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
+                .semantics { liveRegion = LiveRegionMode.Polite },
+        ) {
+            Text(
+                summary,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (reason != null) {
+                Text(
+                    reason,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
         if (details != null) {
             TextButton(onClick = details) { Text(stringResource(R.string.sync_issues_details)) }
         }
     }
+}
+
+@Composable
+private fun reasonText(reason: PillReason): String = when (reason) {
+    PillReason.NotOnLan -> stringResource(R.string.sync_pill_not_on_wifi)
+    PillReason.Cancelled -> stringResource(R.string.sync_cancelled)
+    is PillReason.Offline -> reason.name?.let { stringResource(R.string.sync_pill_offline, it) }
+        ?: stringResource(R.string.sync_pill_none_online)
+    is PillReason.Failed -> stringResource(R.string.sync_failed_with, reason.name, statusText(LocalContext.current, reason.status))
 }
 
 @Composable
@@ -218,20 +329,20 @@ private fun SyncingSummary(state: PillState.Syncing) {
 /**
  * Sync now, or Cancel sync while syncing, in one place: both are laid out on top of each other,
  * so the slot is as wide as the wider and doesn't move, and the one not shown fades out and
- * can't be pressed or focused.
+ * can't be pressed or focused. Sync now can be pressed whenever no session runs, even when it
+ * can't get anywhere, so that a press always gets an answer; [spin] turns its icon.
  */
 @Composable
-private fun PillButton(state: PillState, onSyncNow: () -> Unit, onCancel: () -> Unit) {
+private fun PillButton(state: PillState, onSyncNow: () -> Unit, onCancel: () -> Unit, spin: Float) {
     val syncing = state is PillState.Syncing
     val cancelAlpha by animateFloatAsState(if (syncing) 1f else 0f, tween(220), label = "cancel")
     Box(Modifier.padding(horizontal = 8.dp), contentAlignment = Alignment.Center) {
-        val idle = state as? PillState.Idle
         TextButton(
             onClick = onSyncNow,
-            enabled = idle?.canSync == true,
+            enabled = !syncing,
             modifier = Modifier.alpha(1f - cancelAlpha).then(if (syncing) Modifier.clearAndSetSemantics {} else Modifier),
         ) {
-            Icon(Icons.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(Icons.Sync, contentDescription = null, modifier = Modifier.size(18.dp).rotate(spin))
             Text(stringResource(R.string.sync_now), modifier = Modifier.padding(start = 8.dp))
         }
         TextButton(

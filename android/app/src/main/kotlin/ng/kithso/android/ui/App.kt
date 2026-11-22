@@ -160,9 +160,10 @@ fun App(
     // The tablet layout's queue button opens the player at its queue.
     var playerOnQueue by remember { mutableStateOf(false) }
 
-    // On the Sync page the sync pill takes the mini player's place, as one element that
-    // changes shape, in the rail layout too. The tablet layout has neither: its sidebar has the pill.
-    val pillShown = !tablet && inGroup && nav.top?.page == Page.Sync
+    // On the Sync page and the device pages over it the sync pill takes the mini player's place,
+    // as one element that changes shape, in the rail layout too. The tablet layout has neither:
+    // its sidebar has the pill.
+    val pillShown = !tablet && inGroup && nav.top?.page.let { it == Page.Sync || it is Page.Device }
     // Lists end clear of the mini player or the pill, which sit above the navigation bar.
     var miniPlayerHeight by remember { mutableIntStateOf(0) }
     val navigationBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -479,7 +480,7 @@ fun App(
             }
         }
 
-    // The mini player, or on the Sync page the sync pill: one surface whose content and size
+    // The mini player, or on the Sync and device pages the sync pill: one surface whose content and size
     // change, placed by the phone or rail layout. The tablet layout's top bar takes the mini
     // player's place.
     val dock: (@Composable (Modifier) -> Unit)? = if (tablet || (track == null && !pillShown)) null else { modifier ->

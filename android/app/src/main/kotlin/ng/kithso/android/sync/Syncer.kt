@@ -51,6 +51,7 @@ import java.net.Inet4Address
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -182,6 +183,11 @@ data class SyncStatus(
      * are still missing"); "" otherwise, and once another starts.
      */
     val finished: String = "",
+    /**
+     * This phone's user cancelled sync, or another device's user cancelled a session with it,
+     * and nothing has synced since: the pill says so until Sync is pressed or a session starts.
+     */
+    val cancelled: Boolean = false,
 ) {
     val inGroup: Boolean get() = libraryState != CoreSync.LibraryState.NoGroup
 
@@ -269,6 +275,9 @@ open class Syncer(
     // When the library was last read again for files that arrived (elapsed realtime). Only
     // touched on [thread].
     private var lastFilesRefresh = 0L
+
+    // Members that refused a press of Sync as busy, tried once more since. Only touched on [thread].
+    private val busyRetried = HashSet<String>()
 
     // A sync screen is open and resumed. Only touched on [thread].
     private var syncScreenShown = false
@@ -454,6 +463,8 @@ open class Syncer(
      * phone's profile as it stands, if it wasn't chosen, so its files sync from then on.
      */
     fun syncNow(uid: String? = null) = call { sync ->
+        if (uid == null) busyRetried.clear() else busyRetried -= uid
+        update { copy(cancelled = false) }
         sync.syncNow(uid)
         refreshLists(sync)
     }
@@ -464,7 +475,10 @@ open class Syncer(
      * is told, and starts none with us by itself for 10 minutes; its sessions end as cancelled
      * (peerCancelled), not failed.
      */
-    fun cancelSync(uid: String? = null) = call { it.cancel(uid) }
+    fun cancelSync(uid: String? = null) = call {
+        it.cancel(uid)
+        if (uid == null) update { copy(cancelled = true) }
+    }
 
     fun removeDevice(uid: String) = call { sync ->
         sync.removeDevice(uid)
@@ -853,11 +867,25 @@ open class Syncer(
                 // Refused for its version: the device's row and page say which to update, without
                 // a failure each time it tries again.
                 if (!event.user && event.status == CoreSync.ERR_VERSION) return
+                // A press refused as busy, most often just after Cancel while the other device is
+                // still ending the session cancelled: tried once more after a moment rather than
+                // dropped, so Sync now does something.
+                if (event.user && event.status == CoreSync.ERR_LOCKED && busyRetried.add(event.uid)) {
+                    Log.i(TAG, "${event.uid} was busy; trying again")
+                    update { copy(sessions = sessions - event.uid) }
+                    scope.launch(thread) {
+                        delay(BUSY_RETRY_MS)
+                        sync.takeIf { state.value.running }?.syncNow(event.uid)
+                    }
+                    return
+                }
+                if (event.status != CoreSync.ERR_LOCKED) busyRetried -= event.uid
                 update {
                     copy(
                         sessions = sessions - event.uid,
                         results = results + (event.uid to event),
                         finished = if (event.librarySynced) event.finishedText else finished,
+                        cancelled = cancelled || event.peerCancelled,
                     )
                 }
                 // Albums, playlists and plays from the other devices, and the files and covers
@@ -909,7 +937,7 @@ open class Syncer(
             source.refresh()
         }
         if (before != null) return false
-        update { copy(finished = "") }
+        update { copy(finished = "", cancelled = false) }
         startService()
         return true
     }
@@ -1017,6 +1045,7 @@ open class Syncer(
 
         private const val TAG = "kithsong"
         private const val FILES_REFRESH_MS = 10_000L
+        private const val BUSY_RETRY_MS = 2_000L
     }
 }
 
