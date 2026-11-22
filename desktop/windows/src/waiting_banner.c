@@ -1,3 +1,4 @@
+#define COBJMACROS
 #include "waiting_banner.h"
 
 #include <commctrl.h>
