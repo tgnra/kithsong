@@ -21,10 +21,10 @@ href = "https://apps.microsoft.com/detail/9PFD50NWXCT5"
 platform = "linux"
 name = "Linux"
 store = "Flatpak"
-href = "/docs/install/"
+href = "/docs/install/#linux"
 
 [[downloads]]
 platform = "android"
 name = "Android"
 store = "Closed Test"
-href = "/docs/install/"
+href = "/docs/install/#android"
