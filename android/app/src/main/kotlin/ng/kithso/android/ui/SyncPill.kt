@@ -46,6 +46,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import ng.kithso.android.R
 import ng.kithso.android.sync.SyncProgress
 import ng.kithso.android.sync.SyncStatus
@@ -329,8 +330,10 @@ private fun SyncingSummary(state: PillState.Syncing) {
 /**
  * Sync now, or Cancel sync while syncing, in one place: both are laid out on top of each other,
  * so the slot is as wide as the wider and doesn't move, and the one not shown fades out and
- * can't be pressed or focused. Sync now can be pressed whenever no session runs, even when it
- * can't get anywhere, so that a press always gets an answer; [spin] turns its icon.
+ * can't be pressed or focused. The one shown is on top: a disabled button still takes the taps
+ * that land on it, so Cancel sync over Sync now would swallow them. Sync now can be pressed
+ * whenever no session runs, even when it can't get anywhere, so that a press always gets an
+ * answer; [spin] turns its icon.
  */
 @Composable
 private fun PillButton(state: PillState, onSyncNow: () -> Unit, onCancel: () -> Unit, spin: Float) {
@@ -340,7 +343,8 @@ private fun PillButton(state: PillState, onSyncNow: () -> Unit, onCancel: () -> 
         TextButton(
             onClick = onSyncNow,
             enabled = !syncing,
-            modifier = Modifier.alpha(1f - cancelAlpha).then(if (syncing) Modifier.clearAndSetSemantics {} else Modifier),
+            modifier = Modifier.zIndex(if (syncing) 0f else 1f).alpha(1f - cancelAlpha)
+                .then(if (syncing) Modifier.clearAndSetSemantics {} else Modifier),
         ) {
             Icon(Icons.Sync, contentDescription = null, modifier = Modifier.size(18.dp).rotate(spin))
             Text(stringResource(R.string.sync_now), modifier = Modifier.padding(start = 8.dp))
@@ -348,7 +352,7 @@ private fun PillButton(state: PillState, onSyncNow: () -> Unit, onCancel: () -> 
         TextButton(
             onClick = onCancel,
             enabled = syncing,
-            modifier = Modifier.alpha(cancelAlpha).then(if (syncing) Modifier else Modifier.clearAndSetSemantics {}),
+            modifier = Modifier.zIndex(if (syncing) 1f else 0f).alpha(cancelAlpha).then(if (syncing) Modifier else Modifier.clearAndSetSemantics {}),
         ) {
             Text(stringResource(R.string.cancel_sync))
         }
