@@ -545,12 +545,14 @@ static void from_waiting(builder *b) {
   mc_waiting_extra_free(&x);
 }
 
-/* What each member gave for refusing a session, and where something else answers for it. */
+/* What each member gave for refusing a session, where something else answers for it, and
+ * whether a session with it is running (busy: whatever it holds back, it isn't this device). */
 typedef struct peer_note {
   char uid[MC_UID_STRLEN];
   mc_sync_hold hold;
   int64_t until;
   int wrong;
+  int busy;
   char addr[MC_SYNC_ADDR_MAX + 8];
 } peer_note;
 
@@ -564,7 +566,9 @@ static int from_peers(builder *b, peer_note **out) {
     if (!p->member) continue;
     peer_note *x = &notes[n];
     memcpy(x->uid, p->uid, MC_UID_STRLEN);
-    if (p->refused_hold != MC_HOLD_NONE && (!p->refused_until_ms || p->refused_until_ms > b->now)) {
+    x->busy = p->busy;
+    if (!p->busy && p->refused_hold != MC_HOLD_NONE &&
+        (!p->refused_until_ms || p->refused_until_ms > b->now)) {
       x->hold = p->refused_hold;
       x->until = p->refused_until_ms;
     }
@@ -572,7 +576,7 @@ static int from_peers(builder *b, peer_note **out) {
       x->wrong = p->wrong_count;
       memcpy(x->addr, p->wrong_addr, sizeof x->addr);
     }
-    if (x->hold || x->wrong) n++;
+    if (x->hold || x->wrong || x->busy) n++;
   }
   mc_mutex_unlock(&b->sync->lock);
   for (int i = 0; i < n; i++) {
@@ -614,8 +618,10 @@ static void from_capabilities(builder *b, const peer_note *notes, int nnotes) {
         (is = add(b, MC_ISSUE_LOW_SPACE, uid)))
       is->bytes_free = sqlite3_column_int64(stmt, 2);
     if (!strcmp(uid, me)) continue;
+    /* Said when it refused (from_peers()), or syncing with this device now. */
     int refused = 0;
-    for (int i = 0; i < nnotes && !refused; i++) refused = notes[i].hold && !strcmp(notes[i].uid, uid);
+    for (int i = 0; i < nnotes && !refused; i++)
+      refused = (notes[i].hold || notes[i].busy) && !strcmp(notes[i].uid, uid);
     mc_sync_hold hold;
     int64_t until;
     mc_state_parse_hold((const char *)sqlite3_column_text(stmt, 3), &hold, &until);

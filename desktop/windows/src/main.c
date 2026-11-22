@@ -356,25 +356,31 @@ static void layout(void) {
   dwp = DeferWindowPos(dwp, g_app.volume, NULL, button_x, button_y, icon, icon, SWP_NOZORDER);
   dwp = DeferWindowPos(dwp, g_app.sidebar, NULL, 0, bar + side_top, side_w, h - bar - side_top, SWP_NOZORDER);
   UINT library = library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW;
-  /* Tracks waiting for a device: a strip over the grid, beside the track list. */
-  int waiting_h = library_page() && waiting_banner_shown() ? min(waiting_banner_height(), h - bar) : 0;
-  dwp = DeferWindowPos(dwp, g_app.waiting, NULL, side_w, bar, grid_w, waiting_h,
+  /* Tracks waiting for a device and sync problems: a strip above every page, over the grid
+   * beside the track list on the library's. The pages start below it (top). */
+  int waiting_h = waiting_banner_shown() ? min(waiting_banner_height(), h - bar) : 0;
+  int top = bar + waiting_h;
+  dwp = DeferWindowPos(dwp, g_app.waiting, NULL, side_w, bar, library_page() ? grid_w : w - side_w, waiting_h,
                        SWP_NOZORDER | (waiting_h ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
-  album_grid_set_below_banner(waiting_h > 0);
-  dwp = DeferWindowPos(dwp, g_app.grid, NULL, side_w, bar + waiting_h, grid_w, h - bar - waiting_h,
-                       SWP_NOZORDER | library);
-  int artist_h = artist_page() ? min(artist_view_header_height(), h - bar) : h - bar;
-  dwp = DeferWindowPos(dwp, g_app.artists, NULL, side_w, bar, w - side_w, artist_h,
+  if ((waiting_h > 0) != waiting_banner_above()) {
+    waiting_banner_set_above(waiting_h > 0);
+    album_grid_set_below_banner(waiting_h > 0);
+    HWND views[] = {g_app.artists, g_app.search, g_app.home};
+    for (int i = 0; i < 3; i++) InvalidateRect(views[i], NULL, FALSE);
+  }
+  dwp = DeferWindowPos(dwp, g_app.grid, NULL, side_w, top, grid_w, h - top, SWP_NOZORDER | library);
+  int artist_h = artist_page() ? min(artist_view_header_height(), h - top) : h - top;
+  dwp = DeferWindowPos(dwp, g_app.artists, NULL, side_w, top, w - side_w, artist_h,
                        SWP_NOZORDER | (g_app.page == PAGE_ARTISTS ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
   if (artist_page())
-    dwp = DeferWindowPos(dwp, g_app.tracks, NULL, side_w, bar + artist_h, w - side_w, h - bar - artist_h,
+    dwp = DeferWindowPos(dwp, g_app.tracks, NULL, side_w, top + artist_h, w - side_w, h - top - artist_h,
                          SWP_NOZORDER | SWP_SHOWWINDOW);
   else
     dwp = DeferWindowPos(dwp, g_app.tracks, NULL, w - tracks_w, bar, tracks_w, h - bar,
                          SWP_NOZORDER | (g_app.show_tracks && library_page() ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
-  dwp = DeferWindowPos(dwp, g_app.search, NULL, side_w, bar, w - side_w, h - bar,
+  dwp = DeferWindowPos(dwp, g_app.search, NULL, side_w, top, w - side_w, h - top,
                        SWP_NOZORDER | (g_app.page == PAGE_SEARCH ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
-  dwp = DeferWindowPos(dwp, g_app.home, NULL, side_w, bar, w - side_w, h - bar,
+  dwp = DeferWindowPos(dwp, g_app.home, NULL, side_w, top, w - side_w, h - top,
                        SWP_NOZORDER | (g_app.page == PAGE_HOME ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
   EndDeferWindowPos(dwp);
 
@@ -385,9 +391,9 @@ static void layout(void) {
   DwmExtendFrameIntoClientArea(g_app.wnd, &m);
   InvalidateRect(g_app.wnd, NULL, TRUE);
 
-  import_view_layout(side_w, bar, w - side_w, h - bar, g_app.dpi);
-  settings_view_layout(side_w, bar, w - side_w, h - bar, g_app.dpi);
-  device_view_layout(side_w, bar, w - side_w, h - bar, g_app.dpi);
+  import_view_layout(side_w, top, w - side_w, h - top, g_app.dpi);
+  settings_view_layout(side_w, top, w - side_w, h - top, g_app.dpi);
+  device_view_layout(side_w, top, w - side_w, h - top, g_app.dpi);
 }
 
 /* The window's own areas, around its children: the toolbar and the sidebar column
@@ -1753,6 +1759,8 @@ static void on_command(int id, int code) {
         if (delete_dialog_lost(g_app.wnd, g_app.lib, sync_bridge_get())) refresh_library();
       } else if (code == WAITING_BANNER_DETAILS) {
         if (issue_dialog_show(g_app.wnd, g_app.lib, sync_bridge_get(), NULL)) refresh_library();
+      } else if (code == WAITING_BANNER_DISMISSED) {
+        layout();
       } else {
         back_to_library(); /* the banner says a stress test library is open */
       }

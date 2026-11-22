@@ -54,6 +54,8 @@
 
 static const char css[] =
     "banner.warning > revealer > widget { background-color: alpha(@warning_bg_color, 0.3); }"
+  /* Room at the end for the X over it (dismissable_banner()). */
+  "banner.dismissable > revealer > widget { padding-right: 48px; }"
   ".album-cover { border-radius: 8px; background-color: alpha(currentColor, 0.08); }"
   ".now-playing .album-cover { border-radius: 4px; }"
   /* The edit dialog's cover, which is a button, and what a file over the dialog shows. */
@@ -1821,8 +1823,44 @@ static void on_problems_clicked(AdwBanner *banner, gpointer user) {
   issue_dialog_present(GTK_WIDGET(a->win), NULL);
 }
 
+/* Shows banner with text ("" for nothing to say) unless its X was pressed; its X with it. A
+ * dismissed banner stays hidden until it has nothing to say, then comes back with what's next. */
+static void show_banner(AdwBanner *banner, GtkWidget *close, gboolean *dismissed, const char *text) {
+  if (!text[0]) *dismissed = FALSE;
+  gboolean shown = text[0] && !*dismissed;
+  /* The title stays while the banner slides away. */
+  if (text[0]) adw_banner_set_title(banner, text);
+  adw_banner_set_revealed(banner, shown);
+  gtk_widget_set_visible(close, shown);
+}
+
+static void on_banner_close(GtkButton *button, gpointer user) {
+  app *a = user;
+  if (GTK_WIDGET(button) == a->problems_close) a->problems_dismissed = TRUE;
+  else a->waiting_dismissed = TRUE;
+  app_update_waiting(a);
+}
+
+/* banner with an X over its end, which dismisses it (show_banner()). *close is the X. */
+static GtkWidget *dismissable_banner(app *a, AdwBanner *banner, GtkWidget **close) {
+  gtk_widget_add_css_class(GTK_WIDGET(banner), "dismissable");
+  GtkWidget *overlay = gtk_overlay_new();
+  gtk_overlay_set_child(GTK_OVERLAY(overlay), GTK_WIDGET(banner));
+  *close = gtk_button_new_from_icon_name("window-close-symbolic");
+  app_set_tooltip(*close, mc_str(MC_STR_CLOSE), NULL);
+  gtk_widget_add_css_class(*close, "flat");
+  gtk_widget_add_css_class(*close, "circular");
+  gtk_widget_set_halign(*close, GTK_ALIGN_END);
+  gtk_widget_set_valign(*close, GTK_ALIGN_CENTER);
+  gtk_widget_set_margin_end(*close, 8);
+  gtk_widget_set_visible(*close, FALSE);
+  g_signal_connect(*close, "clicked", G_CALLBACK(on_banner_close), a);
+  gtk_overlay_add_overlay(GTK_OVERLAY(overlay), *close);
+  return overlay;
+}
+
 /* The problems banner, for this library's sync. */
-static void update_problems(app *a, gboolean library) {
+static void update_problems(app *a) {
   char text[512] = "";
   mc_sync *sync = devices_sync();
   mc_sync_problems *p = NULL;
@@ -1830,21 +1868,17 @@ static void update_problems(app *a, gboolean library) {
     mc_sync_problems_text(p, text, sizeof text);
   adw_banner_set_button_label(a->problems, p && p->issue_count > 0 ? mc_str(MC_STR_SYNC_ISSUES_DETAILS) : NULL);
   mc_sync_problems_free(p);
-  /* The title stays while the banner slides away. */
-  if (text[0]) adw_banner_set_title(a->problems, text);
-  adw_banner_set_revealed(a->problems, library && text[0]);
+  show_banner(a->problems, a->problems_close, &a->problems_dismissed, text);
 }
 
+/* On every page, not only the library's: they're about the whole library and its sync. */
 void app_update_waiting(app *a) {
   if (!a->waiting) return;
-  const char *page = gtk_stack_get_visible_child_name(a->pages);
-  gboolean library = page && !strcmp(page, "library");
-  update_problems(a, library);
+  update_problems(a);
   /* A stress test library has no sync to wait for: the banner's the way back. */
   if (mc_library_is_stress(a->lib)) {
-    adw_banner_set_title(a->waiting, mc_str(MC_STR_STRESS_BANNER_TITLE));
     adw_banner_set_button_label(a->waiting, mc_str(MC_STR_STRESS_BACK));
-    adw_banner_set_revealed(a->waiting, library);
+    show_banner(a->waiting, a->waiting_close, &a->waiting_dismissed, mc_str(MC_STR_STRESS_BANNER_TITLE));
     return;
   }
   adw_banner_set_button_label(a->waiting, NULL);
@@ -1853,9 +1887,7 @@ void app_update_waiting(app *a) {
   mc_sync_waiting *w = NULL;
   if (sync && mc_sync_get_waiting(sync, &w) == MC_OK) mc_sync_waiting_text(w, text, sizeof text);
   mc_sync_waiting_free(w);
-  /* The title stays while the banner slides away. */
-  if (text[0]) adw_banner_set_title(a->waiting, text);
-  adw_banner_set_revealed(a->waiting, library && text[0]);
+  show_banner(a->waiting, a->waiting_close, &a->waiting_dismissed, text);
 }
 
 /* The Import row shows as picked on its page, which everything that opens it comes through. */
@@ -2107,20 +2139,20 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
   a->import = import_view_new(a->lib, &import_cb);
   gtk_stack_add_named(a->pages, a->import, "import");
 
-  /* Tracks waiting for a device, above the library's pages: calm, no button, not dismissed. */
+  /* Tracks waiting for a device, above the pages: calm, no button. */
   GtkWidget *content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  /* And what's wrong with the files here, above it. It goes by itself, not dismissed either. */
+  /* And what's wrong with the files here, above it. Both go by themselves, or with their X. */
   GtkWidget *problems = adw_banner_new("");
   a->problems = ADW_BANNER(problems);
   g_signal_connect(problems, "button-clicked", G_CALLBACK(on_problems_clicked), a);
   adw_banner_set_use_markup(a->problems, FALSE);
   gtk_widget_add_css_class(problems, "warning");
-  gtk_box_append(GTK_BOX(content), problems);
+  gtk_box_append(GTK_BOX(content), dismissable_banner(a, a->problems, &a->problems_close));
   GtkWidget *waiting = adw_banner_new("");
   a->waiting = ADW_BANNER(waiting);
   g_signal_connect(waiting, "button-clicked", G_CALLBACK(on_banner_clicked), a);
   adw_banner_set_use_markup(a->waiting, FALSE);
-  gtk_box_append(GTK_BOX(content), waiting);
+  gtk_box_append(GTK_BOX(content), dismissable_banner(a, a->waiting, &a->waiting_close));
   gtk_widget_set_vexpand(pages, TRUE);
   gtk_box_append(GTK_BOX(content), pages);
   g_signal_connect(pages, "notify::visible-child-name", G_CALLBACK(on_page_changed), a);

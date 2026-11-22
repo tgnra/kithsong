@@ -1,6 +1,7 @@
 #include "waiting_banner.h"
 
 #include <commctrl.h>
+#include <oleacc.h>
 #include <uiautomation.h>
 #include <wchar.h>
 
@@ -20,11 +21,12 @@ enum {
   BUTTON_PAD = 24, /* the button's width over its label's */
   BUTTON_INSET = 4, /* from the pill's top and bottom */
   BUTTON_GAP = 6,   /* between the two buttons */
+  CLOSE = 28,       /* the ✕'s width; it's as tall as the other buttons */
 };
 
 static struct {
   HWND wnd;
-  HFONT font, icon_font;
+  HFONT font, icon_font, close_font;
   UINT dpi;
   int text_h; /* a line of font */
   wchar_t text[512]; /* "" while nothing waits */
@@ -35,6 +37,11 @@ static struct {
   HWND details;         /* Details, on the warning */
   BOOL detailed;        /* there are issues to show, so it shows */
   BOOL stress;       /* a stress test library is open: text says so, and a click goes back */
+  HWND close_problem, close_text; /* the ✕ at the end of each pill */
+  BOOL problem_dismissed, text_dismissed; /* ✕ pressed: hidden until it has nothing to say */
+  mc_sync *sync;     /* as last given to waiting_banner_update(), to read again on a ✕ */
+  BOOL above;        /* waiting_banner_set_above() */
+  IAccPropServices *acc;
   canvas c;
   uia_host ui;
 } b;
@@ -70,10 +77,10 @@ static int details_width(void) {
   return label_width(b.details, b.detailed);
 }
 
-/* Both buttons' width with the gap between, 0 while neither shows. */
+/* Both buttons' width with the gap between, and the ✕'s after them. */
 static int button_width(void) {
   int r = remove_width(), d = details_width();
-  return r + d + (r && d ? scale(BUTTON_GAP) : 0);
+  return r + d + (r && d ? scale(BUTTON_GAP) : 0) + (r || d ? scale(BUTTON_GAP) : 0) + scale(CLOSE);
 }
 
 /* One sentence in its pill, with its icon: the warning on the caution colour (Fluent's, as the
@@ -109,11 +116,10 @@ static void paint(HDC dc) {
   RECT pill = {rc.left + scale(MARGIN_X), rc.top + scale(MARGIN_TOP), rc.right - scale(MARGIN_X),
                rc.top + scale(MARGIN_TOP) + pill_height()};
   if (b.problem[0]) {
-    int button = button_width();
-    paint_pill(c, &pill, TRUE, b.problem, button ? button + scale(PAD_X) / 2 : 0);
+    paint_pill(c, &pill, TRUE, b.problem, button_width() + scale(PAD_X) / 2);
     OffsetRect(&pill, 0, pill_height() + scale(MARGIN_TOP));
   }
-  if (b.text[0]) paint_pill(c, &pill, FALSE, b.text, 0);
+  if (b.text[0]) paint_pill(c, &pill, FALSE, b.text, scale(CLOSE) + scale(PAD_X) / 2);
 
   /* The content area's top border and rounded corner, as the album grid draws them when
    * it's at the top; its left border carries on into the grid below. */
@@ -141,24 +147,34 @@ static int ui_focus(void) {
 
 static const uia_ops ui_ops = {.node = ui_node, .focus = ui_focus};
 
-/* Puts the buttons at the end of the warning's pill, Details last, or hides them. */
+/* Puts the buttons at the end of the warning's pill, the ✕ last and Details before it, and
+ * the other ✕ at the end of the second pill; or hides them. */
 static void place_button(void) {
-  if (!b.remove || !b.details) return;
+  if (!b.remove || !b.details || !b.close_problem || !b.close_text) return;
   RECT rc;
   GetClientRect(b.wnd, &rc);
-  int right = rc.right - scale(MARGIN_X) - scale(PAD_X) / 2, inset = scale(BUTTON_INSET);
-  HWND buttons[] = {b.details, b.remove};
-  int widths[] = {details_width(), remove_width()};
-  for (int i = 0; i < 2; i++) {
+  int end = rc.right - scale(MARGIN_X) - scale(PAD_X) / 2, inset = scale(BUTTON_INSET);
+  int right = end, top = scale(MARGIN_TOP) + inset, h = pill_height() - 2 * inset;
+  HWND buttons[] = {b.close_problem, b.details, b.remove};
+  int widths[] = {scale(CLOSE), details_width(), remove_width()};
+  for (int i = 0; i < 3; i++) {
     if (!widths[i] || !b.problem[0]) {
       ShowWindow(buttons[i], SW_HIDE);
       continue;
     }
-    SetWindowPos(buttons[i], NULL, right - widths[i], scale(MARGIN_TOP) + inset, widths[i], pill_height() - 2 * inset,
-                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SetWindowPos(buttons[i], NULL, right - widths[i], top, widths[i], h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     right -= widths[i] + scale(BUTTON_GAP);
   }
+  if (b.text[0]) {
+    int text_top = top + (b.problem[0] ? pill_height() + scale(MARGIN_TOP) : 0);
+    SetWindowPos(b.close_text, NULL, end - scale(CLOSE), text_top, scale(CLOSE), h,
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  } else {
+    ShowWindow(b.close_text, SW_HIDE);
+  }
 }
+
+static BOOL refresh(void);
 
 static LRESULT CALLBACK banner_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (!b.wnd) { /* messages arrive before CreateWindowExW returns */
@@ -186,6 +202,13 @@ static LRESULT CALLBACK banner_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
         SendMessageW(GetParent(wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(wnd), WAITING_BANNER_REMOVE), (LPARAM)wnd);
       else if ((HWND)lp == b.details && HIWORD(wp) == BN_CLICKED)
         SendMessageW(GetParent(wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(wnd), WAITING_BANNER_DETAILS), (LPARAM)wnd);
+      else if (((HWND)lp == b.close_problem || (HWND)lp == b.close_text) && HIWORD(wp) == BN_CLICKED) {
+        if ((HWND)lp == b.close_problem) b.problem_dismissed = TRUE;
+        else b.text_dismissed = TRUE;
+        if (GetFocus() == (HWND)lp) SetFocus(GetParent(wnd));
+        refresh();
+        SendMessageW(GetParent(wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(wnd), WAITING_BANNER_DISMISSED), (LPARAM)wnd);
+      }
       return 0;
     case WM_LBUTTONUP:
       if (b.stress)
@@ -198,10 +221,19 @@ static LRESULT CALLBACK banner_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       }
       break;
     case WM_DESTROY:
+      if (b.acc) {
+        MSAAPROPID props[] = {PROPID_ACC_NAME};
+        IAccPropServices_ClearHwndProps(b.acc, b.close_problem, OBJID_CLIENT, CHILDID_SELF, props, 1);
+        IAccPropServices_ClearHwndProps(b.acc, b.close_text, OBJID_CLIENT, CHILDID_SELF, props, 1);
+        IAccPropServices_Release(b.acc);
+        b.acc = NULL;
+      }
       uia_destroy(&b.ui);
       canvas_free(&b.c);
       if (b.icon_font) DeleteObject(b.icon_font);
       b.icon_font = NULL;
+      if (b.close_font) DeleteObject(b.close_font);
+      b.close_font = NULL;
       b.wnd = NULL;
       return 0;
   }
@@ -220,6 +252,16 @@ HWND waiting_banner_create(HWND parent, int id) {
   b.details = CreateWindowExW(0, WC_BUTTONW, mc_wstr_mnemonic(MC_STR_SYNC_ISSUES_DETAILS),
                               WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0, wnd, (HMENU)(INT_PTR)2,
                               GetModuleHandleW(NULL), NULL);
+  /* The ✕s: the icon font's Cancel (waiting_banner_set_font()), named Close for screen readers. */
+  CoCreateInstance(&CLSID_AccPropServices, NULL, CLSCTX_INPROC_SERVER, &IID_IAccPropServices, (void **)&b.acc);
+  for (int i = 0; i < 2; i++) {
+    HWND close = CreateWindowExW(0, WC_BUTTONW, L"\xE711", WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 0, 0, wnd,
+                                 (HMENU)(INT_PTR)(3 + i), GetModuleHandleW(NULL), NULL);
+    if (b.acc && close)
+      IAccPropServices_SetHwndPropStr(b.acc, close, OBJID_CLIENT, CHILDID_SELF, PROPID_ACC_NAME, mc_wstr(MC_STR_CLOSE));
+    if (i == 0) b.close_problem = close;
+    else b.close_text = close;
+  }
   return wnd;
 }
 
@@ -247,13 +289,19 @@ static BOOL set_text(const wchar_t *wide, const wchar_t *problem, BOOL removable
   return was != sentences();
 }
 
-BOOL waiting_banner_set_stress(BOOL stress) {
-  b.stress = stress;
-  return set_text(stress ? mc_wstr(MC_STR_STRESS_BANNER) : L"", L"", FALSE, FALSE);
+/* What each sentence says ("" for nothing), less any whose ✕ was pressed. A dismissed one
+ * stays hidden until it has nothing to say, then comes back with what's next. TRUE if the
+ * strip's height changed. */
+static BOOL show(const wchar_t *text, const wchar_t *problem, BOOL removable, BOOL detailed) {
+  if (!text[0]) b.text_dismissed = FALSE;
+  if (!problem[0]) b.problem_dismissed = FALSE;
+  return set_text(b.text_dismissed ? L"" : text, b.problem_dismissed ? L"" : problem, removable, detailed);
 }
 
-BOOL waiting_banner_update(mc_sync *sync) {
-  if (b.stress) return FALSE;
+/* The stress test library's sentence, or the waiting tracks and the problems from b.sync. */
+static BOOL refresh(void) {
+  if (b.stress) return show(mc_wstr(MC_STR_STRESS_BANNER), L"", FALSE, FALSE);
+  mc_sync *sync = b.sync;
   char text[512] = "";
   mc_sync_waiting *w = NULL;
   if (sync && mc_sync_get_waiting(sync, &w) == MC_OK) mc_sync_waiting_text(w, text, sizeof text);
@@ -266,7 +314,29 @@ BOOL waiting_banner_update(mc_sync *sync) {
   wchar_t wide[512], problem[512];
   wstr_from_utf8(wide, sizeof wide / sizeof *wide, text);
   wstr_from_utf8(problem, sizeof problem / sizeof *problem, warning);
-  return set_text(wide, problem, removable, detailed);
+  return show(wide, problem, removable, detailed);
+}
+
+BOOL waiting_banner_set_stress(BOOL stress) {
+  if (stress == b.stress) return FALSE;
+  b.stress = stress;
+  b.text_dismissed = FALSE;
+  if (stress) return show(mc_wstr(MC_STR_STRESS_BANNER), L"", FALSE, FALSE);
+  return set_text(L"", L"", FALSE, FALSE);
+}
+
+BOOL waiting_banner_update(mc_sync *sync) {
+  b.sync = sync;
+  if (b.stress) return FALSE;
+  return refresh();
+}
+
+void waiting_banner_set_above(BOOL above) {
+  b.above = above;
+}
+
+BOOL waiting_banner_above(void) {
+  return b.above;
 }
 
 BOOL waiting_banner_shown(void) {
@@ -287,6 +357,13 @@ void waiting_banner_set_font(HFONT font, UINT dpi) {
   b.icon_font = CreateFontW(-scale(ICON), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
                             theme_icon_face());
+  /* Smaller than the pill's icon, as a ✕ on a button is. */
+  if (b.close_font) DeleteObject(b.close_font);
+  b.close_font = CreateFontW(-scale(10), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                             theme_icon_face());
+  if (b.close_problem) SendMessageW(b.close_problem, WM_SETFONT, (WPARAM)b.close_font, TRUE);
+  if (b.close_text) SendMessageW(b.close_text, WM_SETFONT, (WPARAM)b.close_font, TRUE);
   HDC dc = GetDC(b.wnd);
   HGDIOBJ old = SelectObject(dc, font ? (HGDIOBJ)font : GetStockObject(DEFAULT_GUI_FONT));
   TEXTMETRICW tm;
@@ -303,4 +380,6 @@ void waiting_banner_theme_changed(void) {
   if (b.wnd) InvalidateRect(b.wnd, NULL, FALSE);
   if (b.remove) InvalidateRect(b.remove, NULL, TRUE);
   if (b.details) InvalidateRect(b.details, NULL, TRUE);
+  if (b.close_problem) InvalidateRect(b.close_problem, NULL, TRUE);
+  if (b.close_text) InvalidateRect(b.close_text, NULL, TRUE);
 }

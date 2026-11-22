@@ -1059,6 +1059,21 @@ static void note_handshake(mc_sync *sync, const char *uid) {
   mc_mutex_unlock(&sync->lock);
 }
 
+/* A session with uid got going, whichever side started it: it holds nothing back from this
+ * device, whatever it said when it last refused one, and the problems no longer name its
+ * hold (from_peers(), from_capabilities() in issues.c) while the session runs. */
+static void note_session_started(mc_sync *sync, const char *uid) {
+  mc_mutex_lock(&sync->lock);
+  mc_sync_peer *p = find_peer(sync, uid, 0);
+  if (p) {
+    p->refused_hold = MC_HOLD_NONE;
+    p->refused_until_ms = 0;
+  }
+  sync->waiting_dirty = 1;
+  mc_cond_broadcast(&sync->cond);
+  mc_mutex_unlock(&sync->lock);
+}
+
 /* The peer refused a session as busy, holding sync back with hold (MC_HOLD_NONE: one is
  * running). */
 static void note_refused(mc_sync *sync, const char *uid, mc_sync_hold hold, int64_t until) {
@@ -1161,6 +1176,7 @@ static mc_status initiate(mc_sync *sync, mc_sync_conn *c, session_job *j, int qu
     if (handshook) {
       note_handshake(sync, j->uid);
       mc_sync_take_user(sync, j->uid); /* this session carries the press */
+      note_session_started(sync, j->uid);
       st = mc_session_run(&s);
       if (st == MC_ERR_LOCKED) note_refused(sync, j->uid, s.refused_hold, s.refused_until_ms);
     }
@@ -1316,6 +1332,7 @@ static void serve_worker(void *arg) {
       mc_session_refuse_busy(ch, "bin", 0, "deletes here wait for a press of Sync");
     } else if (mc_sync_claim(sync, s.peer_uid, strcmp(s.peer_uid, sync->device_uid) < 0, ch)) {
       s.asked = mc_sync_take_user(sync, s.peer_uid); /* pressed here, and it called back */
+      note_session_started(sync, s.peer_uid);
       st = mc_session_run(&s);
       int cancelled = mc_sync_release(sync, s.peer_uid) && st != MC_OK;
       int peer_cancelled = !cancelled && st != MC_OK && mc_channel_peer_cancelled(ch);
@@ -2945,6 +2962,11 @@ mc_status mc_sync_list_devices(mc_sync *sync, mc_sync_device_list **out) {
         (!p->refused_until_ms || p->refused_until_ms > wall_now)) {
       d->peer_hold = p->refused_hold;
       d->peer_hold_until_ms = p->refused_until_ms;
+    }
+    /* Syncing with this device now: whatever it holds back, it isn't us (as in the problems). */
+    if (p->busy) {
+      d->peer_hold = MC_HOLD_NONE;
+      d->peer_hold_until_ms = 0;
     }
     if (p->wrong_count >= MC_SYNC_WRONG_SHOW && p->wrong_addr[0]) {
       d->wrong_address = mc_strdup(p->wrong_addr);

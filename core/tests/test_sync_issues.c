@@ -607,6 +607,20 @@ int main(int argc, char **argv) {
     CHECK(row_of(&b, b.uid, &list, &row));
     CHECK(row && row->peer_hold == MC_HOLD_CANCELLED);
     mc_sync_device_list_free(list);
+    /* While a session with B runs, A names no hold of B's, in the problems or B's row: B is
+     * syncing with it after all. It's back once none runs. */
+    for (int busy = 1; busy >= 0; busy--) {
+      mc_mutex_lock(&a.sync->lock);
+      for (int i = 0; i < a.sync->npeers; i++)
+        if (!strcmp(a.sync->peers[i].uid, b.uid)) a.sync->peers[i].busy = busy;
+      a.sync->waiting_dirty = 1;
+      mc_cond_broadcast(&a.sync->cond);
+      mc_mutex_unlock(&a.sync->lock);
+      CHECK(wait_issue(&a, MC_ISSUE_HELD, b.uid, !busy, NULL));
+      CHECK(row_of(&a, b.uid, &list, &row));
+      CHECK(row && row->peer_hold == (busy ? MC_HOLD_NONE : MC_HOLD_CANCELLED));
+      mc_sync_device_list_free(list);
+    }
     /* A press of Sync on B lifts it, and A forgets the refusal once a session gets through. */
     CHECK(sync_now(&b, &a, NULL) == MC_OK);
     CHECK(wait_issue(&a, MC_ISSUE_HELD, b.uid, 0, NULL));

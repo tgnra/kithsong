@@ -19,6 +19,7 @@
 #include "scroller.h"
 #include "theme.h"
 #include "uia.h"
+#include "waiting_banner.h"
 #include "wstr.h"
 
 #define WM_APP_THUMB (WM_APP + 20) /* lParam: thumb_result *, from the loader thread */
@@ -1086,8 +1087,11 @@ static void paint(HDC dc, const RECT *dirty) {
   /* The content area's border and rounded corner, against the sidebar and toolbar. */
   int radius = scale(CONTENT_RADIUS);
   RECT all = {0, 0, g.client_w, g.client_h}, border = {0, 0, g.client_w + radius, g.client_h + radius};
+  /* Below the waiting banner, which has them, just the left border, carried on from it. */
+  BOOL below = waiting_banner_above();
+  if (below) border.top = -2 * radius;
   canvas_frame(c, &border, radius, 1, theme.line, 255);
-  canvas_round_corners(c, &all, radius, CORNER_TL, theme.frame, theme.mica ? 0 : 255);
+  if (!below) canvas_round_corners(c, &all, radius, CORNER_TL, theme.frame, theme.mica ? 0 : 255);
 
   canvas_blit(c, dc, dirty->left, dirty->top, dirty);
 }

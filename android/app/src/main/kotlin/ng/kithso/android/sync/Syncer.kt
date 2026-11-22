@@ -279,6 +279,10 @@ open class Syncer(
     // Members that refused a press of Sync as busy, tried once more since. Only touched on [thread].
     private val busyRetried = HashSet<String>()
 
+    // When the app last went to the background (elapsed realtime), 0 for not yet. Only
+    // touched on [thread].
+    private var backgroundedAt = 0L
+
     // A sync screen is open and resumed. Only touched on [thread].
     private var syncScreenShown = false
 
@@ -290,6 +294,13 @@ open class Syncer(
     private val networkWatch = NetworkWatch(context, scope, thread, { context.lanAddress() }) {
         val sync = sync?.takeIf { state.value.running } ?: return@NetworkWatch
         Log.i(TAG, "Network changed")
+        recheckNetwork(sync)
+    }
+
+    // On [thread]: discovery asks again and reach checks run now, so which members are online
+    // is current, after a network change or back from the background (where Android may have
+    // frozen the process and its sockets with it, and missed members coming and going).
+    private fun recheckNetwork(sync: CoreSync) {
         // Android may drop the lock with the network it was taken on.
         multicastLock?.release()
         multicastLock?.acquire()
@@ -415,8 +426,12 @@ open class Syncer(
                 if (holder == HOLDER_APP) {
                     sync.setAutomatic(true)
                     reportPower()
+                    // Back after a while: what discovery saw before may be out of date.
+                    val away = SystemClock.elapsedRealtime() - backgroundedAt
+                    if (backgroundedAt > 0 && away >= RECHECK_AFTER_MS) recheckNetwork(sync) else refreshLists(sync)
+                } else {
+                    refreshLists(sync)
                 }
-                refreshLists(sync)
             }
         }
     }
@@ -427,6 +442,7 @@ open class Syncer(
             // Off the screen: what's under way may finish, but nothing new starts, and on
             // battery transcoding for others stops at once.
             if (holder == HOLDER_APP) {
+                backgroundedAt = SystemClock.elapsedRealtime()
                 sync?.setAutomatic(false)
                 reportPower()
             }
@@ -1046,6 +1062,8 @@ open class Syncer(
         private const val TAG = "kithsong"
         private const val FILES_REFRESH_MS = 10_000L
         private const val BUSY_RETRY_MS = 2_000L
+        // Away at least this long, the network is checked again on coming back (see [hold]).
+        private const val RECHECK_AFTER_MS = 10_000L
     }
 }
 

@@ -1,13 +1,14 @@
-/* The strip across the top of the library pages while tracks wait for a device this PC can't
- * reach now (mc_sync_get_waiting()), and, above that in the same strip, problems a check left
- * for the user (mc_sync_get_problems()). Tracks missing for good get a Remove from Library
+/* The strip across the top of every page while tracks wait for a device this PC can't reach
+ * now (mc_sync_get_waiting()), and, above that in the same strip, problems a check left for
+ * the user (mc_sync_get_problems()). Tracks missing for good get a Remove from Library
  * button, which sends the parent WM_COMMAND with WAITING_BANNER_REMOVE and the strip's id, and
  * any issue a Details button, which sends WAITING_BANNER_DETAILS (for issue_dialog.h). Both
- * go by themselves; there's nothing to dismiss.
+ * sentences go by themselves, or with the ✕ at their end, which hides one until it has
+ * nothing to say and sends WAITING_BANNER_DISMISSED, for the parent to lay out again.
  *
  * It sits where the content area starts, so it draws the content area's top border and rounded
- * top-left corner itself, and the grid below carries the left border on
- * (album_grid_set_below_banner()). Screen readers see it as a live region (uia.h). */
+ * top-left corner itself, and the page below carries the left border on
+ * (waiting_banner_above()). Screen readers see it as a live region (uia.h). */
 #ifndef KITHSONG_WAITING_BANNER_H
 #define KITHSONG_WAITING_BANNER_H
 
@@ -17,6 +18,7 @@
 
 #define WAITING_BANNER_REMOVE 1  /* the notification code of the Remove from Library button */
 #define WAITING_BANNER_DETAILS 2 /* and of Details */
+#define WAITING_BANNER_DISMISSED 3 /* a ✕ was pressed */
 
 /* Creates the strip as a hidden child of parent. */
 HWND waiting_banner_create(HWND parent, int id);
@@ -26,7 +28,7 @@ BOOL waiting_banner_update(mc_sync *sync);
 /* While a stress test library is open it says so instead, and a click on it sends the parent
  * WM_COMMAND with BN_CLICKED and its id. TRUE if the strip came or went. */
 BOOL waiting_banner_set_stress(BOOL stress);
-/* Whether it has something to say, and so takes waiting_banner_height() on library pages. */
+/* Whether it has something to say, and so takes waiting_banner_height() above the page. */
 BOOL waiting_banner_shown(void);
 /* Its height at the DPI it was last given: a line of text with its padding, for each sentence. */
 int waiting_banner_height(void);
@@ -34,5 +36,9 @@ int waiting_banner_height(void);
 void waiting_banner_set_font(HFONT font, UINT dpi);
 /* After theme_update. */
 void waiting_banner_theme_changed(void);
+/* Whether it's laid out above the page (the main window's layout says), so the page draws
+ * the content area's left border only, carried on from it, without the top and the corner. */
+void waiting_banner_set_above(BOOL above);
+BOOL waiting_banner_above(void);
 
 #endif
