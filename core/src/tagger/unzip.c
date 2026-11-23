@@ -322,7 +322,6 @@ mc_unzip_result mc_unzip(const char *zip_path, const char *dest, int64_t max_byt
   if (result == MC_UNZIP_OK && mc_free_space(dest, &space) == MC_OK && space < total + used + SPACE_MARGIN)
     result = MC_UNZIP_NO_SPACE;
 
-  int64_t written = 0;
   for (mz_uint i = 0; i < count && result == MC_UNZIP_OK; i++) {
     if (cancel && cancel(user)) {
       result = MC_UNZIP_CANCELLED;
@@ -359,7 +358,7 @@ mc_unzip_result mc_unzip(const char *zip_path, const char *dest, int64_t max_byt
         break;
       }
     }
-    sink s = {mc_fopen(path, "wb"), 0, (int64_t)st.m_uncomp_size, &written, max_bytes, cancel, user, 0};
+    sink s = {mc_fopen(path, "wb"), 0, (int64_t)st.m_uncomp_size, &stats->bytes, max_bytes, cancel, user, 0};
     if (!s.f) {
       free(path);
       result = MC_UNZIP_WRITE;
@@ -376,8 +375,7 @@ mc_unzip_result mc_unzip(const char *zip_path, const char *dest, int64_t max_byt
     }
     free(path);
   }
-  stats->bytes = written;
-  if (budget && result == MC_UNZIP_OK) budget->used += written;
+  if (budget && result == MC_UNZIP_OK) budget->used += stats->bytes;
   mz_zip_reader_end(&z);
   fclose(f);
   return result;

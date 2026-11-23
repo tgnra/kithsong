@@ -392,9 +392,12 @@ typedef struct mc_sync_activity {
 } mc_sync_activity;
 
 mc_status mc_sync_get_last_activity(mc_sync *sync, mc_sync_activity *out);
-/* Whether r moved or deleted files: whether it becomes the last activity. A press of Sync
- * whose sessions all end without one found nothing to do. */
+/* Whether r moved or deleted files: whether it becomes the last activity. */
 int mc_sync_result_changed(const mc_sync_result *r);
+/* Whether r did anything at all: files, or rows either way (another device's edits, playlists,
+ * plays, profiles), or covers. A press of Sync whose sessions all end without doing anything
+ * found nothing to do. */
+int mc_sync_result_did_something(const mc_sync_result *r);
 /* a as "Last sync: ↑ 4 · ↓ 100 · 10 deleted", with only the counts above 0; "" if when_ms
  * is 0. Like snprintf: returns the length it wanted. */
 size_t mc_sync_activity_text(const mc_sync_activity *a, char *buf, size_t size);

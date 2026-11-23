@@ -18,6 +18,8 @@ kithsong_test(test_hex)
 kithsong_test(test_library)
 kithsong_test(test_home_picks)
 kithsong_test(test_library_move)
+kithsong_test(test_library_archive)
+target_link_libraries(test_library_archive PRIVATE mc_miniz)  # reads the zip back
 kithsong_test(test_library_folder)
 kithsong_test(test_stats)
 kithsong_test(test_smart)

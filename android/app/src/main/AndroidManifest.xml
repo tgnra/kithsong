@@ -17,7 +17,8 @@
          from settings. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- SyncService runs in the foreground while a sync session or pairing is under way, and
-         ImportService while an import is (API 34+: the dataSync type). -->
+         ImportService while an import is, ArchiveService while the library is exported or
+         restored (API 34+: the dataSync type). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- CHANGE_WIFI_MULTICAST_STATE would otherwise make Play infer Wi-Fi as required and hide
          the app from devices without it. Only sync's discovery wants Wi-Fi; playback, import
@@ -76,6 +77,10 @@
         </activity>
         <service
             android:name=".importer.ImportService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".archive.ArchiveService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
         <service

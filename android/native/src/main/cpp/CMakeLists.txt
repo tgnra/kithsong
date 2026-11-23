@@ -18,6 +18,9 @@ target_sources(kithsong_jni PRIVATE jni_smart.c)
 # The core's settings.json (CoreSettings), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_settings.c)
 
+# Exporting the library as a zip and restoring one (LibraryArchive), apart from jni_bridge.c.
+target_sources(kithsong_jni PRIVATE jni_archive.c)
+
 # Deleting albums, artists and tracks (DeleteNatives), apart from jni_bridge.c.
 target_sources(kithsong_jni PRIVATE jni_delete.c)
 

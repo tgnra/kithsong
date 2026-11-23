@@ -171,6 +171,8 @@ open class Importer(
     private val context: Context,
     private val source: CoreLibrarySource,
     private val scope: CoroutineScope,
+    /** Takes a picked document as a library export to restore, if it is one and it can be. */
+    private val restore: suspend (Uri) -> Boolean = { false },
 ) {
     private val thread = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow<ImportProgress?>(null)
@@ -464,6 +466,16 @@ open class Importer(
     // --- The batches, on Dispatchers.IO ---
 
     private suspend fun run(what: ImportSource) {
+        // A library export, picked or shared alone, restores the whole library instead
+        // (LibraryArchiver), when it can: then there's no import.
+        if (what is ImportSource.Documents && what.uris.size == 1 && restore(what.uris[0])) {
+            withContext(thread) {
+                over = true
+                runnerDone = true
+                state.value = null
+            }
+            return
+        }
         val files = StagedFiles(context, root)
         try {
             val plan = when (what) {

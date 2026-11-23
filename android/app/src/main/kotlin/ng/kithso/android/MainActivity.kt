@@ -23,6 +23,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.core.content.IntentCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import ng.kithso.android.archive.RestoreDialog
 import ng.kithso.android.importer.ImportSource
 import ng.kithso.android.ui.App
 import ng.kithso.android.ui.KeyboardShortcuts
@@ -109,6 +110,7 @@ class MainActivity : ComponentActivity() {
                         onLeave = if (systemBack) null else ::leave,
                         shortcuts = shortcuts,
                     )
+                    RestoreDialog(app.archiver)
                 }
             }
         }

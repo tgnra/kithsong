@@ -549,6 +549,12 @@ class CoreSync(
         ) : Event {
             /** It moved or deleted files (mc_sync_result_changed()): the last activity is now its. */
             val changed: Boolean get() = filesReceived > 0 || filesSent > 0 || filesDeleted > 0
+
+            /**
+             * It did anything at all (mc_sync_result_did_something()): files, rows either way
+             * (another device's edits, playlists, plays) or covers.
+             */
+            val didSomething: Boolean get() = changed || rowsSent > 0 || rowsReceived > 0 || coversReceived > 0
         }
 
         /** The tracks waiting for a device, or the problems, changed: read [CoreSync.waiting] and [CoreSync.problems] again. */

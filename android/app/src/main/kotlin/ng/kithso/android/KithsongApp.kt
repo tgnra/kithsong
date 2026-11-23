@@ -12,6 +12,9 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.work.WorkManager
+import ng.kithso.android.archive.ArchiveJob
+import ng.kithso.android.archive.ArchiveService
+import ng.kithso.android.archive.LibraryArchiver
 import ng.kithso.android.data.CollectionRef
 import ng.kithso.android.data.CoreLibrarySource
 import ng.kithso.android.data.FakeLibrary
@@ -86,6 +89,10 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
     lateinit var importer: Importer
         private set
 
+    /** Exports the library as a zip, and restores one into an empty library. */
+    lateinit var archiver: LibraryArchiver
+        private set
+
     /** Syncs the core's library with this phone's group, even while the made-up one is shown. */
     lateinit var syncer: Syncer
         private set
@@ -142,7 +149,27 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
         core.onChanged = syncer::notifyChanged
         core.binOffered = syncer::binOffered
         VerifyWorker.schedule(this)
-        importer = Importer(this, core, MainScope())
+        archiver = LibraryArchiver(
+            this,
+            { libraryDir },
+            // Into the real library alone, and not in a group, whose library it would change.
+            canRestore = {
+                stressDir == null && !syncer.status.value.inGroup &&
+                    runCatching { CoreLibrary(libraryDir.path).use { it.trackCount == 0L } }.getOrDefault(false)
+            },
+            // Started again, so nothing is left holding the empty library open. Out of sight,
+            // the process just goes, and the app opens with the library next time.
+            onRestored = {
+                if (isVisible) {
+                    restart()
+                } else {
+                    ArchiveService.showOutcome(this, ArchiveJob(restoring = true, result = ArchiveJob.Result.Done))
+                    Runtime.getRuntime().exit(0)
+                }
+            },
+            MainScope(),
+        )
+        importer = Importer(this, core, MainScope(), restore = archiver::restoreIfExport)
         scrobbling = Scrobbling(libraryDir, File(noBackupFilesDir, "sync"), settings, MainScope())
         testing = Testing(this, noBackupFilesDir, settings, MainScope())
         CoreTesting.mark("app_created")

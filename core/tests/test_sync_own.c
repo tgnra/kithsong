@@ -422,7 +422,11 @@ int main(int argc, char **argv) {
   mc_sync_notify_changed(a.sync);
   CHECK(sync_with(&a, &b, &ra, &rb) == MC_OK);
   CHECK(rb.rows_received > 0);
+  CHECK(mc_sync_result_did_something(&rb) && !mc_sync_result_changed(&rb));
   CHECK(b_profile_int(&b, b.uid, "budget_enabled") == 1);
+  /* Straight after, there's nothing to do either way. */
+  CHECK(sync_with(&a, &b, &ra, &rb) == MC_OK);
+  CHECK(!mc_sync_result_did_something(&ra) && !mc_sync_result_did_something(&rb));
   {
     mc_sync_db *sdb = NULL;
     CHECK(mc_sync_db_open(b.config, &sdb) == MC_OK);

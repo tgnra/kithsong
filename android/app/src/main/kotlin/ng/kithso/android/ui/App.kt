@@ -610,9 +610,12 @@ fun App(
                     // The Sync page, with this phone's sync settings, as after pairing.
                     onChooseWhatToSync = openSync,
                 )
-                // Every page but the player, which goes over the mini player.
+                // Every page but the player, which goes over the mini player. The key outside
+                // the if, so a layer is found by its id, not its place: one removed beneath (a
+                // page still sliding out when the next was opened) doesn't make the layers above
+                // start again and slide in a second time.
                 nav.layers.forEach { layer ->
-                    if (layer.page != Page.Player) key(layer.id) {
+                    key(layer.id) { if (layer.page != Page.Player) {
                         DismissibleScreen(
                             DismissDirection.Right,
                             onLeaving = { nav = nav.leave(layer.id) },
@@ -622,7 +625,7 @@ fun App(
                         ) { dismiss ->
                             pageContent(layer.page, bottomPadding, open, dismiss)
                         }
-                    }
+                    } }
                 }
             }
             // The mini player, or on the Sync page the sync pill, at the bottom of the phone layout.
@@ -634,7 +637,7 @@ fun App(
                 // Each opening is a layer of its own, so one tapped open while the last is still
                 // sliding out doesn't take that one over.
                 nav.layers.forEach { layer ->
-                    if (layer.page == Page.Player) key(layer.id) {
+                    key(layer.id) { if (layer.page == Page.Player) {
                         // Back and dragging down are the queue's while it's open.
                         val queue = rememberQueueSlide()
                         // Opened by the tablet layout's queue button: on to the queue at once.
@@ -666,7 +669,7 @@ fun App(
                                 onMenu = trackMenu,
                             )
                         }
-                    }
+                    } }
                 }
             }
             val smart = actions.smart

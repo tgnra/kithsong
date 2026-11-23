@@ -279,7 +279,7 @@ open class Syncer(
 
     /**
      * A press of Sync now with every member found nothing to do: each member it asked answered,
-     * and none of the sessions failed or moved or deleted a file. The pill shakes.
+     * and none of the sessions failed or did anything (files, rows, covers). The pill shakes.
      */
     open val nothingToDo: SharedFlow<Unit> = nothingToDoFlow
 
@@ -952,7 +952,7 @@ open class Syncer(
                 if (event.status != CoreSync.ERR_LOCKED) busyRetried -= event.uid
                 if (event.user && event.uid in pressWaiting) {
                     pressWaiting = pressWaiting - event.uid
-                    pressDidSomething = pressDidSomething || event.status != 0 || event.changed
+                    pressDidSomething = pressDidSomething || event.status != 0 || event.didSomething
                     if (pressWaiting.isEmpty() && !pressDidSomething) nothingToDoFlow.tryEmit(Unit)
                 }
                 update {

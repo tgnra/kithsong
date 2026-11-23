@@ -47,6 +47,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
@@ -151,7 +152,11 @@ fun rememberSearchResults(source: LibrarySource, query: String): SearchResults? 
     return results.takeIf { query.isNotBlank() }
 }
 
-/** [found]'s results by kind, the kind with the best match first, or that nothing matched [query]. */
+/**
+ * [found]'s results by kind, the kind with the best match first, then how many of each there
+ * are ("8 tracks, 1 album", "20+ tracks" for a kind with more than are listed), so the end of
+ * the list shows the keyboard isn't hiding any; or that nothing matched [query].
+ */
 fun LazyListScope.searchResults(
     query: String,
     found: SearchResults?,
@@ -162,8 +167,36 @@ fun LazyListScope.searchResults(
     when {
         found == null || query.isBlank() -> Unit
         found.isEmpty -> item(key = "none") { NoResults(query) }
-        else -> for (kind in found.order) results(kind, found, onOpen, onPlayTrack, onTrackMenu)
+        else -> {
+            for (kind in found.order) results(kind, found, onOpen, onPlayTrack, onTrackMenu)
+            item(key = "totals", contentType = "totals") { Totals(found) }
+        }
     }
+}
+
+@Composable
+private fun Totals(found: SearchResults) {
+    val res = LocalResources.current
+    val text = found.order.joinToString(stringResource(R.string.import_list_separator)) { kind ->
+        val more = kind in found.more
+        val (plural, count) = when (kind) {
+            SearchResults.Kind.Artists -> (if (more) R.plurals.search_more_artists else R.plurals.count_artists) to found.artists.size
+            SearchResults.Kind.Albums -> (if (more) R.plurals.search_more_albums else R.plurals.count_albums) to found.albums.size
+            SearchResults.Kind.Tracks -> (if (more) R.plurals.search_more_tracks else R.plurals.tracks) to found.tracks.size
+            SearchResults.Kind.Playlists ->
+                (if (more) R.plurals.search_more_playlists else R.plurals.count_playlists) to found.playlists.size
+            SearchResults.Kind.AlbumGroups ->
+                (if (more) R.plurals.search_more_album_groups else R.plurals.count_album_groups) to found.albumGroups.size
+        }
+        res.getQuantityString(plural, count, count)
+    }
+    Text(
+        text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 24.dp),
+    )
 }
 
 private const val SEARCH_DELAY_MS = 150L

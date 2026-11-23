@@ -791,7 +791,8 @@ class CoreLibrarySource(
     override suspend fun search(query: String): SearchResults = withContext(core) {
         val lib = open()
         val hits = try {
-            lib?.search(query, SEARCH_LIMIT).orEmpty()
+            // One more than is shown, to tell whether there are more.
+            lib?.search(query, SEARCH_LIMIT + 1).orEmpty()
         } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't search for \"$query\"", e)
             emptyList()
@@ -846,7 +847,17 @@ class CoreLibrarySource(
             } ?: continue
             if (kind !in order) order += kind
         }
-        SearchResults(order, artists, albums, tracks, playlists, albumGroups)
+        val more = buildSet {
+            if (artists.size > SEARCH_LIMIT) add(SearchResults.Kind.Artists)
+            if (albums.size > SEARCH_LIMIT) add(SearchResults.Kind.Albums)
+            if (tracks.size > SEARCH_LIMIT) add(SearchResults.Kind.Tracks)
+            if (playlists.size > SEARCH_LIMIT) add(SearchResults.Kind.Playlists)
+            if (albumGroups.size > SEARCH_LIMIT) add(SearchResults.Kind.AlbumGroups)
+        }
+        SearchResults(
+            order, artists.take(SEARCH_LIMIT), albums.take(SEARCH_LIMIT), tracks.take(SEARCH_LIMIT),
+            playlists.take(SEARCH_LIMIT), albumGroups.take(SEARCH_LIMIT), more,
+        )
     }
 
     override suspend fun trackArtists(trackUid: String): List<Artist> = withContext(core) {

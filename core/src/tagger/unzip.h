@@ -53,7 +53,8 @@ int mc_unzip_is_zip(const char *path);
  * stops there. With a budget, nothing is written either if the zip would take the session past
  * budget->max (MC_UNZIP_SESSION_FULL), or if the free space wouldn't also cover what earlier
  * zips extracted (budget->used): those files are still to be copied into the library.
- * cancel, if set, is polled while extracting. On failure what was written stays in dest for
+ * cancel, if set, is polled while extracting, and stats->bytes counts up meanwhile, for showing
+ * how far it has got. On failure what was written stays in dest for
  * the caller to remove. */
 mc_unzip_result mc_unzip(const char *zip_path, const char *dest, int64_t max_bytes,
                          mc_unzip_budget *budget, int (*cancel)(void *user), void *user,

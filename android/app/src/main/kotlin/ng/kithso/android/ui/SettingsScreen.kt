@@ -66,6 +66,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import ng.kithso.android.AppSettings
 import ng.kithso.android.KithsongApp
+import ng.kithso.android.archive.ExportLibraryRow
 import ng.kithso.core.NativeCore
 import ng.kithso.android.R
 import coil3.SingletonImageLoader
@@ -171,6 +172,7 @@ fun SettingsScreen(
                         )
                     },
                 )
+                ExportLibraryRow((context.applicationContext as KithsongApp).archiver)
                 // What was deleted here since the last sync, which can still be restored.
                 if (binCount != null) ListItem(
                     leadingContent = { Icon(Icons.Delete, contentDescription = null) },

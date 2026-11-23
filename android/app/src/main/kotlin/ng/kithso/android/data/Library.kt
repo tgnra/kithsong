@@ -182,7 +182,8 @@ data class FoundTrack(
 
 /**
  * What a search found on this phone, each kind best first. [order] is the kinds by their best
- * result, the order to show their sections in.
+ * result, the order to show their sections in. [more] is the kinds that have more results than
+ * these, which are only the best few.
  */
 @Immutable
 data class SearchResults(
@@ -192,6 +193,7 @@ data class SearchResults(
     val tracks: List<FoundTrack> = emptyList(),
     val playlists: List<Playlist> = emptyList(),
     val albumGroups: List<AlbumGroup> = emptyList(),
+    val more: Set<Kind> = emptySet(),
 ) {
     enum class Kind { Artists, Albums, Tracks, Playlists, AlbumGroups }
 

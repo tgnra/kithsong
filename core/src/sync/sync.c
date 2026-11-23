@@ -817,6 +817,10 @@ int mc_sync_result_changed(const mc_sync_result *r) {
   return r && (r->files_received > 0 || r->files_sent > 0 || r->files_deleted > 0);
 }
 
+int mc_sync_result_did_something(const mc_sync_result *r) {
+  return r && (mc_sync_result_changed(r) || r->rows_sent > 0 || r->rows_received > 0 || r->covers_received > 0);
+}
+
 static void note_activity(mc_sync_conn *c, const mc_sync_result *r) {
   sqlite3_stmt *stmt;
   if (!c->sdb || !mc_sync_result_changed(r)) return;

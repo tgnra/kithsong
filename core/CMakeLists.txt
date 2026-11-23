@@ -70,6 +70,7 @@ add_library(kithcore STATIC
   "${_strings_out}/mc_strings_gen.c"
   src/library/library.c
   src/library/library_move.c
+  src/library/library_archive.c
   src/library/folder_gate.c
   src/library/delete.c
   src/library/edit.c
