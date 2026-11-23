@@ -2,7 +2,7 @@
  * (sidebar.c) picks the page beside it: Home (home_view.c), Search (search_view.c), the album
  * grid (album_grid.c, which also shows playlists and album groups) with the track list
  * (track_list.c), Artists (artist_view.c), Import (import_view.c), Settings (settings_view.c)
- * and a device's page (device_view.c). Once an import starts the other pages are greyed out
+ * and Sync (device_view.c). Once an import starts the other pages are greyed out
  * until Done. Keyboard shortcuts (shortcut(), listed in README.md) work anywhere but leave text
  * boxes their own keys.
  *
@@ -14,8 +14,9 @@
  * give, so it goes through canvas.c.
  *
  * Sync (sync_bridge.c) runs while a library is open and stops before it closes; its events
- * arrive as WM_APP_SYNC. The DEVICES list refreshes shortly after sync events and every 10
- * seconds, as a rename elsewhere fires no event.
+ * arrive as WM_APP_SYNC. What shows the devices (the Sync page, the Sync row's warning)
+ * refreshes shortly after sync events and every 10 seconds, as a rename elsewhere fires no
+ * event.
  *
  * Command line: kithsong.exe [--config-dir <dir> | --config-dir=<dir>] [--demo-library]
  * [--window-size WxH] [--page <page>] [--demo-playing <spec>] [--] [paths...]
@@ -134,7 +135,6 @@ enum {
   SEEK_STEP_MS = 5000,
   REFRESH_LIBRARY_MS = 500,
   POLL_DEVICES_MS = 10000,
-  MAX_SYNCING = 16, /* devices marked as syncing in the sidebar at once */
   MAX_ADDRESSES = 8,
   MAX_RECENTS = 3, /* in the sidebar */
 };
@@ -171,7 +171,6 @@ typedef struct app {
   BOOL library_pending;    /* TIMER_REFRESH_LIBRARY is set */
   BOOL volume_pending;     /* TIMER_SAVE_VOLUME is set */
   BOOL locked;             /* an import session has the other pages greyed out */
-  char syncing[MAX_SYNCING][MC_UID_STRLEN]; /* devices with a session in progress */
 } app;
 
 static app g_app;
@@ -179,7 +178,8 @@ static app g_app;
 static BOOL change_library(BOOL new_empty);
 static void move_library(void);
 static void schedule_refresh(void);
-static void rename_self(const char *name);
+static void pair_nearby_uid(const char *clicked);
+static void show_add_device(void);
 static void import_forwarded(wchar_t *list);
 static BOOL open_start_page(const char *page);
 
@@ -453,23 +453,22 @@ static void perf_view_shown(void) {
   mc_perf_view_end();
 }
 
-static void open_device_page(void) {
-  device_view_open(sync_bridge_get(), g_app.lib, sidebar_selected_device());
+static void open_sync_page(void) {
+  device_view_open(sync_bridge_get(), g_app.lib);
 }
 
-/* For PAGE_DEVICE, the device selected in the sidebar (sidebar_select_device()) is shown. */
 static void show_page(sidebar_page page) {
   mc_perf_view_begin(page_name(page));
   g_app.page = page;
-  if (page != PAGE_DEVICE) sidebar_select(page);
+  sidebar_select(page);
   if (library_page())
     album_grid_show(page == PAGE_PLAYLISTS ? AGV_PLAYLISTS : page == PAGE_ALBUM_GROUPS ? AGV_GROUPS : AGV_ALBUMS);
   if (library_page() || page == PAGE_ARTISTS) show_album(); /* the track list is the page's */
-  if (page == PAGE_DEVICE) open_device_page();
+  if (page == PAGE_SYNC) open_sync_page();
   if (page == PAGE_HOME) home_view_refresh(); /* plays since it last showed */
   import_view_show(page == PAGE_IMPORT);
   settings_view_show(page == PAGE_SETTINGS);
-  device_view_show(page == PAGE_DEVICE);
+  device_view_show(page == PAGE_SYNC);
   layout();
   perf_view_shown();
 }
@@ -824,7 +823,7 @@ static void create_controls(void) {
   settings_view_init_sync(g_app.settings, schedule_refresh);
   static const testing_host testing = {open_stress, back_to_library, scroll_test_start, current_library};
   testing_view_init(g_app.settings, g_app.config_dir, &testing);
-  static const device_view_host host = {rename_self, schedule_refresh, refresh_library};
+  static const device_view_host host = {schedule_refresh, refresh_library, pair_nearby_uid, show_add_device};
   device_view_create(g_app.wnd, &host);
 }
 
@@ -1274,29 +1273,6 @@ static void about_details(wchar_t *out, size_t cap) {
   }
 }
 
-/* Whether a sync session with uid is in progress, as far as the events have said. */
-static int syncing_slot(const char *uid) {
-  for (int i = 0; i < MAX_SYNCING; i++)
-    if (g_app.syncing[i][0] && !strcmp(g_app.syncing[i], uid)) return i;
-  return -1;
-}
-
-/* Marks uid as syncing or not; TRUE if that changed. */
-static BOOL set_syncing(const char *uid, BOOL syncing) {
-  int i = syncing_slot(uid);
-  if (!syncing) {
-    if (i >= 0) g_app.syncing[i][0] = '\0';
-    return i >= 0;
-  }
-  if (i >= 0 || !uid[0]) return FALSE;
-  for (i = 0; i < MAX_SYNCING; i++)
-    if (!g_app.syncing[i][0]) {
-      snprintf(g_app.syncing[i], MC_UID_STRLEN, "%s", uid);
-      return TRUE;
-    }
-  return FALSE; /* too many at once: just not marked */
-}
-
 /* A group may rename this PC from another device, and this PC takes the name on; settings.json
  * keeps it for next time. A PC with no saved name goes by its host name, which isn't saved. */
 static void save_own_name(mc_sync *sync) {
@@ -1316,83 +1292,37 @@ static void save_own_name(mc_sync *sync) {
   mc_settings_save(g_app.settings); /* failing, it's saved on the next refresh */
 }
 
-/* Which device to update, when name's version can't sync with this one's; NULL when it can.
- * free() it. */
-static wchar_t *version_warning(const mc_sync_version *version, const char *name) {
-  if (version->outdated == MC_SYNC_VERSION_OK) return NULL;
-  char text[512];
-  mc_sync_version_text(name, version, text, sizeof text);
-  return wstr_dup_from_utf8(text);
-}
-
-/* What's wrong with a member, for its row's warning glyph; NULL for nothing. free() it. */
+/* What's wrong with a member, for the Sync row's warning glyph; NULL for nothing. free() it. */
 static wchar_t *device_warning(mc_sync *sync, const mc_sync_device *d) {
   char text[1024];
   if (!mc_sync_device_warning(sync, d, 0, text, sizeof text)) return NULL;
   return wstr_dup_from_utf8(text);
 }
 
-/* Rebuilds the sidebar's devices from sync, and everything that shows them. */
+/* The devices have changed, or may have: everything that shows them catches up. */
 static void refresh_devices(void) {
   KillTimer(g_app.wnd, TIMER_REFRESH_DEVICES);
   g_app.refresh_pending = FALSE;
 
   mc_sync *sync = sync_bridge_get();
-  mc_sync_device_list *paired = NULL;
-  mc_sync_nearby_list *nearby = NULL;
-  if (sync && mc_sync_list_devices(sync, &paired) != MC_OK) paired = NULL;
-  if (sync && mc_sync_list_nearby(sync, &nearby) != MC_OK) nearby = NULL;
-  int np = paired ? paired->count : 0, nn = nearby ? nearby->count : 0;
-  sidebar_device *devs = np + nn ? calloc((size_t)(np + nn), sizeof *devs) : NULL;
-  wchar_t **names = np + nn ? calloc((size_t)(np + nn), sizeof *names) : NULL;
-  wchar_t **warnings = np + nn ? calloc((size_t)(np + nn), sizeof *warnings) : NULL;
-  int npaired = 0, nnearby = 0;
-  if (devs && names && warnings) {
-    /* This PC first, then the online devices, then the offline ones, each in the order
-     * listed (by name); removed ones left out. */
-    for (int pass = 0; pass < 3; pass++)
-      for (int i = 0; i < np; i++) {
-        const mc_sync_device *d = &paired->items[i];
-        int in_pass = d->is_self ? 0 : d->online ? 1 : 2;
-        if (d->removed || in_pass != pass) continue;
-        sidebar_device *s = &devs[npaired];
-        snprintf(s->uid, sizeof s->uid, "%s", d->uid);
-        s->name = names[npaired] = wstr_dup_from_utf8(d->name ? d->name : "");
-        s->warning = warnings[npaired] = device_warning(sync, d); /* its version's first */
-        s->kind = (int)d->kind;
-        s->flags = (d->is_self ? SB_DEV_SELF : 0) | (d->online || d->is_self ? SB_DEV_ONLINE : 0) |
-                   (d->archive ? SB_DEV_ARCHIVE : 0) | (syncing_slot(d->uid) >= 0 ? SB_DEV_SYNCING : 0);
-        npaired++;
-      }
-    for (int i = 0; i < nn; i++) {
-      const mc_sync_nearby *d = &nearby->items[i];
-      sidebar_device *s = &devs[npaired + nnearby];
-      snprintf(s->uid, sizeof s->uid, "%s", d->uid);
-      s->name = names[npaired + nnearby] = wstr_dup_from_utf8(d->name ? d->name : "");
-      s->warning = warnings[npaired + nnearby] = version_warning(&d->version, d->name);
-      s->kind = (int)d->kind;
-      s->flags = SB_DEV_ONLINE | (d->in_other_group ? SB_DEV_OTHER_GROUP : 0);
-      nnearby++;
-    }
-  }
-  sidebar_set_devices(devs, npaired, devs ? devs + npaired : NULL, nnearby);
+  mc_sync_device_list *list = NULL;
+  if (sync && mc_sync_list_devices(sync, &list) != MC_OK) list = NULL;
   /* For the empty pages: pairing while this PC isn't in a group, the sync profile once it is. */
   int members = 0;
-  for (int i = 0; i < np; i++) members += !paired->items[i].removed;
+  for (int i = 0; list && i < list->count; i++) members += !list->items[i].removed;
   album_grid_set_sync_state(!sync ? AG_SYNC_OFF : members ? AG_SYNC_GROUPED : AG_SYNC_ALONE);
-  for (int i = 0; names && i < npaired + nnearby; i++) free(names[i]);
-  for (int i = 0; warnings && i < npaired + nnearby; i++) free(warnings[i]);
-  free(names);
-  free(warnings);
-  free(devs);
-  mc_sync_device_list_free(paired);
-  mc_sync_nearby_list_free(nearby);
+  /* The Sync row's warning: this PC's, else the first other member's. */
+  wchar_t *warning = NULL;
+  for (int self = 1; list && self >= 0 && !warning; self--)
+    for (int i = 0; i < list->count && !warning; i++) {
+      const mc_sync_device *d = &list->items[i];
+      if (!d->removed && (d->is_self != 0) == self) warning = device_warning(sync, d);
+    }
+  sidebar_set_sync_warning(warning);
+  free(warning);
+  mc_sync_device_list_free(list);
 
-  /* The shown device may have left the group (the sidebar then selects Albums). */
-  if (g_app.page == PAGE_DEVICE) {
-    if (sidebar_selection() != PAGE_DEVICE) show_page(PAGE_ALBUMS);
-    else device_view_refresh();
-  }
+  if (g_app.page == PAGE_SYNC) device_view_refresh();
   if (sync) save_own_name(sync);
   settings_view_update_sync();
 }
@@ -1410,14 +1340,6 @@ static void schedule_library_refresh(void) {
   if (g_app.library_pending) return;
   g_app.library_pending = TRUE;
   SetTimer(g_app.wnd, TIMER_REFRESH_LIBRARY, REFRESH_LIBRARY_MS, NULL);
-}
-
-/* This PC renamed on its own device page: sync has the name; settings.json keeps it. */
-static void rename_self(const char *name) {
-  mc_settings_set_device_name(g_app.settings, name);
-  if (mc_settings_save(g_app.settings) != MC_OK)
-    message_dialog(g_app.wnd, mc_wstr(MC_STR_SETTINGS), mc_wstr(MC_STR_NAME_SAVE_FAILED), MB_ICONWARNING);
-  schedule_refresh();
 }
 
 /* Deleted tracks whose files are back from the Recycle Bin come back into the library
@@ -1480,12 +1402,10 @@ static void library_opened(void) {
 static void start_sync(void) {
   restore_deleted(); /* the library just opened */
   library_opened();
-  memset(g_app.syncing, 0, sizeof g_app.syncing);
   sync_bridge_start(g_app.wnd, g_app.lib, g_app.config_dir, mc_settings_device_name(g_app.settings));
   playback_set_library(g_app.lib, g_app.config_dir);
-  /* After a library switch on a device's page, it shows again on the new sync (or Albums, if
-   * the refresh finds the device gone). */
-  if (g_app.page == PAGE_DEVICE) open_device_page();
+  /* After a library switch on the Sync page, it shows again on the new sync. */
+  if (g_app.page == PAGE_SYNC) open_sync_page();
   refresh_devices();
   if (waiting_banner_update(sync_bridge_get())) layout(); /* nothing yet: it comes with SYNC_EV_WAITING */
 }
@@ -1493,7 +1413,7 @@ static void start_sync(void) {
 /* Before the library closes: sync reads it. Pairing dialogs go first, as they use sync. */
 static void stop_sync(void) {
   pair_dialog_close_all();
-  device_view_open(NULL, NULL, NULL);
+  device_view_open(NULL, NULL);
   sync_bridge_stop();
   playback_set_library(NULL, NULL);
   if (waiting_banner_update(NULL)) layout();
@@ -1507,10 +1427,8 @@ static void on_sync_event(WPARAM wp, LPARAM lp) {
     case SYNC_EV_PEER:
     case SYNC_EV_VERSION:
       schedule_refresh();
-      device_view_on_sync_event(ev);
       break;
     case SYNC_EV_DONE:
-      set_syncing(ev->uid, FALSE);
       schedule_refresh();
       /* Reconcile may have removed files after the last progress. */
       if (ev->library_synced) schedule_library_refresh();
@@ -1524,11 +1442,10 @@ static void on_sync_event(WPARAM wp, LPARAM lp) {
       if (pair_dialog_on_result(ev)) refresh_devices();
       break;
     case SYNC_EV_PROGRESS:
-      if (set_syncing(ev->uid, ev->phase != MC_SYNC_PHASE_DONE)) schedule_refresh();
       if (ev->library_changed) schedule_library_refresh();
       device_view_on_sync_event(ev);
       break;
-    case SYNC_EV_WAITING: /* and the problems: rows' warnings and the device's page too */
+    case SYNC_EV_WAITING: /* and the problems: the devices' warnings and the Sync page's too */
       if (waiting_banner_update(sync)) layout();
       schedule_refresh();
       device_view_issues_changed();
@@ -1588,7 +1505,7 @@ static void pair_started(mc_status st, const wchar_t *name, const wchar_t *addre
   message_dialog(g_app.wnd, mc_wstr(MC_STR_PAIR_DEVICE), text, MB_ICONINFORMATION);
 }
 
-/* Asks nearby device clicked, in the sidebar, to pair. Even one in another group: pairing
+/* Asks nearby device clicked, on the Sync page, to pair. Even one in another group: pairing
  * then says why it can't. */
 static void pair_nearby_uid(const char *clicked) {
   mc_sync *sync = sync_bridge_get();
@@ -1598,7 +1515,7 @@ static void pair_nearby_uid(const char *clicked) {
     return;
   }
   char uid[MC_UID_STRLEN];
-  snprintf(uid, sizeof uid, "%s", clicked); /* the sidebar's copy goes when it refreshes */
+  snprintf(uid, sizeof uid, "%s", clicked); /* the page's copy goes when it refreshes */
   wchar_t *name = NULL;
   mc_sync_nearby_list *nearby = NULL;
   if (mc_sync_list_nearby(sync, &nearby) == MC_OK) {
@@ -1645,27 +1562,28 @@ static void debug_pair(void) {
 }
 #endif
 
-/* The empty Albums and Playlists pages' Choose What to Sync: this PC's own page, whose
- * What to Sync picks what it holds. */
+/* Add device by address, on the Sync page. */
+static void show_add_device(void) {
+  add_device_show(g_app.wnd, on_add_device_connect, NULL);
+}
+
+/* The empty Albums and Playlists pages' Choose What to Sync: the Sync page, whose What to
+ * Sync picks what this PC holds. */
 static void show_own_page(void) {
-  mc_sync *sync = sync_bridge_get();
-  if (!sync) return;
-  sidebar_select_device(mc_sync_device_uid(sync));
-  if (!sidebar_selected_device()) return;
-  show_page(PAGE_DEVICE);
+  if (!sync_bridge_get()) return;
+  show_page(PAGE_SYNC);
   device_view_focus_what_to_sync();
 }
 
 
 /* --- The pairing dialogs' side --- */
 
-/* Choose What to Sync: the device's page (this PC's own, when it joined). */
+/* Choose What to Sync, once this PC joined: uid is its own, whose profile the Sync page
+ * edits. */
 static void pair_show_device(const char *uid) {
+  (void)uid;
   refresh_devices();
-  sidebar_select_device(uid);
-  if (!sidebar_selected_device()) return;
-  show_page(PAGE_DEVICE);
-  device_view_focus_what_to_sync();
+  show_own_page();
 }
 
 /* Create a New Library, from a pairing refused because this PC has music of its own. */
@@ -1717,9 +1635,8 @@ static void on_command(int id, int code) {
         else if (g_app.page == PAGE_ARTISTS) SetFocus(g_app.artists);
         else if (g_app.page == PAGE_SETTINGS) settings_view_focus();
         else if (g_app.page == PAGE_HOME) SetFocus(g_app.home);
-      } else if (code == SBN_ADD_DEVICE) add_device_show(g_app.wnd, on_add_device_connect, NULL);
-      else if (code == SBN_PAIR_DEVICE) pair_nearby_uid(sidebar_clicked_nearby());
-      else if (code == SBN_OPEN_RECENT) open_recent();
+        else if (g_app.page == PAGE_SYNC) device_view_focus();
+      } else if (code == SBN_OPEN_RECENT) open_recent();
       else if (code == SBN_ABOUT) show_about();
       else if (code == SBN_STATS && g_app.lib) stats_dialog_show(g_app.wnd, g_app.lib);
       else if (code == SBN_REMOVE_RECENT) remove_recents(sidebar_clicked_recent(NULL), FALSE);
@@ -2237,13 +2154,11 @@ static BOOL open_start_page(const char *page) {
     /* Modal, so not from this timer, which would fire again inside it. */
     SetTimer(g_app.wnd, TIMER_DEMO_REVIEW, 500, NULL);
   } else if (!strcmp(page, "sync")) {
-    /* The demo group's phone (use_demo_library made the group), once sync is up. */
+    /* The demo group (use_demo_library made it), once sync is up. */
     mc_sync *sync = sync_bridge_get();
     if (!sync) return FALSE;
     refresh_devices();
-    sidebar_select_device(MC_DEMO_PHONE_UID);
-    if (!sidebar_selected_device()) return FALSE;
-    show_page(PAGE_DEVICE);
+    show_page(PAGE_SYNC);
     mc_demo_sync_show(sync);
   } else if (!strcmp(page, "home")) show_page(PAGE_HOME);
   else if (!strcmp(page, "albums")) show_page(PAGE_ALBUMS);
@@ -3042,7 +2957,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
 
   MSG msg;
   while (GetMessageW(&msg, NULL, 0, 0) > 0) {
-    if (pair_dialog_translate(&msg) || settings_view_translate(&msg)) continue;
+    if (pair_dialog_translate(&msg) || settings_view_translate(&msg) || device_view_translate(&msg)) continue;
     if (space_play_pause(&msg) || shortcut(&msg)) continue;
     TranslateMessage(&msg);
     DispatchMessageW(&msg);

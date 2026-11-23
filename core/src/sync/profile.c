@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "kithcore/i18n.h"
 #include "library/library_internal.h"
 #include "sync/archive.h"
 #include "sync/merge.h"
@@ -1213,4 +1214,40 @@ mc_status mc_sync_estimate_profile(mc_sync *sync, const char *device_uid,
   for (int i = 0; i < MC_SYNC_ESTIMATE_STEPS; i++) out->step_bytes[i] = plan->step_bytes[i];
   mc_plan_free(plan);
   return MC_OK;
+}
+
+/* --- Summary --- */
+
+size_t mc_sync_profile_summary(const mc_sync_profile *p, char *buf, size_t size) {
+  if (buf && size) buf[0] = '\0';
+  if (!p) return 0;
+  if (p->archive) return mc_format(buf, size, "{0}", MC_S(mc_str(MC_STR_PROFILE_SUMMARY_ARCHIVE)));
+  int lower = p->budget_enabled || p->format.format != MC_FORMAT_ORIGINAL;
+  if (p->sync_all)
+    return mc_format(buf, size, "{0}",
+                     MC_S(mc_str(lower ? MC_STR_PROFILE_SUMMARY_ALL_LOWER : MC_STR_PROFILE_SUMMARY_ALL)));
+  static const enum mc_str_id counts[] = {MC_STR_COUNT_ALBUMS, MC_STR_COUNT_ARTISTS,
+                                          MC_STR_COUNT_PLAYLISTS, MC_STR_COUNT_ALBUM_GROUPS};
+  int n[4] = {0};
+  for (int i = 0; i < p->count; i++)
+    if ((unsigned)p->items[i].kind < 4) n[p->items[i].kind]++;
+  /* "3 albums, 1 artist and 2 playlists": the separator between all but the last two. */
+  char list[256] = "", part[64];
+  int parts = 0, left = (n[0] > 0) + (n[1] > 0) + (n[2] > 0) + (n[3] > 0);
+  for (int k = 0; k < 4; k++) {
+    if (!n[k]) continue;
+    mc_format(part, sizeof part, mc_str_plural(counts[k], n[k]), MC_D(n[k]));
+    char was[256];
+    snprintf(was, sizeof was, "%s", list);
+    if (!parts)
+      snprintf(list, sizeof list, "%s", part);
+    else if (parts == left - 1)
+      mc_format(list, sizeof list, mc_str(MC_STR_PROFILE_SUMMARY_AND), MC_S(was), MC_S(part));
+    else
+      mc_format(list, sizeof list, "{0}{1}{2}", MC_S(was), MC_S(mc_str(MC_STR_IMPORT_LIST_SEPARATOR)), MC_S(part));
+    parts++;
+  }
+  if (!parts) return mc_format(buf, size, "{0}", MC_S(mc_str(MC_STR_PROFILE_SUMMARY_NONE)));
+  if (lower) return mc_format(buf, size, mc_str(MC_STR_PROFILE_SUMMARY_LOWER), MC_S(list));
+  return mc_format(buf, size, "{0}", MC_S(list));
 }

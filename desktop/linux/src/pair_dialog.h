@@ -11,7 +11,7 @@
 
 /* What the dialogs need of the app. Every member runs on the main thread. */
 typedef struct pair_dialog_host {
-  /* Shows a device's page (this computer's own uid for its own). */
+  /* Shows the Sync page for the device that joined (this computer's own uid for itself). */
   void (*show_device)(const char *uid);
   /* Create a New Library: asks over parent for an empty folder and switches this computer to
    * a new library there, as Settings' Open Another Library does (sync restarts, which closes

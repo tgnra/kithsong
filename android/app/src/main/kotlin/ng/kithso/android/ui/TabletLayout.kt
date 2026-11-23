@@ -144,10 +144,10 @@ internal val NoInsets = WindowInsets(0, 0, 0, 0)
 
 /**
  * The pages the sidebar opens, which the tablet layout shows in the content area with nothing
- * beneath; the rail layout's, and a device's page from the tablet layout, likewise.
+ * beneath; the rail layout's likewise.
  */
 internal fun Page.isSidebarPage(): Boolean =
-    this == Page.Search || this == Page.Settings || this == Page.Stats || this == Page.Sync || this is Page.Device
+    this == Page.Search || this == Page.Settings || this == Page.Stats || this == Page.Sync
 
 /** The library page that lists what [kind] is, for opening a recent there. */
 internal fun sectionOf(kind: CollectionRef.Kind): TabletSection? = when (kind) {
@@ -274,7 +274,6 @@ internal fun TabletLayout(
                             onOpen(recent.ref)
                         },
                         onRecentMenu = actions::recentMenu,
-                        onDevice = { uid -> updateNav { clear(it).push(Page.Device(uid)) } },
                         modifier = Modifier
                             .width(fit.width + with(density) { startPx.toDp() })
                             .coveredIf(covered)

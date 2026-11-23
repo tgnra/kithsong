@@ -75,12 +75,10 @@ sealed interface Page {
     /** Over Settings or Sync, either of which opens it. */
     data object RecycleBin : Page
 
-    /** A device's page, over Sync: a member's uid, or THIS_DEVICE. */
-    data class Device(val uid: String) : Page
     data object Search : Page
     data object Stats : Page
 
-    /** The phone's Customise page, from its main menu. */
+    /** The phone's Customise page, from the top of Settings. */
     data object Customise : Page
 
     /** A track list, over the main list or the search it was found in. */
@@ -99,7 +97,6 @@ sealed interface Page {
             is License -> "license:${page.asset}"
             Sync -> "sync"
             RecycleBin -> "bin"
-            is Device -> "device:${page.uid}"
             Search -> "search"
             Stats -> "stats"
             Customise -> "customise"
@@ -118,7 +115,6 @@ sealed interface Page {
                 "license" -> License(rest)
                 "sync" -> Sync
                 "bin" -> RecycleBin
-                "device" -> Device(rest)
                 "search" -> Search
                 "stats" -> Stats
                 "customise" -> Customise

@@ -17,30 +17,24 @@
 typedef enum {
   ROW_NAV,
   ROW_HEADER,
-  ROW_RECENT,    /* a recent: a button that opens it */
-  ROW_DEVICE,    /* a paired device: a page, online or not */
-  ROW_ACCORDION, /* "Unpaired devices (n)": shows or hides the nearby rows */
-  ROW_NEARBY,    /* a nearby device: a button that asks to pair */
-  ROW_NOTE,
+  ROW_RECENT,  /* a recent: a button that opens it */
   ROW_ABOUT,   /* a button that opens the About box */
   ROW_STATS,   /* a button that opens the library stats dialog */
   ROW_DIVIDER, /* a line between Home and Search and the library's pages */
 } row_kind;
 
-/* The rows are rebuilt from the fixed ones, the recents and the devices whenever any of them
- * change (rebuild), and laid out by layout(): the scrolling rows from the top of the
- * content, the pinned ones (Import, Library stats, Settings, About) up from the bottom of the
- * window. Rows are referred to by their index in s.rows. */
+/* The rows are rebuilt from the fixed ones and the recents whenever they change (rebuild),
+ * and laid out by layout(): the scrolling rows from the top of the content, the pinned ones
+ * (Sync, Import, Library stats, Settings, About) up from the bottom of the window. Rows are
+ * referred to by their index in s.rows. */
 typedef struct sb_row {
   row_kind kind;
   wchar_t *text;
-  wchar_t *tip; /* recent rows: the full name and the detail */
+  wchar_t *tip; /* recent rows: the full name and the detail; Sync: its warning */
   wchar_t icon; /* Segoe Fluent Icons */
-  sidebar_page page; /* navigation and device rows */
-  char uid[MC_UID_STRLEN]; /* recent, device and nearby rows */
-  unsigned flags;    /* device and nearby rows: SB_DEV_*; recent rows: the mc_recent_kind */
-  int indent;        /* at 96 DPI */
-  BOOL add;          /* a heading with a + at its end */
+  sidebar_page page; /* navigation rows */
+  char uid[MC_UID_STRLEN]; /* recent rows */
+  unsigned flags;    /* recent rows: the mc_recent_kind */
   BOOL pinned;       /* at the bottom, out of the scrolling */
   int top, height;   /* pixels: in the content if it scrolls, else in the client area */
   BOOL smart;        /* recent rows: a smart playlist or group, which takes no drops */
@@ -59,6 +53,7 @@ static const struct {
   {MC_STR_SECTION_PLAYLISTS, 0xE90B, PAGE_PLAYLISTS},
   {MC_STR_SECTION_ALBUM_GROUPS, 0xE8F1, PAGE_ALBUM_GROUPS}, /* Library, as its recents */
 }, nav_bottom[] = {
+  {MC_STR_SYNC, 0xE895, PAGE_SYNC},
   {MC_STR_IMPORT_MUSIC, 0xE8B5, PAGE_IMPORT},
   {MC_STR_SETTINGS, 0xE713, PAGE_SETTINGS},
 };
@@ -67,30 +62,19 @@ static const struct {
 enum {
   NAV_H = 36,
   HEADER_H = 40, /* includes the gap above the section */
-  NOTE_H = 32,
+  HEADER_TEXT_H = 28, /* the heading's text, at the bottom of its row */
+  HEADER_BOTTOM = 2,
   DIVIDER_H = 7,
   BOTTOM = 6, /* below the last row, of the scrolling ones and of the pinned ones */
   INSET = 6,  /* between the sidebar's edges and the selection fill */
   TEXT_X = 18,
   ICON_W = 28, /* icon plus the gap after it */
-  NEARBY_INDENT = 12,
   RADIUS = 6,
-  ADD_W = 28, /* the + on the DEVICES heading: a square this wide, ending INSET from the edge */
-  ADD_BOTTOM = 2,
   TIP_W = 400, /* tooltips wrap at this width */
 };
 
-/* Tooltip ids: the +'s, then one per row that has a tip (TIP_ROWS + k). */
-enum { TIP_ADD = 1, TIP_ROWS };
-
-/* A device as sidebar_set_devices gave it. */
-typedef struct device {
-  char uid[37];
-  wchar_t *name;
-  int kind;
-  unsigned flags;
-  wchar_t *warning;
-} device;
+/* Tooltip ids: one per row that has a tip (TIP_ROWS + k). */
+enum { TIP_ROWS = 1 };
 
 /* A recent as sidebar_set_recents gave it. */
 typedef struct recent {
@@ -105,7 +89,7 @@ static struct {
   UINT dpi;
   HFONT font, header_font, icon_font, small_icon_font;
   canvas buf;
-  scroller scroll; /* the rows above Import */
+  scroller scroll; /* the rows above Sync */
   int pinned_top;  /* where the pinned rows start, in the client area */
   int sel;     /* the selected page's row, or -1 */
   int focus;   /* the row with the keyboard focus (a page or a button), or -1 */
@@ -114,28 +98,23 @@ static struct {
   int drop;    /* the recent a dragged track or album would be added to, or -1 */
   BOOL locked, tracking;
   HWND tooltip;
-  BOOL add_hot, add_pressed; /* the mouse is over the +, or went down on it */
 
   sb_row *rows;
   int nrows, cap;
   recent *recents;
   int nrecents;
-  device *paired, *nearby;
-  int npaired, nnearby;
-  BOOL expanded, expanded_set; /* the accordion; expanded_set once the user toggles it */
+  wchar_t *sync_warning; /* sidebar_set_sync_warning()'s, or NULL */
   int ntips; /* row tooltips, TIP_ROWS onwards */
-  char clicked[37]; /* the nearby device of the last SBN_PAIR_DEVICE, or "" */
   char clicked_recent[MC_UID_STRLEN]; /* the recent of the last SBN_OPEN_RECENT, or "" */
   mc_recent_kind clicked_kind;
 } s;
 
 /* Outside s, which is cleared when the window goes: elements clients still hold use it. */
 static uia_host ui;
-static int ui_node_of(int row, BOOL add);
+static int ui_node_of(int row);
 
 static void set_hot(int i);
 static void update_tooltip(void);
-static void free_devices(struct device *d, int n);
 static void free_recents(void);
 
 static int scale(int px) {
@@ -153,13 +132,13 @@ static wchar_t *wcs_dup(const wchar_t *a, const wchar_t *b) {
 }
 
 static const sb_row *row(int i) {
-  static const sb_row none = {ROW_NOTE, NULL, NULL, 0, PAGE_ALBUMS, "", 0, 0, FALSE, FALSE, 0, 0, FALSE};
+  static const sb_row none = {ROW_DIVIDER, NULL, NULL, 0, PAGE_ALBUMS, "", 0, FALSE, 0, 0, FALSE};
   return i >= 0 && i < s.nrows ? &s.rows[i] : &none;
 }
 
 /* A page row, which can be selected unless the sidebar is locked. */
 static BOOL selectable(const sb_row *r) {
-  return r->kind == ROW_NAV || r->kind == ROW_DEVICE;
+  return r->kind == ROW_NAV;
 }
 
 /* A page row that can be selected now. */
@@ -167,11 +146,10 @@ static BOOL enabled(int i) {
   return selectable(row(i)) && (!s.locked || i == s.sel);
 }
 
-/* A row that acts when clicked, like a button: the accordion, a recent, a nearby device, Library
- * stats or About. */
+/* A row that acts when clicked, like a button: a recent, Library stats or About. */
 static BOOL clickable(int i) {
   row_kind kind = row(i)->kind;
-  return kind == ROW_ACCORDION || kind == ROW_ABOUT || kind == ROW_STATS || ((kind == ROW_NEARBY || kind == ROW_RECENT) && !s.locked);
+  return kind == ROW_ABOUT || kind == ROW_STATS || (kind == ROW_RECENT && !s.locked);
 }
 
 /* The next row after from in direction dir (+1 or -1) that the keyboard can land on, or -1
@@ -183,10 +161,8 @@ static int next_focus(int from, int dir) {
 }
 
 static int row_height(const sb_row *r) {
-  static const int heights[] = {[ROW_NAV] = NAV_H,       [ROW_HEADER] = HEADER_H, [ROW_RECENT] = NAV_H,
-                                [ROW_DEVICE] = NAV_H,    [ROW_ACCORDION] = NAV_H, [ROW_NEARBY] = NAV_H,
-                                [ROW_NOTE] = NOTE_H,     [ROW_ABOUT] = NAV_H,     [ROW_STATS] = NAV_H,
-                                [ROW_DIVIDER] = DIVIDER_H};
+  static const int heights[] = {[ROW_NAV] = NAV_H,   [ROW_HEADER] = HEADER_H, [ROW_RECENT] = NAV_H,
+                                [ROW_ABOUT] = NAV_H, [ROW_STATS] = NAV_H,     [ROW_DIVIDER] = DIVIDER_H};
   return scale(heights[r->kind]);
 }
 
@@ -288,7 +264,7 @@ static void select_item(int i) {
   invalidate_row(s.sel);
   invalidate_row(i);
   s.sel = i;
-  uia_selected(&ui, ui_node_of(i, FALSE));
+  uia_selected(&ui, ui_node_of(i));
   SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), LBN_SELCHANGE), (LPARAM)s.wnd);
 }
 
@@ -299,67 +275,18 @@ static void select_quietly(int i) {
   invalidate_row(s.sel);
   invalidate_row(i);
   s.sel = i;
-  uia_selected(&ui, ui_node_of(i, FALSE));
+  uia_selected(&ui, ui_node_of(i));
   if (!clickable(s.focus)) set_focus(i);
 }
 
-/* --- The + on the DEVICES heading --- */
-
-/* Where the + is, in client coordinates; empty if the heading isn't there or is scrolled
- * out of view. */
-static RECT add_rect(void) {
-  RECT rc;
-  for (int i = 0; i < s.nrows; i++) {
-    if (!s.rows[i].add) continue;
-    RECT row_rc = row_rect(i), view;
-    rc.right = row_rc.right - scale(INSET);
-    rc.left = rc.right - scale(ADD_W);
-    rc.bottom = row_rc.bottom - scale(ADD_BOTTOM);
-    rc.top = rc.bottom - scale(ADD_W);
-    if (!IntersectRect(&view, &rc, &s.scroll.view) || !EqualRect(&view, &rc)) break;
-    return rc;
-  }
-  SetRectEmpty(&rc);
-  return rc;
-}
-
-static BOOL in_add(int x, int y) {
-  RECT rc = add_rect();
-  POINT pt = {x, y};
-  return !s.locked && PtInRect(&rc, pt);
-}
-
-static void set_add_hot(BOOL hot) {
-  if (hot == s.add_hot) return;
-  s.add_hot = hot;
-  RECT rc = add_rect();
-  InvalidateRect(s.wnd, &rc, FALSE);
-}
-
-/* What a row's tooltip says, or NULL. An archive's says so, with its state ("Online.
- * Keeps the whole library"), in a buffer valid until the next call: the tooltip copies it. */
+/* What a row's tooltip says, or NULL. */
 static const wchar_t *row_tip(const sb_row *r) {
-  static wchar_t archive[128];
-  if ((r->kind == ROW_DEVICE || r->kind == ROW_NEARBY) && r->tip) return r->tip; /* a warning */
-  switch (r->kind) {
-    case ROW_RECENT: return r->tip;
-    case ROW_DEVICE:
-      if (r->flags & SB_DEV_ARCHIVE) {
-        mc_wformat(archive, 128, mc_str(MC_STR_DEVICE_ARCHIVE),
-                   MC_S(mc_str(r->flags & SB_DEV_ONLINE ? MC_STR_DEVICE_ONLINE : MC_STR_DEVICE_OFFLINE)));
-        return archive;
-      }
-      return r->flags & SB_DEV_ONLINE ? NULL : mc_wstr(MC_STR_DEVICE_OFFLINE);
-    case ROW_NEARBY: return r->flags & SB_DEV_OTHER_GROUP ? mc_wstr(MC_STR_DEVICE_OTHER_GROUP_TIP) : NULL;
-    default: return NULL;
-  }
+  return r->kind == ROW_RECENT || r->kind == ROW_NAV ? r->tip : NULL;
 }
 
-/* The tooltips follow the + and the rows when they move. */
+/* The tooltips follow the rows when they move. */
 static void update_tooltip(void) {
   if (!s.tooltip) return;
-  TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = s.wnd, .uId = TIP_ADD, .rect = add_rect()};
-  SendMessageW(s.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
   for (int k = 0; k < s.ntips; k++) {
     TTTOOLINFOW del = {.cbSize = sizeof del, .hwnd = s.wnd, .uId = (UINT_PTR)(TIP_ROWS + k)};
     SendMessageW(s.tooltip, TTM_DELTOOLW, 0, (LPARAM)&del);
@@ -383,7 +310,6 @@ static void update_hot(void) {
   ScreenToClient(s.wnd, &pt);
   BOOL over = s.tracking && !s.scroll.hot && !s.scroll.dragging;
   if (s.pressed < 0) set_hot(over ? target_at(pt.x, pt.y) : -1);
-  if (!s.add_pressed) set_add_hot(over && in_add(pt.x, pt.y));
 }
 
 /* The scroller already repainted; the rows moved. */
@@ -394,7 +320,7 @@ static void on_scrolled(void) {
 
 /* --- Rows --- */
 
-static sb_row *push_row(row_kind kind, const wchar_t *text, const wchar_t *suffix) {
+static sb_row *push_row(row_kind kind, const wchar_t *text) {
   if (s.nrows == s.cap) {
     int cap = s.cap ? s.cap * 2 : 16;
     sb_row *rows = realloc(s.rows, (size_t)cap * sizeof *rows);
@@ -405,16 +331,17 @@ static sb_row *push_row(row_kind kind, const wchar_t *text, const wchar_t *suffi
   sb_row *r = &s.rows[s.nrows++];
   memset(r, 0, sizeof *r);
   r->kind = kind;
-  r->text = wcs_dup(text, suffix);
+  r->text = wcs_dup(text, NULL);
   return r;
 }
 
-static void push_nav(const wchar_t *text, wchar_t icon, sidebar_page page, BOOL pinned) {
-  sb_row *r = push_row(ROW_NAV, text, NULL);
-  if (!r) return;
+static sb_row *push_nav(const wchar_t *text, wchar_t icon, sidebar_page page, BOOL pinned) {
+  sb_row *r = push_row(ROW_NAV, text);
+  if (!r) return NULL;
   r->icon = icon;
   r->page = page;
   r->pinned = pinned;
+  return r;
 }
 
 /* A section heading, in capitals. */
@@ -422,7 +349,7 @@ static sb_row *push_header(enum mc_str_id text) {
   wchar_t heading[64];
   lstrcpynW(heading, mc_wstr(text), 64);
   CharUpperBuffW(heading, (DWORD)wcslen(heading));
-  return push_row(ROW_HEADER, heading, NULL);
+  return push_row(ROW_HEADER, heading);
 }
 
 static void push_recent(const recent *rc) {
@@ -431,7 +358,7 @@ static void push_recent(const recent *rc) {
                                   [MC_RECENT_PLAYLIST] = 0xE90B,     /* as Playlists */
                                   [MC_RECENT_ALBUM_GROUP] = 0xE8F1}; /* Library */
   const wchar_t *name = rc->name && *rc->name ? rc->name : mc_wstr(MC_STR_UNTITLED);
-  sb_row *r = push_row(ROW_RECENT, name, NULL);
+  sb_row *r = push_row(ROW_RECENT, name);
   if (!r) return;
   r->icon = (unsigned)rc->kind < sizeof icons / sizeof icons[0] ? icons[rc->kind] : icons[0];
   r->flags = (unsigned)rc->kind;
@@ -448,26 +375,6 @@ static void push_recent(const recent *rc) {
   }
 }
 
-static void push_device(row_kind kind, const device *d) {
-  static const wchar_t icons[] = {[MC_DEVICE_DESKTOP] = 0xE977, /* PC */
-                                  [MC_DEVICE_PHONE] = 0xE8EA};  /* CellPhone */
-  const wchar_t *name = d->name && *d->name ? d->name : mc_wstr(MC_STR_DEVICE_UNNAMED);
-  BOOL self = kind == ROW_DEVICE && (d->flags & SB_DEV_SELF);
-  sb_row *r = push_row(kind, name, self ? mc_wstr(MC_STR_WINDOWS_THIS_PC_SUFFIX) : NULL);
-  if (!r) return;
-  r->icon = d->kind >= 0 && d->kind < (int)(sizeof icons / sizeof icons[0]) ? icons[d->kind] : icons[0];
-  r->page = PAGE_DEVICE;
-  memcpy(r->uid, d->uid, sizeof r->uid);
-  r->uid[sizeof r->uid - 1] = 0;
-  r->flags = d->flags;
-  r->indent = kind == ROW_NEARBY ? NEARBY_INDENT : 0;
-  r->tip = d->warning && *d->warning ? wcs_dup(d->warning, NULL) : NULL;
-}
-
-static BOOL accordion_expanded(void) {
-  return s.expanded_set ? s.expanded : s.npaired == 0;
-}
-
 static void free_rows(void) {
   for (int i = 0; i < s.nrows; i++) {
     free(s.rows[i].text);
@@ -481,8 +388,7 @@ static BOOL same_row(const sb_row *a, const sb_row *b) {
   return a->kind == b->kind && a->page == b->page && !strcmp(a->uid, b->uid);
 }
 
-/* Remakes the rows, keeping the selected page (and device) and the focused row. If the
- * selected device is gone, selects Albums. */
+/* Remakes the rows, keeping the selected page and the focused row. */
 static void rebuild(void) {
   sb_row sel = *row(s.sel), focus = *row(s.focus);
   BOOL had_sel = s.sel >= 0, had_focus = s.focus >= 0;
@@ -496,36 +402,25 @@ static void rebuild(void) {
   free_rows();
   for (size_t i = 0; i < sizeof nav_first / sizeof nav_first[0]; i++)
     push_nav(mc_wstr(nav_first[i].text), nav_first[i].icon, nav_first[i].page, FALSE);
-  push_row(ROW_DIVIDER, NULL, NULL);
+  push_row(ROW_DIVIDER, NULL);
   for (size_t i = 0; i < sizeof nav_top / sizeof nav_top[0]; i++)
     push_nav(mc_wstr(nav_top[i].text), nav_top[i].icon, nav_top[i].page, FALSE);
   if (s.nrecents > 0) {
     push_header(MC_STR_SECTION_RECENTS);
     for (int i = 0; i < s.nrecents; i++) push_recent(&s.recents[i]);
   }
-  sb_row *devices = push_header(MC_STR_DEVICES);
-  if (devices) devices->add = TRUE;
-  for (int i = 0; i < s.npaired; i++) push_device(ROW_DEVICE, &s.paired[i]);
-  if (s.nnearby > 0) {
-    wchar_t text[64];
-    mc_wformat(text, 64, mc_str(MC_STR_DEVICES_UNPAIRED), MC_D(s.nnearby));
-    sb_row *r = push_row(ROW_ACCORDION, text, NULL);
-    if (r) r->icon = accordion_expanded() ? 0xE70D : 0xE76C; /* ChevronDown, ChevronRight */
-    if (accordion_expanded())
-      for (int i = 0; i < s.nnearby; i++) push_device(ROW_NEARBY, &s.nearby[i]);
-  }
-  if (s.npaired == 0 && s.nnearby == 0) push_row(ROW_NOTE, mc_wstr(MC_STR_DEVICES_NONE), NULL);
   for (size_t i = 0; i < sizeof nav_bottom / sizeof nav_bottom[0]; i++) {
     if (nav_bottom[i].page == PAGE_SETTINGS) {
-      sb_row *stats = push_row(ROW_STATS, mc_wstr(MC_STR_STATS_TITLE), NULL);
+      sb_row *stats = push_row(ROW_STATS, mc_wstr(MC_STR_STATS_TITLE));
       if (stats) {
         stats->icon = 0xE9D2; /* AreaChart */
         stats->pinned = TRUE;
       }
     }
-    push_nav(mc_wstr(nav_bottom[i].text), nav_bottom[i].icon, nav_bottom[i].page, TRUE);
+    sb_row *r = push_nav(mc_wstr(nav_bottom[i].text), nav_bottom[i].icon, nav_bottom[i].page, TRUE);
+    if (r && nav_bottom[i].page == PAGE_SYNC && s.sync_warning) r->tip = wcs_dup(s.sync_warning, NULL);
   }
-  sb_row *about = push_row(ROW_ABOUT, mc_wstr(MC_STR_ABOUT), NULL);
+  sb_row *about = push_row(ROW_ABOUT, mc_wstr(MC_STR_ABOUT));
   if (about) {
     about->icon = 0xE946; /* Info */
     about->pinned = TRUE;
@@ -550,7 +445,7 @@ static void rebuild(void) {
   unsigned long sig = 0;
   for (int i = 0; i < s.nrows; i++) {
     const sb_row *r = &s.rows[i];
-    unsigned what[] = {r->kind, r->page, r->add};
+    unsigned what[] = {r->kind, r->page};
     sig = uia_hash(sig, what, sizeof what);
     sig = uia_hash(sig, r->uid, strlen(r->uid));
   }
@@ -560,14 +455,7 @@ static void rebuild(void) {
 /* A click (or Enter) on a clickable row. */
 static void activate(int i) {
   const sb_row *r = row(i);
-  if (r->kind == ROW_ACCORDION) {
-    s.expanded = !accordion_expanded();
-    s.expanded_set = TRUE;
-    rebuild();
-  } else if (r->kind == ROW_NEARBY) {
-    memcpy(s.clicked, r->uid, sizeof s.clicked);
-    SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_PAIR_DEVICE), (LPARAM)s.wnd);
-  } else if (r->kind == ROW_RECENT) {
+  if (r->kind == ROW_RECENT) {
     memcpy(s.clicked_recent, r->uid, sizeof s.clicked_recent);
     s.clicked_kind = (mc_recent_kind)r->flags;
     SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_OPEN_RECENT), (LPARAM)s.wnd);
@@ -592,13 +480,12 @@ static void draw_row(canvas *c, int i, const RECT *rc, BOOL focused) {
 
   HFONT font = s.font;
   COLORREF color = theme.text;
-  RECT text = {x + scale(TEXT_X + r->indent), y, x + w - scale(INSET), y + h};
-  RECT fill = {x + scale(INSET + r->indent), y + scale(2), x + w - scale(INSET), y + h - scale(2)};
+  RECT text = {x + scale(TEXT_X), y, x + w - scale(INSET), y + h};
+  RECT fill = {x + scale(INSET), y + scale(2), x + w - scale(INSET), y + h - scale(2)};
   UINT format = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX;
   BOOL focus_ring = FALSE;
   switch (r->kind) {
-    case ROW_NAV:
-    case ROW_DEVICE: {
+    case ROW_NAV: {
       BOOL selected = i == s.sel;
       color = theme_draw_state(c, &fill, scale(RADIUS),
                                selected ? STATE_SELECTED : i == s.hot ? STATE_HOT : STATE_NORMAL);
@@ -612,13 +499,9 @@ static void draw_row(canvas *c, int i, const RECT *rc, BOOL focused) {
       RECT icon = {text.left, y, text.left + scale(ICON_W), y + h};
       canvas_text(c, &r->icon, 1, &icon, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX, s.icon_font, color);
       text.left += scale(ICON_W);
-      /* A small glyph at the end: Sync while syncing, else Warning with a warning (its
-       * tooltip), else NetworkOffline while offline. */
-      wchar_t badge = r->flags & SB_DEV_SYNCING                               ? 0xE895
-                      : r->tip                                                ? 0xE7BA
-                      : r->kind == ROW_DEVICE && !(r->flags & SB_DEV_ONLINE) ? 0xF384
-                                                                              : 0;
-      if (badge) {
+      /* Sync's warning, a small Warning glyph at the end; its tooltip says what. */
+      if (r->tip) {
+        wchar_t badge = 0xE7BA;
         RECT at = {text.right - scale(ICON_W - 8), y, text.right - scale(4), y + h};
         canvas_text(c, &badge, 1, &at, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX, s.small_icon_font,
                     color == theme.text ? theme.text2 : color);
@@ -627,7 +510,6 @@ static void draw_row(canvas *c, int i, const RECT *rc, BOOL focused) {
       break;
     }
     case ROW_RECENT:
-    case ROW_NEARBY:
     case ROW_ABOUT:
     case ROW_STATS: { /* buttons: hot and pressed, never selected */
       color = theme_draw_state(c, &fill, scale(RADIUS), i == s.drop ? STATE_HOT : button_state(i));
@@ -637,48 +519,13 @@ static void draw_row(canvas *c, int i, const RECT *rc, BOOL focused) {
       RECT icon = {text.left, y, text.left + scale(ICON_W), y + h};
       canvas_text(c, &r->icon, 1, &icon, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX, s.icon_font, color);
       text.left += scale(ICON_W);
-      if (r->kind == ROW_NEARBY && r->tip) { /* Warning: its tooltip says why */
-        wchar_t badge = 0xE7BA;
-        RECT at = {text.right - scale(ICON_W - 8), y, text.right - scale(4), y + h};
-        canvas_text(c, &badge, 1, &at, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX, s.small_icon_font,
-                    color == theme.text ? theme.text2 : color);
-        text.right = at.left;
-      }
       break;
     }
-    case ROW_ACCORDION: { /* the heading of the nearby rows, with a chevron at its end */
-      control_state state = button_state(i);
-      theme_draw_state(c, &fill, scale(RADIUS), state);
-      color = state == STATE_NORMAL ? theme.text2 : theme.text;
-      focus_ring = TRUE;
-      RECT chevron = {fill.right - scale(ADD_W), y, fill.right, y + h};
-      canvas_text(c, &r->icon, 1, &chevron, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX,
-                  s.small_icon_font, color);
-      text.right = chevron.left;
-      break;
-    }
-    case ROW_HEADER: { /* the heading, at the bottom of the row: level with the + if it has one */
-      RECT add = {x + w - scale(INSET + ADD_W), y + h - scale(ADD_BOTTOM + ADD_W), x + w - scale(INSET),
-                  y + h - scale(ADD_BOTTOM)};
-      if (r->add) {
-        control_state state = s.locked                     ? STATE_NORMAL
-                              : s.add_pressed && s.add_hot ? STATE_PRESSED
-                              : s.add_hot || s.add_pressed ? STATE_HOT
-                                                           : STATE_NORMAL;
-        COLORREF add_color = theme_draw_state(c, &add, scale(4), state);
-        if (s.locked) add_color = theme.text3;
-        canvas_text(c, L"\xE710", 1, &add, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX, s.icon_font,
-                    add_color); /* Add */
-        text.right = add.left - scale(4);
-      }
+    case ROW_HEADER: /* the heading, at the bottom of the row */
       font = s.header_font;
       color = theme.text2;
-      text.top = add.top;
-      text.bottom = add.bottom;
-      break;
-    }
-    case ROW_NOTE:
-      color = theme.text3;
+      text.top = y + h - scale(HEADER_BOTTOM + HEADER_TEXT_H);
+      text.bottom = y + h - scale(HEADER_BOTTOM);
       break;
     case ROW_DIVIDER: {
       RECT line = {fill.left + scale(6), y + h / 2, fill.right - scale(6), y + h / 2 + 1};
@@ -722,35 +569,25 @@ static void paint(HDC dc, const RECT *dirty) {
 
 /* --- UI Automation (uia.h) ---
  *
- * A list of the rows, as they show from the top: pages, buttons (the recents, the
- * accordion, the nearby devices, About) and text (headings, notes), with the + after
- * the DEVICES heading. The dividers are left out. */
+ * A list of the rows, as they show from the top: pages, buttons (the recents, Library stats,
+ * About) and the headings as text. The dividers are left out. */
 
-/* Node i's row, and in *add whether it's the + on that row; -1 if there's no node i. */
-static int ui_row_of(int i, BOOL *add) {
+/* Node i's row, or -1 if there's no node i. */
+static int ui_row_of(int i) {
   int n = 0;
   for (int r = 0; r < s.nrows; r++) {
     if (s.rows[r].kind == ROW_DIVIDER) continue;
-    if (n++ == i) {
-      *add = FALSE;
-      return r;
-    }
-    if (s.rows[r].add && n++ == i) {
-      *add = TRUE;
-      return r;
-    }
+    if (n++ == i) return r;
   }
   return -1;
 }
 
-static int ui_node_of(int row, BOOL add) {
+static int ui_node_of(int row) {
   int n = 0;
   for (int r = 0; r < s.nrows; r++) {
     if (s.rows[r].kind == ROW_DIVIDER) continue;
-    if (r == row && !add) return n;
+    if (r == row) return n;
     n++;
-    if (s.rows[r].add && r == row) return n;
-    if (s.rows[r].add) n++;
   }
   return UIA_NONE;
 }
@@ -760,37 +597,23 @@ static BOOL ui_node(int i, uia_node *n) {
     n->type = UIA_ListControlTypeId;
     n->flags = UIA_SELECTION;
     lstrcpynW(n->name, mc_wstr(MC_STR_WINDOWS_SIDEBAR_NAME), 512);
-    for (int r = 0; r < s.nrows; r++) n->count += (s.rows[r].kind != ROW_DIVIDER) + s.rows[r].add;
+    for (int r = 0; r < s.nrows; r++) n->count += s.rows[r].kind != ROW_DIVIDER;
     return TRUE;
   }
-  BOOL add;
-  int r = ui_row_of(i, &add);
+  int r = ui_row_of(i);
   if (r < 0) return FALSE;
   const sb_row *row = &s.rows[r];
   n->parent = UIA_ROOT;
   n->rect = visible_rect(r);
-  if (add) {
-    n->type = UIA_ButtonControlTypeId;
-    n->flags = UIA_INVOKABLE | (s.locked ? UIA_DISABLED : 0);
-    n->rect = add_rect();
-    n->automation_id = L"AddDevice";
-    lstrcpynW(n->name, mc_wstr(MC_STR_ADD_DEVICE_BY_ADDRESS), 512);
-    return TRUE;
-  }
   lstrcpynW(n->name, row->text ? row->text : L"", 512);
   const wchar_t *tip = row_tip(row);
   if (tip) lstrcpynW(n->help, tip, 256);
   switch (row->kind) {
     case ROW_NAV:
-    case ROW_DEVICE:
       n->type = UIA_ListItemControlTypeId;
       n->flags = UIA_FOCUSABLE | UIA_SELECTABLE | (r == s.sel ? UIA_SELECTED : 0) | (enabled(r) ? 0 : UIA_DISABLED);
-      if (row->flags & SB_DEV_SYNCING) lstrcpynW(n->status, mc_wstr(MC_STR_SYNCING_PROGRESS), 64);
-      else if (row->kind == ROW_DEVICE && !(row->flags & SB_DEV_ONLINE))
-        lstrcpynW(n->status, mc_wstr(MC_STR_DEVICE_OFFLINE), 64);
       break;
     case ROW_RECENT:
-    case ROW_NEARBY:
     case ROW_ABOUT:
     case ROW_STATS:
       n->type = UIA_ListItemControlTypeId;
@@ -798,11 +621,7 @@ static BOOL ui_node(int i, uia_node *n) {
       if (row->kind == ROW_ABOUT) n->automation_id = L"About";
       if (row->kind == ROW_STATS) n->automation_id = L"LibraryStats";
       break;
-    case ROW_ACCORDION:
-      n->type = UIA_ButtonControlTypeId;
-      n->flags = UIA_FOCUSABLE | UIA_INVOKABLE | (accordion_expanded() ? UIA_EXPANDED : UIA_COLLAPSED);
-      break;
-    default: /* headings and notes */
+    default: /* headings */
       n->type = UIA_TextControlTypeId;
       break;
   }
@@ -810,53 +629,37 @@ static BOOL ui_node(int i, uia_node *n) {
 }
 
 static int ui_focus(void) {
-  return s.focus >= 0 && s.focus < s.nrows ? ui_node_of(s.focus, FALSE) : UIA_ROOT;
+  return s.focus >= 0 && s.focus < s.nrows ? ui_node_of(s.focus) : UIA_ROOT;
 }
 
 static int ui_at(POINT pt) {
-  if (in_add(pt.x, pt.y)) {
-    for (int r = 0; r < s.nrows; r++)
-      if (s.rows[r].add) return ui_node_of(r, TRUE);
-  }
   int r = row_at(pt.x, pt.y);
-  return r >= 0 && s.rows[r].kind != ROW_DIVIDER ? ui_node_of(r, FALSE) : UIA_ROOT;
+  return r >= 0 && s.rows[r].kind != ROW_DIVIDER ? ui_node_of(r) : UIA_ROOT;
 }
 
 static int ui_selection(int i) {
-  return i == UIA_ROOT && s.sel >= 0 ? ui_node_of(s.sel, FALSE) : UIA_NONE;
+  return i == UIA_ROOT && s.sel >= 0 ? ui_node_of(s.sel) : UIA_NONE;
 }
 
 /* As the keyboard does: the focus moves to the row, and a page is selected. */
 static void ui_set_focus(int i) {
-  BOOL add;
-  int r = ui_row_of(i, &add);
-  if (r < 0 || add || !(enabled(r) || clickable(r))) return;
+  int r = ui_row_of(i);
+  if (r < 0 || !(enabled(r) || clickable(r))) return;
   set_focus(r);
   if (enabled(r)) select_item(r);
   reveal(r);
 }
 
 static void ui_invoke(int i) {
-  BOOL add;
-  int r = ui_row_of(i, &add);
-  if (r < 0) return;
-  if (add && !s.locked) {
-    SendMessageW(GetParent(s.wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(s.wnd), SBN_ADD_DEVICE), (LPARAM)s.wnd);
-  } else if (!add && clickable(r)) {
+  int r = ui_row_of(i);
+  if (r >= 0 && clickable(r)) {
     set_focus(r);
     activate(r);
   }
 }
 
-static void ui_expand(int i, BOOL expand) {
-  BOOL add;
-  int r = ui_row_of(i, &add);
-  if (r >= 0 && !add && s.rows[r].kind == ROW_ACCORDION && expand != accordion_expanded()) activate(r);
-}
-
 static void ui_reveal(int i) {
-  BOOL add;
-  int r = ui_row_of(i, &add);
+  int r = ui_row_of(i);
   if (r >= 0) reveal(r);
 }
 
@@ -867,7 +670,6 @@ static const uia_ops ui_ops = {
   .selection = ui_selection,
   .select = ui_set_focus,
   .invoke = ui_invoke,
-  .expand = ui_expand,
   .reveal = ui_reveal,
   .set_focus = ui_set_focus,
 };
@@ -966,32 +768,23 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
       BOOL on_bar = scroller_mouse_move(&s.scroll, x, y);
       int i = on_bar ? -1 : target_at(x, y);
-      set_hot(s.add_pressed ? -1 : s.pressed >= 0 ? (i == s.pressed ? i : -1) : i);
-      set_add_hot(!on_bar && in_add(x, y));
+      set_hot(s.pressed >= 0 ? (i == s.pressed ? i : -1) : i);
       return 0;
     }
     case WM_MOUSELEAVE:
       s.tracking = FALSE;
       scroller_mouse_leave(&s.scroll);
       if (s.pressed < 0) set_hot(-1);
-      if (!s.add_pressed) set_add_hot(FALSE);
       return 0;
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK: {
       int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
       SetFocus(wnd);
       if (scroller_mouse_down(&s.scroll, x, y)) return 0;
-      if (in_add(x, y)) { /* the + acts on release, like a button */
-        s.add_pressed = TRUE;
-        SetCapture(wnd);
-        RECT rc = add_rect();
-        InvalidateRect(wnd, &rc, FALSE);
-        return 0;
-      }
       int i = target_at(x, y);
       if (i < 0) return 0;
       set_focus(i);
-      if (clickable(i)) { /* so do the accordion, the recents and nearby devices */
+      if (clickable(i)) { /* buttons act on release */
         s.pressed = i;
         SetCapture(wnd);
         set_hot(i);
@@ -1003,12 +796,7 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_LBUTTONUP: {
       int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
-      if (s.add_pressed) {
-        BOOL clicked = in_add(x, y);
-        ReleaseCapture(); /* WM_CAPTURECHANGED clears add_pressed */
-        if (clicked)
-          SendMessageW(GetParent(wnd), WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(wnd), SBN_ADD_DEVICE), (LPARAM)wnd);
-      } else if (s.pressed >= 0) {
+      if (s.pressed >= 0) {
         int i = s.pressed;
         BOOL clicked = target_at(x, y) == i;
         ReleaseCapture(); /* WM_CAPTURECHANGED clears pressed */
@@ -1019,11 +807,6 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     case WM_CAPTURECHANGED:
-      if (s.add_pressed) {
-        s.add_pressed = FALSE;
-        RECT rc = add_rect();
-        InvalidateRect(wnd, &rc, FALSE);
-      }
       if (s.pressed >= 0) {
         invalidate_row(s.pressed);
         s.pressed = -1;
@@ -1105,8 +888,7 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       free_rows();
       free(s.rows);
       free_recents();
-      free_devices(s.paired, s.npaired);
-      free_devices(s.nearby, s.nnearby);
+      free(s.sync_warning);
       memset(&s, 0, sizeof s);
       s.sel = s.focus = s.hot = s.pressed = s.drop = -1;
       return 0;
@@ -1134,9 +916,6 @@ HWND sidebar_create(HWND parent, int id) {
   s.tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
                               CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, s.wnd, NULL,
                               GetModuleHandleW(NULL), NULL);
-  TTTOOLINFOW ti = {.cbSize = sizeof ti, .uFlags = TTF_SUBCLASS, .hwnd = s.wnd, .uId = TIP_ADD,
-                    .lpszText = (wchar_t *)mc_wstr(MC_STR_ADD_DEVICE_BY_ADDRESS)};
-  SendMessageW(s.tooltip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
   SendMessageW(s.tooltip, TTM_SETMAXTIPWIDTH, 0, TIP_W); /* so long names break */
   rebuild(); /* selects Albums */
   return s.wnd;
@@ -1186,7 +965,6 @@ void sidebar_set_locked(BOOL locked) {
   if (locked == s.locked) return;
   s.locked = locked;
   set_hot(-1);
-  set_add_hot(FALSE);
   InvalidateRect(s.wnd, NULL, FALSE);
 }
 
@@ -1224,71 +1002,13 @@ const char *sidebar_clicked_recent(mc_recent_kind *kind) {
   return s.clicked_recent;
 }
 
-/* --- Devices --- */
+/* --- Sync --- */
 
-static void free_devices(device *d, int n) {
-  for (int i = 0; i < n; i++) {
-    free(d[i].name);
-    free(d[i].warning);
-  }
-  free(d);
-}
-
-static device *copy_devices(const sidebar_device *from, int n) {
-  if (n <= 0) return NULL;
-  device *d = calloc((size_t)n, sizeof *d);
-  if (!d) return NULL;
-  for (int i = 0; i < n; i++) {
-    memcpy(d[i].uid, from[i].uid, sizeof d[i].uid);
-    d[i].uid[sizeof d[i].uid - 1] = 0;
-    d[i].name = wcs_dup(from[i].name, NULL);
-    d[i].kind = from[i].kind;
-    d[i].flags = from[i].flags;
-    d[i].warning = from[i].warning ? wcs_dup(from[i].warning, NULL) : NULL;
-  }
-  return d;
-}
-
-/* Whether have and from list the same devices, in the same order, with nothing changed. */
-static BOOL same_devices(const device *have, int nhave, const sidebar_device *from, int nfrom) {
-  if (nhave != nfrom) return FALSE;
-  for (int i = 0; i < nfrom; i++) {
-    const wchar_t *name = have[i].name ? have[i].name : L"", *given = from[i].name ? from[i].name : L"";
-    const wchar_t *warned = have[i].warning ? have[i].warning : L"", *warning = from[i].warning ? from[i].warning : L"";
-    if (strcmp(have[i].uid, from[i].uid) || wcscmp(name, given) || have[i].kind != from[i].kind ||
-        have[i].flags != from[i].flags || wcscmp(warned, warning))
-      return FALSE;
-  }
-  return TRUE;
-}
-
-void sidebar_set_devices(const sidebar_device *paired, int npaired, const sidebar_device *nearby, int nnearby) {
-  /* Polled every few seconds: nothing to rebuild (or tell screen readers) when nothing changed. */
-  if (same_devices(s.paired, s.npaired, paired, npaired) && same_devices(s.nearby, s.nnearby, nearby, nnearby))
-    return;
-  free_devices(s.paired, s.npaired);
-  free_devices(s.nearby, s.nnearby);
-  s.paired = copy_devices(paired, npaired);
-  s.npaired = s.paired ? npaired : 0;
-  s.nearby = copy_devices(nearby, nnearby);
-  s.nnearby = s.nearby ? nnearby : 0;
-  s.clicked[0] = 0;
+void sidebar_set_sync_warning(const wchar_t *text) {
+  /* Set on every refresh of the devices: nothing to rebuild when it's the same. */
+  if (!text || !*text) text = NULL;
+  if (!text ? !s.sync_warning : s.sync_warning && !wcscmp(text, s.sync_warning)) return;
+  free(s.sync_warning);
+  s.sync_warning = text ? wcs_dup(text, NULL) : NULL;
   if (s.wnd) rebuild();
-}
-
-const char *sidebar_selected_device(void) {
-  return s.sel >= 0 && row(s.sel)->kind == ROW_DEVICE ? row(s.sel)->uid : NULL;
-}
-
-void sidebar_select_device(const char *uid) {
-  if (!uid) return;
-  for (int i = 0; i < s.nrows; i++)
-    if (s.rows[i].kind == ROW_DEVICE && strcmp(s.rows[i].uid, uid) == 0) {
-      select_quietly(i);
-      return;
-    }
-}
-
-const char *sidebar_clicked_nearby(void) {
-  return s.clicked[0] ? s.clicked : NULL;
 }

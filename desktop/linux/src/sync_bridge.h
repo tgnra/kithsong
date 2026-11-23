@@ -7,7 +7,7 @@
  * "Showing sync" in sync.h): progress until the other device answers, and on_sync_done
  * unless it did, come through only for sessions the user asked for, so nothing shows while
  * sync is only trying a device that may be away. So do sessions refused for the other
- * device's version (MC_ERR_VERSION), which SYNC_EV_VERSION and the device's page tell of.
+ * device's version (MC_ERR_VERSION), which SYNC_EV_VERSION and the device's row tell of.
  *
  * Stopping bumps a generation counter carried with each event, so events still queued from
  * the old mc_sync are dropped rather than delivered. Every function runs on the main thread,

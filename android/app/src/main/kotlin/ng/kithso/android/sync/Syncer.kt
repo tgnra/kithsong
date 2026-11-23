@@ -22,6 +22,7 @@ import ng.kithso.core.NearbyDevice
 import ng.kithso.core.ProfileItem
 import ng.kithso.core.ProfileItemKind
 import ng.kithso.android.R
+import ng.kithso.core.SyncActivity
 import ng.kithso.core.SyncArchiveOffer
 import ng.kithso.core.SyncDevice
 import ng.kithso.core.SyncIssueKind
@@ -54,7 +55,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -154,6 +157,10 @@ data class SyncStatus(
     val members: List<SyncDevice> = emptyList(),
     /** What the next sync would copy, and whether this phone's user has chosen what it syncs; null outside a group. */
     val outlook: SyncOutlook? = null,
+    /** What the last session that moved or deleted files did ("Last sync: ↑ 4 · ↓ 100"). */
+    val activity: SyncActivity = SyncActivity.None,
+    /** What each member syncs in one sentence ("3 albums and 2 playlists"), by uid. */
+    val summaries: Map<String, String> = emptyMap(),
     /** Devices on the network that aren't in the group, by name. */
     val nearby: List<NearbyDevice> = emptyList(),
     /** The sessions running, by member uid. */
@@ -268,6 +275,13 @@ open class Syncer(
     private val thread = Dispatchers.IO.limitedParallelism(1)
     private val state = MutableStateFlow(SyncStatus(deviceName))
     open val status: StateFlow<SyncStatus> = state
+    private val nothingToDoFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /**
+     * A press of Sync now with every member found nothing to do: each member it asked answered,
+     * and none of the sessions failed or moved or deleted a file. The pill shakes.
+     */
+    open val nothingToDo: SharedFlow<Unit> = nothingToDoFlow
 
     // Only touched on [thread].
     private var sync: CoreSync? = null
@@ -286,6 +300,11 @@ open class Syncer(
 
     // Members that refused a press of Sync as busy, tried once more since. Only touched on [thread].
     private val busyRetried = HashSet<String>()
+
+    // The press of Sync now with every member waiting to be answered: the members it asked that
+    // haven't, and whether any session so far failed or changed something. Only touched on [thread].
+    private var pressWaiting = emptySet<String>()
+    private var pressDidSomething = false
 
     // Reads who this phone transcodes for, every few seconds while it does. Only touched on [thread].
     private var transcodingWatch: Job? = null
@@ -508,6 +527,10 @@ open class Syncer(
         if (uid == null) busyRetried.clear() else busyRetried -= uid
         update { copy(cancelled = false) }
         sync.syncNow(uid)
+        if (uid == null) {
+            pressWaiting = state.value.members.filter { it.online }.map { it.uid }.toSet()
+            pressDidSomething = false
+        }
         refreshLists(sync)
     }
 
@@ -519,6 +542,7 @@ open class Syncer(
      */
     fun cancelSync(uid: String? = null) = call {
         it.cancel(uid)
+        pressWaiting = emptySet()
         if (uid == null) update { copy(cancelled = true) }
     }
 
@@ -926,6 +950,11 @@ open class Syncer(
                     return
                 }
                 if (event.status != CoreSync.ERR_LOCKED) busyRetried -= event.uid
+                if (event.user && event.uid in pressWaiting) {
+                    pressWaiting = pressWaiting - event.uid
+                    pressDidSomething = pressDidSomething || event.status != 0 || event.changed
+                    if (pressWaiting.isEmpty() && !pressDidSomething) nothingToDoFlow.tryEmit(Unit)
+                }
                 update {
                     copy(
                         sessions = sessions - event.uid,
@@ -1029,6 +1058,14 @@ open class Syncer(
             val problems = sync.problems()
             val offer = readOffer(sync, problems.issues.filter { it.kind in OFFER_KINDS }.map { it.deviceUid }.toSet())
             val binOffered = sync.coreBinOffered
+            val activity = sync.lastActivity()
+            val summaries = devices.filter { !it.isSelf && !it.removed }.associate { device ->
+                device.uid to try {
+                    sync.profileSummary(device.uid)
+                } catch (e: KithCoreException) {
+                    ""
+                }
+            }
             val binCount = sync.coreBinCount
             // Renamed here, or through a desktop's older editor in a session.
             val name = sync.deviceName
@@ -1040,6 +1077,8 @@ open class Syncer(
                     self = devices.firstOrNull { it.isSelf },
                     members = devices.filter { !it.isSelf && !it.removed },
                     outlook = if (libraryState != CoreSync.LibraryState.NoGroup) sync.outlook() else null,
+                    activity = activity,
+                    summaries = summaries,
                     waiting = waiting,
                     problems = problems,
                     offer = offer,

@@ -36,6 +36,7 @@
 #include <yyjson.h>
 
 #include "discovery/local_addr.h"
+#include "kithcore/i18n.h"
 #include "library/folder_gate.h"
 #include "library/library_internal.h"
 #include "sync/archive.h"
@@ -806,9 +807,88 @@ static void trigger_members(mc_sync *sync, const char *skip, mc_sync_trigger why
 }
 
 
+/* --- Last activity --- */
+
+/* Sessions that end this soon after the last activity add to it, so that a press of Sync
+ * that syncs with several members reads as one. */
+#define ACTIVITY_JOIN_MS (2 * 60 * 1000)
+
+int mc_sync_result_changed(const mc_sync_result *r) {
+  return r && (r->files_received > 0 || r->files_sent > 0 || r->files_deleted > 0);
+}
+
+static void note_activity(mc_sync_conn *c, const mc_sync_result *r) {
+  sqlite3_stmt *stmt;
+  if (!c->sdb || !mc_sync_result_changed(r)) return;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(c->sdb),
+                         /* Every SET reads the row as it was, activity_ms included. */
+                         "UPDATE local SET"
+                         " activity_received = ?2 + CASE WHEN coalesce(activity_ms, 0) >= ?1 - ?5"
+                         " THEN activity_received ELSE 0 END,"
+                         " activity_sent = ?3 + CASE WHEN coalesce(activity_ms, 0) >= ?1 - ?5"
+                         " THEN activity_sent ELSE 0 END,"
+                         " activity_deleted = ?4 + CASE WHEN coalesce(activity_ms, 0) >= ?1 - ?5"
+                         " THEN activity_deleted ELSE 0 END,"
+                         " activity_ms = ?1 WHERE id = 1",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return;
+  sqlite3_bind_int64(stmt, 1, (int64_t)mc_wall_ms());
+  sqlite3_bind_int(stmt, 2, r->files_received);
+  sqlite3_bind_int(stmt, 3, r->files_sent);
+  sqlite3_bind_int(stmt, 4, r->files_deleted);
+  sqlite3_bind_int64(stmt, 5, ACTIVITY_JOIN_MS);
+  sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+}
+
+mc_status mc_sync_get_last_activity(mc_sync *sync, mc_sync_activity *out) {
+  if (out) memset(out, 0, sizeof *out);
+  if (!sync || !out) return MC_ERR_INVALID_ARG;
+  mc_status st = MC_ERR_DB;
+  mc_mutex_lock(&sync->api_lock);
+  sqlite3_stmt *stmt;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(sync->api.sdb),
+                         "SELECT activity_ms, activity_received, activity_sent, activity_deleted"
+                         " FROM local WHERE id = 1",
+                         -1, &stmt, NULL) == SQLITE_OK) {
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      out->when_ms = sqlite3_column_int64(stmt, 0);
+      out->received = sqlite3_column_int(stmt, 1);
+      out->sent = sqlite3_column_int(stmt, 2);
+      out->deleted = sqlite3_column_int(stmt, 3);
+    }
+    sqlite3_finalize(stmt);
+    st = MC_OK;
+  }
+  mc_mutex_unlock(&sync->api_lock);
+  return st;
+}
+
+size_t mc_sync_activity_text(const mc_sync_activity *a, char *buf, size_t size) {
+  if (buf && size) buf[0] = '\0';
+  if (!a || a->when_ms <= 0) return 0;
+  char parts[160] = "", part[48];
+  const char *sep = mc_str(MC_STR_SEPARATOR_DOT);
+  if (a->sent > 0) {
+    mc_format(part, sizeof part, mc_str(MC_STR_SYNC_ACTIVITY_SENT), MC_D(a->sent));
+    snprintf(parts + strlen(parts), sizeof parts - strlen(parts), "%s%s", parts[0] ? sep : "", part);
+  }
+  if (a->received > 0) {
+    mc_format(part, sizeof part, mc_str(MC_STR_SYNC_ACTIVITY_RECEIVED), MC_D(a->received));
+    snprintf(parts + strlen(parts), sizeof parts - strlen(parts), "%s%s", parts[0] ? sep : "", part);
+  }
+  if (a->deleted > 0) {
+    mc_format(part, sizeof part, mc_str_plural(MC_STR_SYNC_ACTIVITY_DELETED, a->deleted), MC_D(a->deleted));
+    snprintf(parts + strlen(parts), sizeof parts - strlen(parts), "%s%s", parts[0] ? sep : "", part);
+  }
+  if (!parts[0]) return 0;
+  return mc_format(buf, size, mc_str(MC_STR_SYNC_ACTIVITY), MC_S(parts));
+}
+
 void mc_sync_session_ended(mc_sync *sync, mc_sync_conn *c, const char *peer_uid,
                            const mc_sync_result *result, int64_t rows_new, int follow_up,
                            const char *address, uint16_t port) {
+  note_activity(c, result);
   if (result->status == MC_OK && c->sdb) {
     sqlite3_stmt *stmt;
     /* Members only: a session that found this device removed has forgotten the group (and

@@ -8,16 +8,13 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
-import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
-import androidx.compose.ui.test.hasScrollToKeyAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.core.graphics.Insets
@@ -64,8 +61,8 @@ import javax.imageio.ImageIO
  * 7" tablet 1080x1920 at 288 dpi in portrait, 10" tablet 2560x1440 at 288 dpi in landscape. The
  * set is the listing's (albums, an album and the player in light and dark, and Search in
  * light), then an import part way with an album waiting for a decision between candidates, and
- * a sync part way with Bob's laptop, as the Sync page lists it and as this device's page shows it, with
- * its selection and budget.
+ * a sync part way with Bob's laptop, as the Sync page shows it, with this device's selection and
+ * budget, and Bob's laptop's settings and details.
  *
  * Each is the real [App], in the phone's, the rail or the tablet layout as the window's size picks
  * (the 7" tablet's is the rail layout), so the header or rail, the mini player or top bar and their
@@ -159,35 +156,18 @@ abstract class StoreScreenshots(
         }
     }
 
-    // The Sync page, part way through a session with Bob's laptop. The tablet layout has none: its
-    // sidebar lists the devices, and Bob's laptop's page is shown, with the session.
+    // The Sync page, part way through a session with Bob's laptop: the devices, and this device's
+    // selection within a budget.
     @Config(qualifiers = "+night")
     @Test fun syncDark() = shoot("sync-dark", dark(), sync = StoreSync.syncing(deviceName)) {
-        if (layout == WindowLayout.Tablet) tap(hasText("Bob's laptop") and hasClickAction()) else openSync()
-        // On the 10" held sideways the sidebar's Recents and Devices don't all fit, and scroll (see
-        // Sidebar): to its end, so the group shows whole.
-        if (wide) {
-            settle()
-            compose.onAllNodes(hasScrollToKeyAction() and hasAnyDescendant(hasText(string(R.string.section_recents))))
-                .onFirst().performScrollToKey("member:tablet")
-        }
+        openSync()
     }
 
-    // This device's page: the session, its files, and its selection within a budget.
+    // Bob's laptop's settings and details, over the Sync page, with the session.
     @Test fun deviceLight() = shoot("device-light", light(), sync = StoreSync.syncing(deviceName)) {
-        if (layout == WindowLayout.Tablet) {
-            tap(hasText(deviceName) and hasClickAction())
-        } else {
-            openSync()
-            settle()
-            tap(hasText(deviceName) and hasClickAction())
-        }
+        openSync()
         settle()
-        // Its profile, with the session over it (on the 10" only the group's syncing: the laptop's shot
-        // has the session). The tablet layout's page has the group's Sync
-        // now and Leave group between them as well.
-        scrollTo("profile")
-        scrollBy(if (wide) -360f else if (tablet) -598f else -580f)
+        tap(hasText("Bob's laptop") and hasClickAction())
     }
 
     // On the phone the main list scrolls under the status bar, which is painted over, as the
@@ -210,25 +190,15 @@ abstract class StoreScreenshots(
         })
     }
 
-    // Whether pages have room for two panes (the import item's TwoPaneWidth): only the 10".
-    private val wide get() = width > 2000
-
     private fun string(@StringRes id: Int) = context.getString(id)
 
     private fun tap(matcher: SemanticsMatcher) {
         compose.onAllNodes(matcher, useUnmergedTree = false).onFirst().performSemanticsAction(SemanticsActions.OnClick)
     }
 
-    // The Sync page: from the phone's main menu, or the rail.
+    // The Sync page: from the phone's header, the rail or the sidebar.
     private fun openSync() {
-        if (tablet) tap(hasText(string(R.string.sync)) and hasClickAction()) else menu(R.string.sync)
-    }
-
-    // The phone's main menu, then [item] in it.
-    private fun menu(@StringRes item: Int) {
-        tap(hasContentDescription(string(R.string.main_menu)) and hasClickAction())
-        settle()
-        tap(hasText(string(item)) and hasClickAction())
+        if (tablet) tap(hasText(string(R.string.sync)) and hasClickAction()) else tap(hasContentDescription(string(R.string.sync)) and hasClickAction())
     }
 
     // The topmost page's list scrolled down by [px].
@@ -236,12 +206,6 @@ abstract class StoreScreenshots(
         val vertical = SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange)
         val lists = compose.onAllNodes(vertical).fetchSemanticsNodes().size
         compose.onAllNodes(vertical)[lists - 1].performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, px) }
-    }
-
-    // The topmost page's lazy list scrolled to the item with [key] at its top.
-    private fun scrollTo(key: String) {
-        val lists = compose.onAllNodes(hasScrollToKeyAction()).fetchSemanticsNodes().size
-        compose.onAllNodes(hasScrollToKeyAction())[lists - 1].performScrollToKey(key)
     }
 
     /** Every shot there is, in the listing's order. */

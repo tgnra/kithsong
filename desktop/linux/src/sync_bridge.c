@@ -161,7 +161,7 @@ static void on_progress(void *user, const mc_sync_progress *progress) {
 
 static void on_sync_done(void *user, const mc_sync_result *result) {
   if (!result->connected && !result->user) return; /* an automatic attempt nothing answered */
-  /* Refused for its version: the device's page and row say so, without a failure each time
+  /* Refused for its version: the device's row and dialog say so, without a failure each time
    * the other device tries again. */
   if (result->status == MC_ERR_VERSION && !result->user) return;
   posted *p = new_event(user, SYNC_EV_DONE);

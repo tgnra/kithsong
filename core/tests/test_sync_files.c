@@ -1058,6 +1058,18 @@ int main(int argc, char **argv) {
   /* Nothing more to do: a second session moves nothing, and carries B's sync_status. */
   CHECK(sync_now(&b, &a, &rb, &ra) == MC_OK);
   CHECK(rb.files_received == 0 && ra.files_received == 0 && rb.files_deleted == 0);
+  /* The last activity is still the first session's, on both sides; the second moved nothing. */
+  {
+    mc_sync_activity act;
+    char text[128];
+    CHECK(mc_sync_get_last_activity(b.sync, &act) == MC_OK);
+    CHECK(act.when_ms > 0 && act.received == 4 && act.sent == 0 && act.deleted == 0);
+    mc_sync_activity_text(&act, text, sizeof text);
+    CHECK(!strcmp(text, "Last sync: \xe2\x86\x93 4"));
+    CHECK(mc_sync_get_last_activity(a.sync, &act) == MC_OK);
+    CHECK(act.when_ms > 0 && act.received == 0 && act.sent == 4);
+    CHECK(!mc_sync_result_changed(&rb) && !mc_sync_result_changed(&ra));
+  }
   /* A, the archive, found itself complete in the first confirmed session (the pairing one
    * fetched nothing, unconfirmed); its sync_status is written before the next group
    * exchange, so both have it now. */

@@ -119,7 +119,7 @@ fun App(
     // What's wrong with the files here: a card above that one.
     val problems by syncer.statusPart { it.problems }
     // The recycle bin: how many deletes wait for a sync (null outside a group, where deletes
-    // don't go there), and the red dot on the main menu and its Sync while one could sync.
+    // don't go there), and the red dot on Sync while one could sync.
     val binCount by syncer.statusPart { s -> s.binCount.takeIf { s.binOffered || it > 0 } }
     val binDot by syncer.statusPart { it.binDot }
     // A lost archive this device was asked about replacing: the rail marks Sync for it, as the sidebar does.
@@ -162,10 +162,10 @@ fun App(
     // The tablet layout's queue button opens the player at its queue.
     var playerOnQueue by remember { mutableStateOf(false) }
 
-    // On the Sync page and the device pages over it the sync pill takes the mini player's place,
-    // as one element that changes shape, in the rail layout too. The tablet layout has neither:
-    // its sidebar has the pill.
-    val pillShown = !tablet && inGroup && nav.top?.page.let { it == Page.Sync || it is Page.Device }
+    // On the Sync page the sync pill takes the mini player's place, as one element that changes
+    // shape, in the rail layout too. The tablet layout has neither: its sidebar and its Sync page
+    // have the pill.
+    val pillShown = !tablet && inGroup && nav.top?.page == Page.Sync
     // Lists end clear of the mini player or the pill, which sit above the navigation bar.
     var miniPlayerHeight by remember { mutableIntStateOf(0) }
     val navigationBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -182,22 +182,13 @@ fun App(
             nav = nav.push(Page.Collection(ref))
         }
     }
-    // A device's page, over Sync, from wherever it's asked for; the player makes way for it.
-    // The tablet layout lists the devices in its sidebar, so there it's the page by itself; in
-    // the rail layout it's over the Sync page the rail opens, by itself beneath it.
-    // This phone's sync settings are at the top of the Sync page itself, under the pill.
-    val openDevice: (String) -> Unit = { uid ->
-        when (layout) {
-            WindowLayout.Tablet -> nav = nav.removeAll { true }.push(Page.Device(uid))
-            WindowLayout.Rail -> {
-                val sync = if (nav.pages.firstOrNull() == Page.Sync) nav.removeAll { it != Page.Sync } else nav.removeAll { true }.push(Page.Sync)
-                nav = if (uid == THIS_DEVICE) sync else sync.push(Page.Device(uid))
-            }
-            WindowLayout.Phone -> {
-                val under = nav.removeAll { it == Page.Player || it is Page.Device }
-                val sync = if (Page.Sync in under.pages) under.removeAll { it == Page.RecycleBin } else under.push(Page.Sync)
-                nav = if (uid == THIS_DEVICE) sync else sync.push(Page.Device(uid))
-            }
+    // The Sync page, with this phone's sync settings, from wherever it's asked for; the player
+    // makes way for it. The tablet and rail layouts open it by itself, as their sidebar and rail do.
+    val openSync: () -> Unit = {
+        nav = when {
+            layout != WindowLayout.Phone -> nav.removeAll { true }.push(Page.Sync)
+            Page.Sync in nav.pages -> nav.removeAll { it == Page.Player || it == Page.RecycleBin }
+            else -> nav.removeAll { it == Page.Player }.push(Page.Sync)
         }
     }
 
@@ -268,8 +259,7 @@ fun App(
     // A page of sync's own on top: on battery this phone transcodes for the other members only
     // meanwhile. One state for them all, so going from one to another doesn't cut a transfer off.
     val syncOnScreen = !smartOpen && top?.page.let { page ->
-        page == Page.Sync || page is Page.Device ||
-            (page == Page.RecycleBin && nav.pages.any { it == Page.Sync || it is Page.Device })
+        page == Page.Sync || (page == Page.RecycleBin && Page.Sync in nav.pages)
     }
     SyncSectionShown(syncer, syncOnScreen)
     // A view switch is over once a frame has been drawn with the new page, and the frame after
@@ -439,6 +429,9 @@ fun App(
                     nav = nav.removeAll { it == Page.Settings }
                     ScrollTest.start()
                 },
+                // The tablet and rail layouts have Library stats beside Settings, and no Customise.
+                onCustomise = if (layout == WindowLayout.Phone) ({ nav = nav.push(Page.Customise) }) else null,
+                onStats = if (layout == WindowLayout.Phone) ({ nav = nav.push(Page.Stats) }) else null,
             )
             Page.Stats -> StatsScreen(source, pagePadding, onBack = dismiss)
             Page.Customise -> CustomiseScreen(
@@ -453,17 +446,11 @@ fun App(
             Page.Licenses -> LicensesScreen(pagePadding, onOpen = { nav = nav.push(Page.License(it)) }, onBack = dismiss)
             is Page.License -> LicenseTextScreen(page.asset, pagePadding, onBack = dismiss)
             Page.Sync -> SyncScreen(
-                syncer, pagePadding, onOpenDevice = { nav = nav.push(Page.Device(it)) }, onBack = dismiss,
-                onOpenBin = { nav = nav.push(Page.RecycleBin) },
+                syncer, pagePadding, onBack = dismiss, onOpenBin = { nav = nav.push(Page.RecycleBin) }, twoPanes = tablet,
             )
             Page.RecycleBin -> RecycleBinScreen(
                 syncer, binCount ?: 0, pagePadding, onBack = dismiss,
                 transcodingNotice = if (transcodingOnBattery) { modifier -> TranscodingNotice(syncer, modifier) } else null,
-            )
-            is Page.Device -> DeviceScreen(
-                syncer, page.uid, pagePadding, onBack = dismiss, onRename = syncer::rename,
-                // With no Sync page in the tablet layout, this phone's page has what's on it for the whole group.
-                onOpenBin = if (tablet) ({ nav = nav.push(Page.RecycleBin) }) else null,
             )
             Page.Search -> SearchScreen(
                 source,
@@ -607,9 +594,7 @@ fun App(
                     onTrackMenu = foundTrackMenu,
                     onSync = { nav = nav.push(Page.Sync) },
                     onSettings = { nav = nav.push(Page.Settings) },
-                    onStats = { nav = nav.push(Page.Stats) },
                     sectionOrder = sectionOrder,
-                    onCustomise = { nav = nav.push(Page.Customise) },
                     importPickers = importPickers,
                     importRunning = importProgress?.phase?.isOver == false,
                     banner = banner,
@@ -622,8 +607,8 @@ fun App(
                     onNewList = if (actions.editor != null) actions::newList else null,
                     syncDot = binDot,
                     inGroup = inGroup,
-                    // The Sync page, with this phone's sync settings first, as after pairing.
-                    onChooseWhatToSync = { openDevice(THIS_DEVICE) },
+                    // The Sync page, with this phone's sync settings, as after pairing.
+                    onChooseWhatToSync = openSync,
                 )
                 // Every page but the player, which goes over the mini player.
                 nav.layers.forEach { layer ->
@@ -731,7 +716,7 @@ fun App(
                 },
             )
             // Over everything: another device may ask to pair at any time.
-            PairingDialogs(syncer, settings, openDevice)
+            PairingDialogs(syncer, settings, openSync)
         }
     }
 }

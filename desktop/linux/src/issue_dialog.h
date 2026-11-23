@@ -1,8 +1,8 @@
 /* Sync problems in words (the counterpart of desktop/windows/src/issue_dialog.c): one dialog
  * listing mc_sync_get_problems()'s issues, each with its title, what happened and how to fix
- * it (mc_sync_issue_describe()), opened from the problems banner, a device's page and the
- * finished bar; and the offer to make this computer the archive in place of a lost one
- * (mc_sync_get_archive_offer()), shown once by itself and then from the lost device's page.
+ * it (mc_sync_issue_describe()), opened from the problems banner and a device's dialog; and
+ * the offer to make this computer the archive in place of a lost one
+ * (mc_sync_get_archive_offer()), shown once by itself and then from the Sync page's banner.
  * Closing the problems dialog forgets the notices (mc_sync_dismiss_notices()). Everything runs
  * on the main thread; the offer is read on a thread of its own, as reading it reads every
  * track. */

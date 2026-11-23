@@ -9,14 +9,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.add
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -67,7 +65,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import ng.kithso.core.CoreSync
-import ng.kithso.core.KithCoreException
 import ng.kithso.android.R
 import ng.kithso.core.SyncDevice
 import ng.kithso.core.SyncProblems
@@ -79,131 +76,188 @@ import ng.kithso.android.sync.SyncStatus
 import ng.kithso.android.sync.Syncer
 import java.text.NumberFormat
 import kotlinx.coroutines.launch
-
-/** What [SyncScreen] passes to open this phone's own [DeviceScreen], rather than a member's uid. */
-const val THIS_DEVICE = ""
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ListItemColors
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.Dialog
 
 /**
- * The sync screen: this phone and what it keeps first, the group and pairing below. Sync now
- * is the pill the app shows in the mini player's place. Pairing itself shows in
+ * The Sync page: the other devices of the group, then what this device keeps, which only it
+ * changes, with Leave group at the end. With [twoPanes] (the tablet layout) this device's
+ * settings are on the left and the devices on the right, under a strip with what the last sync
+ * did and Sync now, as the desktops have it; otherwise one column, the devices a row of cards
+ * whose + shows the unpaired ones, and Sync now is the pill the app shows in the mini player's
+ * place. A device shows its settings and details in [DeviceDialog]. Pairing itself shows in
  * [PairingDialogs], wherever the app is.
  */
 @Composable
 fun SyncScreen(
     syncer: Syncer,
     bottomPadding: Dp,
-    onOpenDevice: (String) -> Unit,
     onBack: () -> Unit,
-    onOpenBin: () -> Unit = {},
+    onOpenBin: () -> Unit,
+    twoPanes: Boolean = false,
 ) {
     val status by syncer.status.collectAsState()
     var adding by rememberSaveable { mutableStateOf(false) }
+    var unpaired by rememberSaveable { mutableStateOf(false) }
+    // The device whose dialog is open: a member's uid, or this device's own.
+    var shown by rememberSaveable { mutableStateOf<String?>(null) }
     val takeOver = rememberTakeOver(syncer)
-    ArchiveOfferDialog(syncer, tablet = false)
-    Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            contentPadding = pageSides()
-                .add(WindowInsets(bottom = bottomPadding))
-                .asPaddingValues(),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            item(key = "header") { ScreenHeader(stringResource(R.string.sync), onBack) }
-
-            if (status.transcodingOnBattery) item(key = "transcoding") {
-                TranscodingNotice(syncer, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-            }
-            if (status.binCount > 0) item(key = "bin") {
-                BinNotice(status.binCount, onOpenBin, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-            }
-
-            item(key = "self") {
-                syncNotice(status)?.let { (text, isError) ->
-                    Text(
-                        text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
-                }
-                SettingsHeading(stringResource(R.string.this_phone))
-                val selfWarning = status.self?.warning.orEmpty()
-                ListItem(
-                    leadingContent = { Icon(Icons.Smartphone, contentDescription = null) },
-                    headlineContent = { Text(status.deviceName) },
-                    supportingContent = {
-                        Column {
-                            Text(selfText(status))
-                            if (selfWarning.isNotEmpty()) Text(selfWarning, color = MaterialTheme.colorScheme.error)
-                        }
-                    },
-                    modifier = Modifier.clickable(onClickLabel = stringResource(R.string.device_details)) {
-                        onOpenDevice(THIS_DEVICE)
-                    },
-                )
-            }
-            // What this phone keeps, which only it can change.
-            status.self?.let { self ->
-                item(key = "profile") {
-                    SettingsHeading(stringResource(R.string.device_profile))
-                    ProfileSection(self, isSelf = true, syncer)
-                }
-            }
-
-            // A lost archive this phone may replace, once the one-time dialog was shown.
-            status.offer?.takeIf { it.asked }?.let { offer ->
-                item(key = "offer") {
-                    ArchiveOfferCard(offer, tablet = false, onTakeOver = takeOver, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                }
-            }
-            item(key = "devices") { SettingsHeading(stringResource(R.string.devices)) }
-            items(status.members, key = { "member:${it.uid}" }) { device ->
-                MemberRow(device, status, syncer) { onOpenDevice(device.uid) }
-            }
-
-            if (status.nearby.isNotEmpty()) item(key = "nearby") {
+    ArchiveOfferDialog(syncer, tablet = twoPanes)
+    val padding = pageSides().add(WindowInsets(bottom = bottomPadding)).asPaddingValues()
+    val notice = syncNotice(status)
+    val selfHeading = stringResource(if (twoPanes) R.string.this_tablet else R.string.this_phone)
+    val notices: LazyListScope.() -> Unit = {
+        if (status.transcodingOnBattery) item(key = "transcoding") {
+            TranscodingNotice(syncer, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        }
+        if (status.binCount > 0) item(key = "bin") {
+            BinNotice(status.binCount, onOpenBin, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        }
+        notice?.let { (text, isError) ->
+            item(key = "notice") {
                 Text(
-                    stringResource(R.string.devices_nearby),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                    text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
-            items(status.nearby, key = { "nearby:${it.uid}" }) { device ->
-                ListItem(
-                    leadingContent = { Icon(device.kind.icon, contentDescription = null) },
-                    headlineContent = { Text(device.name) },
-                    supportingContent = {
-                        Text(
-                            device.versionText.ifEmpty {
-                                stringResource(if (device.inOtherGroup) R.string.device_in_other_group else R.string.device_tap_to_pair)
-                            },
-                        )
-                    },
-                    modifier = Modifier.clickable(enabled = !device.inOtherGroup && status.pairing == null, onClickLabel = stringResource(R.string.pair)) {
-                        syncer.pair(device)
-                    },
-                )
+        }
+        // A lost archive this device may replace, once the one-time dialog was shown.
+        status.offer?.takeIf { it.asked }?.let { offer ->
+            item(key = "offer") {
+                ArchiveOfferCard(offer, tablet = twoPanes, onTakeOver = takeOver, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
-            if (status.running && status.onLan && status.nearby.isEmpty() && !status.inGroup) item(key = "looking") {
-                ListItem(
-                    leadingContent = { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) },
-                    headlineContent = { Text(stringResource(R.string.devices_looking)) },
-                    supportingContent = { Text(stringResource(R.string.devices_looking_text)) },
-                )
-            }
+        }
+    }
+    // This device: its name and how it's reached, for its details, then its settings.
+    val self: LazyListScope.() -> Unit = {
+        item(key = "self") {
+            SettingsHeading(selfHeading)
+            val selfWarning = status.self?.warning.orEmpty()
+            ListItem(
+                leadingContent = { Icon(Icons.Smartphone, contentDescription = null) },
+                headlineContent = { Text(status.deviceName) },
+                supportingContent = {
+                    Column {
+                        Text(selfText(status))
+                        if (selfWarning.isNotEmpty()) Text(selfWarning, color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                modifier = Modifier.clickable(onClickLabel = stringResource(R.string.device_details)) { shown = THIS_DEVICE },
+            )
+        }
+        item(key = "profile") {
+            val me = status.self
+            if (me != null) ProfileSection(me, isSelf = true, syncer) else Note(stringResource(R.string.profile_no_group))
+        }
+    }
+    val leave: LazyListScope.() -> Unit = {
+        if (status.inGroup) item(key = "leave") { LeaveGroupRow(status, syncer) }
+    }
 
-            item(key = "actions") {
-                ListItem(
-                    leadingContent = { Icon(Icons.Add, contentDescription = null) },
-                    headlineContent = { Text(stringResource(R.string.add_device_by_address)) },
-                    supportingContent = { Text(stringResource(R.string.add_device_by_address_text)) },
-                    modifier = Modifier.clickable(enabled = status.running && status.pairing == null) { adding = true },
-                )
-                if (status.inGroup) LeaveGroupRow(status, syncer)
+    Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
+        if (twoPanes) {
+            Column(Modifier.fillMaxSize()) {
+                ScreenHeader(stringResource(R.string.sync), onBack)
+                if (status.inGroup) {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    ) {
+                        SyncPillContent(
+                            status, onSyncNow = { syncer.syncNow() }, onCancel = { syncer.cancelSync() },
+                            onDetails = rememberSyncIssues(syncer), nothingToDo = syncer.nothingToDo,
+                        )
+                    }
+                }
+                Row(Modifier.weight(1f)) {
+                    LazyColumn(contentPadding = padding, modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        notices()
+                        self()
+                    }
+                    LazyColumn(contentPadding = padding, modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        item(key = "devices") { SettingsHeading(stringResource(R.string.devices)) }
+                        items(status.members, key = { "member:${it.uid}" }) { device ->
+                            MemberRow(device, status) { shown = device.uid }
+                        }
+                        if (status.members.isEmpty()) item(key = "none") { Note(stringResource(R.string.sync_no_devices_tablet)) }
+                        if (status.nearby.isNotEmpty()) item(key = "nearby") { SettingsHeading(stringResource(R.string.devices_nearby)) }
+                        item(key = "unpaired") {
+                            UnpairedRows(status, syncer, onAdd = { adding = true }, onPair = {}, asked = false)
+                        }
+                        leave()
+                    }
+                }
+            }
+        } else {
+            LazyColumn(contentPadding = padding, modifier = Modifier.fillMaxSize()) {
+                item(key = "header") { ScreenHeader(stringResource(R.string.sync), onBack) }
+                notices()
+                item(key = "devices") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)) { SettingsHeading(stringResource(R.string.devices)) }
+                        IconButton(onClick = { unpaired = true }, enabled = status.running, modifier = Modifier.padding(top = 16.dp, end = 4.dp)) {
+                            Icon(Icons.Add, contentDescription = stringResource(R.string.add_device))
+                        }
+                    }
+                    if (status.members.isEmpty()) {
+                        Note(stringResource(R.string.sync_no_devices))
+                    } else {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            items(status.members, key = { it.uid }) { device ->
+                                MemberCard(device, syncing = device.uid in status.syncing) { shown = device.uid }
+                            }
+                        }
+                    }
+                }
+                self()
+                leave()
             }
         }
     }
 
+    if (unpaired) {
+        AlertDialog(
+            onDismissRequest = { unpaired = false },
+            title = { Text(stringResource(R.string.devices_nearby)) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    UnpairedRows(
+                        status,
+                        syncer,
+                        onAdd = {
+                            unpaired = false
+                            adding = true
+                        },
+                        onPair = { unpaired = false },
+                        asked = true,
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { unpaired = false }) { Text(stringResource(R.string.close)) } },
+        )
+    }
     if (adding) {
         AddDeviceDialog(
             onConnect = { host, port ->
@@ -213,16 +267,71 @@ fun SyncScreen(
             onDismiss = { adding = false },
         )
     }
+    shown?.let { uid -> DeviceDialog(syncer, uid, onDismiss = { shown = null }) }
 }
 
-/** Leave group, which asks first, naming the devices this phone would stop syncing with. */
+/** What [SyncScreen] passes to [DeviceDialog] for this device's own, rather than a member's uid. */
+private const val THIS_DEVICE = ""
+
+/**
+ * The devices on this network that aren't in the group, to pair with ([onPair] after asking),
+ * and Add device by address ([onAdd]). While there are none it says it's looking, outside a
+ * group or when they were asked for ([asked]).
+ */
+@Composable
+private fun UnpairedRows(
+    status: SyncStatus,
+    syncer: Syncer,
+    onAdd: () -> Unit,
+    onPair: () -> Unit,
+    asked: Boolean,
+    colors: ListItemColors = ListItemDefaults.colors(),
+) {
+    Column {
+        for (device in status.nearby) {
+            ListItem(
+                leadingContent = { Icon(device.kind.icon, contentDescription = null) },
+                headlineContent = { Text(device.name) },
+                supportingContent = {
+                    Text(
+                        device.versionText.ifEmpty {
+                            stringResource(if (device.inOtherGroup) R.string.device_in_other_group else R.string.device_tap_to_pair)
+                        },
+                    )
+                },
+                colors = colors,
+                modifier = Modifier.clickable(enabled = !device.inOtherGroup && status.pairing == null, onClickLabel = stringResource(R.string.pair)) {
+                    syncer.pair(device)
+                    onPair()
+                },
+            )
+        }
+        if (status.running && status.onLan && status.nearby.isEmpty() && (asked || !status.inGroup)) {
+            ListItem(
+                leadingContent = { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) },
+                headlineContent = { Text(stringResource(R.string.devices_looking)) },
+                supportingContent = { Text(stringResource(R.string.devices_looking_text)) },
+                colors = colors,
+            )
+        }
+        ListItem(
+            leadingContent = { Icon(Icons.Add, contentDescription = null) },
+            headlineContent = { Text(stringResource(R.string.add_device_by_address)) },
+            supportingContent = { Text(stringResource(R.string.add_device_by_address_text)) },
+            colors = colors,
+            modifier = Modifier.clickable(enabled = status.running && status.pairing == null, onClick = onAdd),
+        )
+    }
+}
+
+/** Leave group, which asks first, naming the devices this one would stop syncing with. */
 @Composable
 private fun LeaveGroupRow(status: SyncStatus, syncer: Syncer) {
     var leaving by rememberSaveable { mutableStateOf(false) }
     ListItem(
         headlineContent = { Text(stringResource(R.string.leave_group), color = MaterialTheme.colorScheme.error) },
         supportingContent = { Text(stringResource(R.string.leave_group_text)) },
-        modifier = Modifier.clickable(enabled = status.running) { leaving = true },
+        modifier = Modifier.padding(top = 16.dp).clickable(enabled = status.running) { leaving = true },
     )
     if (leaving) {
         AlertDialog(
@@ -240,197 +349,150 @@ private fun LeaveGroupRow(status: SyncStatus, syncer: Syncer) {
     }
 }
 
-// A member of the group: tapping it opens its page, and the button beside it syncs with it.
+// A member in the two panes: what it syncs, and whether something's wrong with it or a session runs.
 @Composable
-private fun MemberRow(device: SyncDevice, status: SyncStatus, syncer: Syncer, onOpen: () -> Unit) {
+private fun MemberRow(device: SyncDevice, status: SyncStatus, onOpen: () -> Unit) {
     val syncing = device.uid in status.syncing
-    val syncingLabel = stringResource(R.string.syncing)
-    // While files come in or go out, how many of them.
-    val files = status.sessions[device.uid]?.takeIf { it.moving > 0 }?.let { filesText(it) }
-    // What's wrong with it, in the warning colour, else when it next syncs.
     val warning = device.warning.takeIf { !syncing && it.isNotEmpty() }
-    val note = device.note.takeIf { !syncing && warning == null && it.isNotEmpty() }
-    val text = listOfNotNull(memberText(device, syncing), files, note).joinToString(stringResource(R.string.separator_dot))
     ListItem(
-        leadingContent = { Icon(device.kind.icon, contentDescription = null) },
+        leadingContent = { MemberIcon(device, syncing, warning != null) },
         headlineContent = { Text(device.name) },
         supportingContent = {
             Column(Modifier.semantics { liveRegion = LiveRegionMode.Polite }) {
-                Text(text)
+                Text(status.summaries[device.uid].orEmpty())
                 if (warning != null) Text(warning, color = MaterialTheme.colorScheme.error)
-            }
-        },
-        trailingContent = {
-            if (syncing) {
-                CircularProgressIndicator(
-                    Modifier.size(24.dp).semantics { contentDescription = syncingLabel },
-                    strokeWidth = 2.dp,
-                )
-            } else {
-                IconButton(onClick = { syncer.syncNow(device.uid) }, enabled = status.running) {
-                    Icon(Icons.Sync, contentDescription = stringResource(R.string.sync_now_with, device.name))
-                }
             }
         },
         modifier = Modifier.clickable(onClickLabel = stringResource(R.string.device_details), onClick = onOpen),
     )
 }
 
+// A member on the phone: a card with its icon and name, the archive's in the accent colour.
+@Composable
+private fun MemberCard(device: SyncDevice, syncing: Boolean, onOpen: () -> Unit) {
+    val archive = stringResource(R.string.device_archive_title)
+    Card(
+        onClick = onOpen,
+        colors = if (device.archive) {
+            CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        } else {
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+        },
+        modifier = Modifier.width(120.dp).semantics { if (device.archive) stateDescription = archive },
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            MemberIcon(device, syncing, warning = !syncing && device.warning.isNotEmpty())
+            Text(
+                device.name,
+                style = MaterialTheme.typography.labelLarge,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+// A member's kind, a spinner in its place while a session runs, in the error colour with a [warning].
+@Composable
+private fun MemberIcon(device: SyncDevice, syncing: Boolean, warning: Boolean) {
+    if (syncing) {
+        val syncingLabel = stringResource(R.string.syncing)
+        CircularProgressIndicator(
+            Modifier.size(24.dp).semantics { contentDescription = syncingLabel },
+            strokeWidth = 2.dp,
+        )
+    } else {
+        Icon(
+            device.kind.icon,
+            contentDescription = null,
+            tint = if (warning) MaterialTheme.colorScheme.error else LocalContentColor.current,
+        )
+    }
+}
+
 /**
- * One device's page, opened from [SyncScreen]. [uid] is a member's, or [THIS_DEVICE] for this
- * phone. A member that leaves the group closes the page with [onBack]. [onRename], if given,
- * renames this phone; only a member itself renames it. A member's sync settings show read-only.
- *
- * With [onOpenBin], this phone's page also has the Sync page's group-wide parts, for the tablet
- * layout, which has no Sync page (its sidebar has the sync pill).
+ * A device's sync settings, read-only for a member (only it changes them), and its details:
+ * how it is, its files, where it's reached, and Remove from group, but for the archive (the
+ * core refuses: it holds the originals). For this device ([THIS_DEVICE]), the details only,
+ * with Rename; its settings are on the page. A member that leaves the group closes it.
  */
 @Composable
-fun DeviceScreen(
-    syncer: Syncer,
-    uid: String,
-    bottomPadding: Dp,
-    onBack: () -> Unit,
-    onRename: ((String) -> Unit)? = null,
-    onOpenBin: (() -> Unit)? = null,
-) {
+private fun DeviceDialog(syncer: Syncer, uid: String, onDismiss: () -> Unit) {
     val status by syncer.status.collectAsState()
     val isSelf = uid == THIS_DEVICE
-    // The whole group's part of the Sync page, on this phone's own page, as the desktops have it.
-    val groupActions = isSelf && onOpenBin != null
     val device = status.members.find { it.uid == uid }
-    // Removed here or by another device, or the group was left.
-    val gone = !isSelf && device == null
-    LaunchedEffect(gone) { if (gone) onBack() }
+    LaunchedEffect(isSelf, device == null) { if (!isSelf && device == null) onDismiss() }
     var renaming by rememberSaveable { mutableStateOf(false) }
     var removing by rememberSaveable { mutableStateOf(false) }
-    // This device's own problems, or the member's.
     val member = if (isSelf) status.self else device
     val issuesUid = member?.uid
     val showIssues = rememberSyncIssues(syncer, issuesUid)
     val hasIssues = issuesUid != null && shownIssues(status.problems.issues, issuesUid).isNotEmpty()
-    val takeOver = rememberTakeOver(syncer)
-    // The tablet has no Sync page, so this tablet's page asks about a lost archive.
-    if (groupActions) ArchiveOfferDialog(syncer, tablet = true)
+    if (!isSelf && device == null) return
 
-    Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            contentPadding = pageSides()
-                .add(WindowInsets(bottom = bottomPadding))
-                .asPaddingValues(),
-            modifier = Modifier.fillMaxSize(),
-        ) {
-            item(key = "header") { ScreenHeader(device?.name ?: status.deviceName, onBack) }
-
-            if (status.transcodingOnBattery) item(key = "transcoding") {
-                TranscodingNotice(syncer, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-            }
-
-            if (groupActions && status.binCount > 0) item(key = "bin") {
-                BinNotice(status.binCount, onOpenBin, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-            }
-            if (groupActions) item(key = "notice") {
-                syncNotice(status)?.let { (text, isError) ->
-                    Text(
-                        text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
-                }
-            }
-
-            if (groupActions) status.offer?.takeIf { it.asked }?.let { offer ->
-                item(key = "offer") {
-                    ArchiveOfferCard(offer, tablet = true, onTakeOver = takeOver, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-                }
-            }
-
-            // What's wrong with it (its version, a hold on its side, its reach...), and the details.
-            val warning = member?.warning.orEmpty()
-            if (warning.isNotEmpty() || hasIssues) item(key = "warning") {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    if (warning.isNotEmpty() && warning != device?.versionText) {
-                        Text(warning, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.surface) {
+            LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
+                item(key = "title") {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 24.dp, end = 4.dp, top = 8.dp)) {
+                        Text(device?.name ?: status.deviceName, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                        IconButton(onClick = onDismiss) { Icon(Icons.Clear, contentDescription = stringResource(R.string.close)) }
                     }
-                    if (hasIssues) {
-                        TextButton(onClick = showIssues, modifier = Modifier.align(Alignment.End)) {
-                            Text(stringResource(R.string.sync_issues_details))
+                }
+                // What's wrong with it (its version, a hold on its side, its reach...), and the details.
+                val warning = member?.warning.orEmpty()
+                if (warning.isNotEmpty() || hasIssues) item(key = "warning") {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        if (warning.isNotEmpty()) {
+                            Text(warning, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                        }
+                        if (hasIssues) {
+                            TextButton(onClick = showIssues, modifier = Modifier.align(Alignment.End)) {
+                                Text(stringResource(R.string.sync_issues_details))
+                            }
                         }
                     }
                 }
-            }
-
-            // Its version can't sync with this one's: which device to update, as the notice above.
-            device?.versionText?.takeIf { it.isNotEmpty() }?.let { text ->
-                item(key = "version") {
-                    Text(
-                        text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
-                }
-            }
-
-            item(key = "info") {
-                if (device == null) {
-                    ListItem(
-                        leadingContent = { Icon(Icons.Smartphone, contentDescription = null) },
-                        headlineContent = { Text(stringResource(R.string.this_phone)) },
-                        supportingContent = { Text(stringResource(if (status.inGroup) R.string.this_phone_in_group else R.string.this_phone_alone)) },
-                    )
-                    InfoRow(stringResource(R.string.device_address), addressText(status.address?.takeIf { status.running }, status.port))
-                    status.self?.reachText?.takeIf { it.isNotEmpty() }?.let { InfoRow(stringResource(R.string.device_reach), it) }
-                    status.self?.let { FilesRows(it) }
-                    // This phone's sessions with any member.
-                    status.sessions.forEach { (memberUid, progress) ->
-                        val name = status.members.find { it.uid == memberUid }?.name ?: stringResource(R.string.sync_other_device)
-                        SessionRow(progress, stringResource(R.string.sync_notification_syncing_with, name))
-                    }
-                    if (onRename != null) {
+                item(key = "info") {
+                    if (device == null) {
+                        InfoRow(stringResource(R.string.device_address), addressText(status.address?.takeIf { status.running }, status.port))
+                        status.self?.reachText?.takeIf { it.isNotEmpty() }?.let { InfoRow(stringResource(R.string.device_reach), it) }
+                        status.self?.let { FilesRows(it) }
+                        // This device's sessions with any member.
+                        status.sessions.forEach { (memberUid, progress) ->
+                            val name = status.members.find { it.uid == memberUid }?.name ?: stringResource(R.string.sync_other_device)
+                            SessionRow(progress, stringResource(R.string.sync_notification_syncing_with, name))
+                        }
                         ListItem(
                             headlineContent = { Text(stringResource(R.string.rename)) },
                             supportingContent = { Text(status.deviceName) },
                             modifier = Modifier.clickable(enabled = status.running) { renaming = true },
                         )
+                    } else {
+                        val syncing = device.uid in status.syncing
+                        InfoRow(stringResource(R.string.device_status), memberText(device, syncing))
+                        status.sessions[device.uid]?.let { SessionRow(it, null) }
+                        if (!syncing) status.results[device.uid]?.let { InfoRow(stringResource(R.string.device_last_session), resultText(it)) }
+                        if (!syncing && device.note.isNotEmpty()) InfoRow(stringResource(R.string.device_next_sync), device.note)
+                        if (device.reachText.isNotEmpty()) InfoRow(stringResource(R.string.device_reach), device.reachText)
+                        FilesRows(device)
+                        InfoRow(stringResource(R.string.device_address), addressText(device.address, device.port))
                     }
-                    if (groupActions && status.inGroup) LeaveGroupRow(status, syncer)
-                } else {
-                    val syncing = device.uid in status.syncing
-                    ListItem(
-                        leadingContent = { Icon(device.kind.icon, contentDescription = null) },
-                        headlineContent = { Text(stringResource(R.string.device_status)) },
-                        supportingContent = {
-                            Text(
-                                when {
-                                    syncing -> stringResource(R.string.syncing)
-                                    device.online -> stringResource(R.string.device_online)
-                                    else -> stringResource(R.string.device_status_offline)
-                                },
-                                Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                            )
-                        },
-                    )
-                    status.sessions[device.uid]?.let { SessionRow(it, null) }
-                    InfoRow(stringResource(R.string.device_last_synced), lastSyncText(device.lastSyncMs))
-                    if (!syncing) status.results[device.uid]?.let { InfoRow(stringResource(R.string.device_last_session), resultText(it)) }
-                    if (!syncing && device.note.isNotEmpty()) InfoRow(stringResource(R.string.device_next_sync), device.note)
-                    if (device.reachText.isNotEmpty()) InfoRow(stringResource(R.string.device_reach), device.reachText)
-                    FilesRows(device)
-                    InfoRow(stringResource(R.string.device_address), addressText(device.address, device.port))
-                    if (device.archive) InfoRow(stringResource(R.string.device_archive_title), stringResource(R.string.device_archive_text))
-
-                    ListItem(
-                        leadingContent = {
-                            if (syncing) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                            else Icon(Icons.Sync, contentDescription = null)
-                        },
-                        headlineContent = { Text(stringResource(if (syncing) R.string.syncing else R.string.sync_now)) },
-                        trailingContent = { if (syncing) CancelSyncButton { syncer.cancelSync(device.uid) } },
-                        modifier = Modifier.clickable(enabled = status.running && !syncing) { syncer.syncNow(device.uid) },
-                    )
-                    // The group's archive can't be removed (the core refuses): it holds the originals.
-                    if (!device.archive) {
+                }
+                if (device != null) {
+                    item(key = "profile") {
+                        SettingsHeading(stringResource(R.string.device_profile))
+                        ProfileSection(device, isSelf = false, syncer)
+                    }
+                    if (!device.archive) item(key = "remove") {
                         ListItem(
                             headlineContent = { Text(stringResource(R.string.remove_from_group), color = MaterialTheme.colorScheme.error) },
                             modifier = Modifier.clickable(enabled = status.running) { removing = true },
@@ -438,31 +500,16 @@ fun DeviceScreen(
                     }
                 }
             }
-
-            // This phone's own are on the Sync page, but for the tablet layout, which has none.
-            if (!isSelf || groupActions) item(key = "profile") {
-                SettingsHeading(stringResource(R.string.device_profile))
-                if (member != null) {
-                    ProfileSection(member, isSelf, syncer)
-                } else {
-                    Text(
-                        stringResource(R.string.profile_no_group),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    )
-                }
-            }
         }
     }
 
-    if (renaming && device == null && onRename != null) {
+    if (renaming && isSelf) {
         RenameDialog(
             stringResource(R.string.rename_this_phone),
             status.deviceName,
             onRename = { name ->
                 renaming = false
-                onRename(name)
+                syncer.rename(name)
             },
             onDismiss = { renaming = false },
         )
@@ -481,6 +528,17 @@ fun DeviceScreen(
             dismissButton = { TextButton(onClick = { removing = false }) { Text(stringResource(R.string.cancel)) } },
         )
     }
+}
+
+// A line of explanation in place of what isn't there.
+@Composable
+private fun Note(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+    )
 }
 
 // The device's own report of its files: how many of those it should hold are there and
@@ -568,12 +626,6 @@ private fun resultText(result: CoreSync.Event.SyncDone): String = when {
         result.filesMissing.takeIf { it > 0 }?.let { stringResource(R.string.files_missing, it.toString()) },
         result.filesCorrupt.takeIf { it > 0 }?.let { stringResource(R.string.files_damaged, it.toString()) },
     ).joinToString(stringResource(R.string.separator_dot))
-}
-
-// Beside "Syncing…": ends the session (see [Syncer.cancelSync]).
-@Composable
-private fun CancelSyncButton(onClick: () -> Unit) {
-    TextButton(onClick = onClick) { Text(stringResource(R.string.cancel_sync)) }
 }
 
 @Composable

@@ -230,7 +230,7 @@ private fun Rail(
         RailItem(
             R.string.sync,
             Icons.Sync,
-            page == Page.Sync || page is Page.Device,
+            page == Page.Sync,
             badge = binDot || offerDot,
             badgeDescription = stringResource(if (binDot) R.string.sync_bin_waiting else R.string.sync_offer_title_tablet),
         ) { onPage(Page.Sync) }
@@ -272,8 +272,8 @@ private fun RailItem(
 
 /**
  * The rail's menu: what the sidebar has beneath its divider but Settings. Import's choices take
- * the menu's place, with a way back, and while an import runs Import has a spinner, as in the
- * phone's main menu.
+ * the menu's place, with a way back, and while an import runs Import has a spinner, as the
+ * phone's + Import does.
  */
 @Composable
 private fun RailMenu(importPickers: ImportPickers, importRunning: Boolean, onStats: () -> Unit) {

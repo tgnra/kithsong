@@ -1232,6 +1232,22 @@ JNI_FN(jobject, CoreSync, nativeOutlook, jlong handle) {
   return out;
 }
 
+/* mc_sync_get_last_activity(), as a SyncActivity with mc_sync_activity_text(). */
+JNI_FN(jobject, CoreSync, nativeLastActivity, jlong handle) {
+  jclass info;
+  jmethodID ctor = jni_ctor(env, JNI_CLASS("SyncActivity"), "(JIII" J_STRING ")V", &info);
+  if (!ctor) return NULL;
+  mc_sync_activity a;
+  JNI_CHECK(mc_sync_get_last_activity(sync_of(handle), &a), NULL);
+  char text[192];
+  mc_sync_activity_text(&a, text, sizeof text);
+  jstring jtext = new_string(env, text);
+  jobject out = (*env)->NewObject(env, info, ctor, (jlong)a.when_ms, (jint)a.received, (jint)a.sent,
+                                  (jint)a.deleted, jtext);
+  JNI_DELETE(jtext);
+  return out;
+}
+
 /* The mc_sync_lib_state. */
 JNI_FN(jint, CoreSync, nativeLibraryState, jlong handle) {
   mc_sync_lib_state state = MC_SYNC_LIBRARY_NO_GROUP;
@@ -1496,6 +1512,17 @@ JNI_FN(jobject, CoreSync, nativeGetProfile, jlong handle, jstring uid) {
   }
   mc_sync_profile_free(p);
   return out;
+}
+
+/* mc_sync_profile_summary() of device_uid's profile: "3 albums and 2 playlists". */
+JNI_FN(jstring, CoreSync, nativeProfileSummary, jlong handle, jstring uid) {
+  JNI_STR(cuid, uid, NULL);
+  mc_sync_profile *p = NULL;
+  JNI_CHECK(mc_sync_get_profile(sync_of(handle), cuid, &p), NULL);
+  char text[256];
+  mc_sync_profile_summary(p, text, sizeof text);
+  mc_sync_profile_free(p);
+  return new_string(env, text);
 }
 
 /* Stores device_uid's profile. There's no archive argument: mc_sync_set_profile() ignores it. */

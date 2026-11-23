@@ -64,6 +64,14 @@
       "cacheVariables": { "KITHSONG_CODEVIEW": "ON" }
     },
     {
+      "name": "windows-x64-cross",
+      "displayName": "Windows x64 from Linux (llvm-mingw, tests under Wine)",
+      "inherits": "base",
+      "generator": "Ninja",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-windows-x64.cmake",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    {
       "name": "linux-gtk",
       "displayName": "Linux (GTK4)",
       "inherits": "base",
@@ -87,6 +95,7 @@
     { "name": "windows-arm64", "configurePreset": "windows-arm64", "jobs": 8 },
     { "name": "windows-arm64-release", "configurePreset": "windows-arm64-release", "jobs": 8 },
     { "name": "windows-arm64-vs", "configurePreset": "windows-arm64-vs", "jobs": 8 },
+    { "name": "windows-x64-cross", "configurePreset": "windows-x64-cross" },
     { "name": "linux-gtk", "configurePreset": "linux-gtk" },
     { "name": "linux-gtk-release", "configurePreset": "linux-gtk-release" }
   ],
@@ -98,6 +107,7 @@
     { "name": "windows-arm64", "inherits": "test", "configurePreset": "windows-arm64" },
     { "name": "windows-arm64-release", "inherits": "test", "configurePreset": "windows-arm64-release" },
     { "name": "windows-arm64-vs", "inherits": "test", "configurePreset": "windows-arm64-vs" },
+    { "name": "windows-x64-cross", "inherits": "test", "configurePreset": "windows-x64-cross" },
     { "name": "linux-gtk", "inherits": "test", "configurePreset": "linux-gtk" },
     { "name": "linux-gtk-release", "inherits": "test", "configurePreset": "linux-gtk-release" }
   ],

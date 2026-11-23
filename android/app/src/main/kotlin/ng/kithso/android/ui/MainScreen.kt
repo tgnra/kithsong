@@ -299,8 +299,8 @@ private val AlbumLabelsHeight = 58.dp
  * The main screen: one lazy list of a header and the library's sections, over a background
  * coloured from the art on screen. [bottomPadding] keeps the last items clear of the mini
  * player and navigation bar. [banner], if any, goes under the header: how an import is going.
- * The header's menu and the empty library's button open [importPickers], and what's picked joins an
- * import that's [importRunning]. With [onNewList], the Playlists and Album groups headings have a +
+ * The Recents heading's + Import and the empty library's button open [importPickers], and what's
+ * picked joins an import that's [importRunning]. The header has Sync, in the search field, and Settings. With [onNewList], the Playlists and Album groups headings have a +
  * for a new playlist or (with true) album group.
  *
  * Search is in the header: typing there slides the library down and away and shows [source]'s
@@ -319,7 +319,6 @@ fun MainScreen(
     onTrackMenu: (FoundTrack) -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
-    onStats: () -> Unit,
     importPickers: ImportPickers,
     importRunning: Boolean,
     banner: (@Composable (Modifier) -> Unit)?,
@@ -334,11 +333,10 @@ fun MainScreen(
     onArtistMenu: (Artist) -> Unit = {},
     onAlbumGroupMenu: (AlbumGroup) -> Unit = {},
     onNewList: ((isAlbums: Boolean) -> Unit)? = null,
-    // A red dot on the header's menu and its Sync: deletes wait in the recycle bin while a member is online.
+    // A red dot on the header's Sync: deletes wait in the recycle bin while a member is online.
     syncDot: Boolean = false,
-    // The sections' order, from the Customise page the header's menu opens with [onCustomise].
+    // The sections' order, from the Customise page.
     sectionOrder: List<Section> = Section.entries,
-    onCustomise: () -> Unit = {},
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -442,12 +440,8 @@ fun MainScreen(
                         onFocusTaken = { focusWanted = false },
                         focused = focused,
                         onFocusChange = { focused = it },
-                        onCustomise = onCustomise,
                         onSync = onSync,
                         onSettings = onSettings,
-                        onStats = onStats,
-                        importPickers = importPickers,
-                        importRunning = importRunning,
                         syncDot = syncDot,
                     )
                     return@items
@@ -467,6 +461,8 @@ fun MainScreen(
                         sections,
                         { current },
                         jumpTo,
+                        importPickers = importPickers.takeIf { item.section == Section.Recents },
+                        importRunning = importRunning,
                         onNew = onNewList?.let { new ->
                             when (item.section) {
                                 Section.Playlists -> ({ new(false) })
@@ -582,7 +578,8 @@ fun MainScreen(
 private const val LIBRARY_SLIDE = 0.25f
 
 /**
- * The logo, the search field with the name in it, and the menu. It scrolls away with the list.
+ * The logo, the search field with the name in it and Sync at its end, and Settings. It scrolls
+ * away with the list.
  * [focusWanted] focuses the field, and [onFocusTaken] says so.
  */
 @Composable
@@ -594,12 +591,8 @@ private fun Header(
     onFocusTaken: () -> Unit,
     focused: Boolean,
     onFocusChange: (Boolean) -> Unit,
-    onCustomise: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
-    onStats: () -> Unit,
-    importPickers: ImportPickers,
-    importRunning: Boolean,
     syncDot: Boolean,
 ) {
     Row(
@@ -617,16 +610,19 @@ private fun Header(
             modifier = Modifier.offset(x = (-4).dp).semantics { heading() },
         )
         HeaderSearchField(
-            query, onQueryChange, onClear, focusWanted, onFocusTaken, focused, onFocusChange,
+            query, onQueryChange, onClear, focusWanted, onFocusTaken, focused, onFocusChange, onSync, syncDot,
             Modifier.weight(1f),
         )
-        HeaderMenu(onCustomise, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
+        IconButton(onClick = onSettings) {
+            Icon(Icons.Settings, contentDescription = stringResource(R.string.settings))
+        }
     }
 }
 
 /**
  * The header's search field, in Material's search bar's shape and colour. The name stands in
- * for the placeholder until it's focused; screen readers hear Search.
+ * for the placeholder until it's focused; screen readers hear Search. At its end, Sync ([onSync],
+ * with a dot for [syncDot]), or Clear once something's typed.
  */
 @Composable
 private fun HeaderSearchField(
@@ -637,6 +633,8 @@ private fun HeaderSearchField(
     onFocusTaken: () -> Unit,
     focused: Boolean,
     onFocusChange: (Boolean) -> Unit,
+    onSync: () -> Unit,
+    syncDot: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val focus = remember { FocusRequester() }
@@ -695,103 +693,15 @@ private fun HeaderSearchField(
                 IconButton(onClick = onClear) {
                     Icon(Icons.Clear, contentDescription = stringResource(R.string.clear))
                 }
-            }
-        }
-    }
-}
-
-/**
- * The header's menu. [syncDot] shows on the button, to be seen with the menu closed, and on Sync
- * inside it. Import's choices take the menu's place, with a way back. While an import runs,
- * Import has a spinner and says so instead of offering choices it couldn't take, as the card
- * under the header shows how it's going.
- */
-@Composable
-private fun HeaderMenu(
-    onCustomise: () -> Unit,
-    onSync: () -> Unit,
-    onSettings: () -> Unit,
-    onStats: () -> Unit,
-    importPickers: ImportPickers,
-    importRunning: Boolean,
-    syncDot: Boolean,
-) {
-    var open by remember { mutableStateOf(false) }
-    var importing by remember { mutableStateOf(false) }
-    val pick: (() -> Unit) -> () -> Unit = { action ->
-        {
-            open = false
-            action()
-        }
-    }
-    Box {
-        IconButton(
-            onClick = {
-                // Here rather than on closing, or the rows would change as the menu fades out.
-                importing = false
-                open = true
-            },
-        ) {
-            BadgedBox(badge = { if (syncDot) Badge() }) {
-                Icon(
-                    Icons.MoreHoriz,
-                    contentDescription = stringResource(if (syncDot) R.string.main_menu_sync_waiting else R.string.main_menu),
-                )
-            }
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            if (importing) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.back)) },
-                    leadingIcon = { Icon(Icons.ArrowBack, contentDescription = null) },
-                    onClick = { importing = false },
-                )
-                ImportChoices(importPickers, onDismiss = { open = false })
             } else {
-                val runningText = stringResource(R.string.import_running_title)
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            stringResource(R.string.import_music),
-                            Modifier.semantics { if (importRunning) contentDescription = runningText },
+                IconButton(onClick = onSync) {
+                    BadgedBox(badge = { if (syncDot) Badge() }) {
+                        Icon(
+                            Icons.Sync,
+                            contentDescription = stringResource(if (syncDot) R.string.sync_bin_waiting else R.string.sync),
                         )
-                    },
-                    leadingIcon = { Icon(Icons.Import, contentDescription = null) },
-                    trailingIcon = if (importRunning) {
-                        { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
-                    } else {
-                        null
-                    },
-                    onClick = { importing = true },
-                )
-                val waitingText = stringResource(R.string.sync_bin_waiting)
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            stringResource(R.string.sync),
-                            Modifier.semantics { if (syncDot) contentDescription = waitingText },
-                        )
-                    },
-                    leadingIcon = {
-                        BadgedBox(badge = { if (syncDot) Badge() }) { Icon(Icons.Sync, contentDescription = null) }
-                    },
-                    onClick = pick(onSync),
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.stats_title)) },
-                    leadingIcon = { Icon(Icons.BarChart, contentDescription = null) },
-                    onClick = pick(onStats),
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.customise)) },
-                    leadingIcon = { Icon(Icons.Tune, contentDescription = null) },
-                    onClick = pick(onCustomise),
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.settings)) },
-                    leadingIcon = { Icon(Icons.Settings, contentDescription = null) },
-                    onClick = pick(onSettings),
-                )
+                    }
+                }
             }
         }
     }
@@ -802,7 +712,8 @@ private fun HeaderMenu(
  * section, and picking one scrolls there; [current] is the section at the top of the screen,
  * marked in the list. TalkBack gets the tap, and a jump to each other section as a custom action.
  * With [onNew], a + at the end, clear of the fast scroll strip, makes a new playlist or album
- * group.
+ * group; with [importPickers], + Import there opens their choices, or shows a spinner while an
+ * import is [importRunning] (the card under the header shows how it's going).
  */
 @Composable
 private fun SectionHeading(
@@ -811,8 +722,11 @@ private fun SectionHeading(
     current: () -> Section?,
     onJump: (Int) -> Unit,
     onNew: (() -> Unit)? = null,
+    importPickers: ImportPickers? = null,
+    importRunning: Boolean = false,
 ) {
     var open by remember { mutableStateOf(false) }
+    val runningText = stringResource(R.string.import_running_title)
     val jumpLabel = stringResource(R.string.jump_to_section)
     val jumpActions = sections.filter { it.section != section }.map { start ->
         val label = stringResource(R.string.jump_to_named_section, stringResource(start.section.title))
@@ -844,6 +758,23 @@ private fun SectionHeading(
                         if (section == Section.AlbumGroups) R.string.new_album_group_menu else R.string.new_playlist_menu,
                     ),
                 )
+            }
+        }
+        if (importPickers != null) {
+            var importing by remember { mutableStateOf(false) }
+            Box(Modifier.align(Alignment.CenterEnd).padding(end = FastScrollInset)) {
+                if (importRunning) {
+                    CircularProgressIndicator(
+                        Modifier.padding(12.dp).size(24.dp).semantics { contentDescription = runningText },
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    TextButton(onClick = { importing = true }) {
+                        Icon(Icons.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text(stringResource(R.string.import_music), modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
+                ImportMenu(importing, importPickers, onDismiss = { importing = false })
             }
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, offset = DpOffset(Gutter - 8.dp, 0.dp)) {

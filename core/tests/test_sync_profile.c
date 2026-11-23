@@ -414,10 +414,54 @@ static mc_sync_profile selection(mc_profile_item *items, int count) {
   return p;
 }
 
+/* mc_sync_profile_summary() and mc_sync_activity_text(), which need no sync. */
+static void test_summaries(void) {
+  char text[256];
+  mc_profile_item items[4] = {{MC_PROFILE_ALBUM, ""}, {MC_PROFILE_PLAYLIST, ""}, {MC_PROFILE_ALBUM, ""},
+                              {MC_PROFILE_ARTIST, ""}};
+  mc_sync_profile p = {0};
+  p.format.format = MC_FORMAT_ORIGINAL;
+  mc_sync_profile_summary(&p, text, sizeof text);
+  CHECK_TEXT(text, "Nothing chosen yet");
+  p.items = items;
+  p.count = 2;
+  mc_sync_profile_summary(&p, text, sizeof text);
+  CHECK_TEXT(text, "1 album and 1 playlist");
+  p.count = 4;
+  mc_sync_profile_summary(&p, text, sizeof text);
+  CHECK_TEXT(text, "2 albums, 1 artist and 1 playlist");
+  p.budget_enabled = 1;
+  mc_sync_profile_summary(&p, text, sizeof text);
+  CHECK_TEXT(text, "2 albums, 1 artist and 1 playlist at a lower quality");
+  p.sync_all = 1;
+  mc_sync_profile_summary(&p, text, sizeof text);
+  CHECK_TEXT(text, "Whole library at a lower quality");
+  p.budget_enabled = 0;
+  mc_sync_profile_summary(&p, text, sizeof text);
+  CHECK_TEXT(text, "Whole library");
+  p.archive = 1;
+  mc_sync_profile_summary(&p, text, sizeof text);
+  CHECK_TEXT(text, "Archive device");
+
+  mc_sync_activity a = {0};
+  CHECK(mc_sync_activity_text(&a, text, sizeof text) == 0 && !text[0]);
+  a.when_ms = 1;
+  a.sent = 4;
+  a.received = 100;
+  a.deleted = 10;
+  mc_sync_activity_text(&a, text, sizeof text);
+  CHECK_TEXT(text, "Last sync: \xe2\x86\x91 4 \xc2\xb7 \xe2\x86\x93 100 \xc2\xb7 10 deleted");
+  a.sent = a.received = 0;
+  a.deleted = 1;
+  mc_sync_activity_text(&a, text, sizeof text);
+  CHECK_TEXT(text, "Last sync: 1 deleted");
+}
+
 int main(int argc, char **argv) {
   const char *scratch = argc > 1 ? argv[1] : ".";
   CHECK(mc_init() == MC_OK);
   mc_sync_profile_free(NULL); /* NULL is a no-op */
+  test_summaries();
   char root[1024];
   snprintf(root, sizeof root, "%s/test_sync_profile.d", scratch);
   remove_tree(root);

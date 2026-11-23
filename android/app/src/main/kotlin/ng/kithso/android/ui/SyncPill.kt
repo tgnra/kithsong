@@ -26,6 +26,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -53,6 +54,8 @@ import ng.kithso.android.sync.SyncStatus
 import ng.kithso.android.sync.Syncer
 import ng.kithso.core.CoreSync
 import ng.kithso.core.SyncOutlook
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 
 /** What the sync pill shows, worked out from [SyncStatus] alone. */
@@ -65,7 +68,9 @@ sealed interface PillState {
      * missing ("Finished, but 3 tracks are still missing"), shown in the summary's place with
      * Details; "" otherwise. [reason]: why nothing is syncing, under the summary; null for none.
      * [upToDate]: nothing's wrong and there's nothing to copy either way, nor deletes waiting to
-     * go, so a press finds nothing to do (and shakes the pill, though it still asks).
+     * go, so the summary is what the last sync did, [activity] ("Last sync: ↑ 4 · ↓ 100"), if
+     * it's known. A press still asks: playlists and plays aren't in the outlook, and the pill
+     * shakes only once the sessions have found nothing to do ([Syncer.nothingToDo]).
      */
     data class Idle(
         val outlook: SyncOutlook?,
@@ -75,12 +80,10 @@ sealed interface PillState {
         val finished: String = "",
         val reason: PillReason? = null,
         val upToDate: Boolean = false,
+        val activity: String = "",
     ) : PillState {
-        /**
-         * Sync now can't get anywhere, or has nothing to do: a press shakes the pill (and still
-         * asks, if it can, for what the outlook doesn't count, such as playlists and plays).
-         */
-        val blocked: Boolean get() = !canSync || reason?.blocking == true || upToDate
+        /** Sync now can't get anywhere: a press shakes the pill at once (and still asks, if it can). */
+        val blocked: Boolean get() = !canSync || reason?.blocking == true
     }
 
     /**
@@ -149,6 +152,7 @@ fun pillState(status: SyncStatus): PillState {
             reason = reason,
             upToDate = status.running && status.inGroup && !status.needsChoice && reason == null &&
                 status.outlook?.upToDate == true && status.binCount == 0 && status.finished.isEmpty(),
+            activity = status.activity.text,
         )
     }
     val moving = sessions.sumOf { it.moving }
@@ -180,7 +184,7 @@ fun pillPace(sessions: Collection<SyncProgress>): String = sessions.singleOrNull
  *
  * Sync now always answers a press: its icon turns once when the press goes ahead, and the
  * pill shakes when it can't get anywhere (sync off, not on Wi-Fi, no device online), with
- * why under the summary, or when there's nothing to do (up to date).
+ * why under the summary, or once the sessions it started found nothing to do ([nothingToDo]).
  */
 @Composable
 fun SyncPillContent(
@@ -189,27 +193,32 @@ fun SyncPillContent(
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
     onDetails: (() -> Unit)? = null,
+    nothingToDo: Flow<Unit> = emptyFlow(),
 ) {
     val state = pillState(status)
     val shake = remember { Animatable(0f) }
     val spin = remember { Animatable(0f) }
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
+    val shakeNow: () -> Unit = {
+        haptics.performHapticFeedback(HapticFeedbackType.Reject)
+        scope.launch {
+            shake.animateTo(0f, keyframes {
+                durationMillis = 400
+                -10f at 50
+                10f at 120
+                -7f at 190
+                7f at 260
+                -3f at 330
+            })
+        }
+    }
+    LaunchedEffect(nothingToDo) { nothingToDo.collect { shakeNow() } }
     val press: () -> Unit = press@{
         val idle = state as? PillState.Idle ?: return@press
         if (idle.canSync) onSyncNow()
         if (idle.blocked) {
-            haptics.performHapticFeedback(HapticFeedbackType.Reject)
-            scope.launch {
-                shake.animateTo(0f, keyframes {
-                    durationMillis = 400
-                    -10f at 50
-                    10f at 120
-                    -7f at 190
-                    7f at 260
-                    -3f at 330
-                })
-            }
+            shakeNow()
         } else {
             scope.launch {
                 spin.snapTo(0f)
@@ -250,7 +259,10 @@ fun SyncPillContent(
 fun SyncPill(syncer: Syncer, modifier: Modifier = Modifier) {
     val status by syncer.status.collectAsState()
     val showIssues = rememberSyncIssues(syncer)
-    SyncPillContent(status, onSyncNow = { syncer.syncNow() }, onCancel = { syncer.cancelSync() }, modifier, onDetails = showIssues)
+    SyncPillContent(
+        status, onSyncNow = { syncer.syncNow() }, onCancel = { syncer.cancelSync() }, modifier,
+        onDetails = showIssues, nothingToDo = syncer.nothingToDo,
+    )
 }
 
 @Composable
@@ -259,6 +271,7 @@ private fun IdleSummary(state: PillState.Idle, onDetails: (() -> Unit)?) {
         !state.running -> stringResource(R.string.sync_is_off)
         state.needsChoice -> stringResource(R.string.sync_pill_choose)
         state.finished.isNotEmpty() -> state.finished
+        state.upToDate && state.activity.isNotEmpty() -> state.activity
         else -> state.outlook?.text.orEmpty()
     }
     val reason = state.reason?.let { reasonText(it) }

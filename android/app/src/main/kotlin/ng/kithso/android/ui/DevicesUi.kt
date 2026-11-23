@@ -100,14 +100,14 @@ fun AddDeviceDialog(onConnect: (host: String, port: Int) -> Unit, onDismiss: () 
 }
 
 /**
- * [PairingDialog] for the pairing under way, if any. [onChooseWhatToSync] opens a device's page
- * (a member's uid, or [THIS_DEVICE]) after pairing, to choose its sync settings.
+ * [PairingDialog] for the pairing under way, if any. [onChooseWhatToSync] opens the Sync page
+ * after pairing, to choose this phone's sync settings.
  */
 @Composable
 fun PairingDialogs(
     syncer: Syncer,
     settings: AppSettings,
-    onChooseWhatToSync: (String) -> Unit,
+    onChooseWhatToSync: () -> Unit,
 ) {
     val pairing = syncer.status.collectAsState().value.pairing ?: return
     PairingDialog(pairing, syncer, settings, onChooseWhatToSync)
@@ -117,7 +117,7 @@ fun PairingDialogs(
  * Pairing, wherever the app is: the code another device asked for, to type in there; the code
  * this phone asked a device for, to type in here; and how it ended. Once paired, nothing
  * syncs until the device that joined has its sync settings chosen, so Choose What to Sync
- * opens its page. The first time this phone joins a group, it also says which device is the
+ * opens the Sync page. The first time this phone joins a group, it also says which device is the
  * archive. Two libraries with music are never mixed: such a pairing is refused, and says so.
  */
 @Composable
@@ -125,7 +125,7 @@ private fun PairingDialog(
     pairing: Pairing,
     syncer: Syncer,
     settings: AppSettings,
-    onChooseWhatToSync: (String) -> Unit,
+    onChooseWhatToSync: () -> Unit,
 ) {
     when (pairing) {
         is Pairing.ShowCode -> {
@@ -207,7 +207,7 @@ private fun PairingDialog(
         is Pairing.Ended -> {
             val paired = pairing.reason == CoreSync.PairReason.Paired
             // This phone's sync settings, to choose, when it joined: only a device chooses its own.
-            val choose = if (paired && pairing.joined) THIS_DEVICE else null
+            val choose = paired && pairing.joined
             // Which device is the archive, once: decided when the dialog first shows, and
             // kept while it does.
             val explain = rememberSaveable(pairing) {
@@ -224,16 +224,16 @@ private fun PairingDialog(
                     }
                 },
                 confirmButton = {
-                    if (choose != null) {
+                    if (choose) {
                         TextButton(onClick = {
                             syncer.dismissPairing()
-                            onChooseWhatToSync(choose)
+                            onChooseWhatToSync()
                         }) { Text(stringResource(R.string.choose_what_to_sync)) }
                     } else {
                         TextButton(onClick = syncer::dismissPairing) { Text(stringResource(R.string.ok)) }
                     }
                 },
-                dismissButton = if (choose != null) {
+                dismissButton = if (choose) {
                     { TextButton(onClick = syncer::dismissPairing) { Text(stringResource(R.string.ok)) } }
                 } else {
                     null

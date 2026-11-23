@@ -28,7 +28,7 @@ typedef struct app {
   char *art_dir;        /* settings_dir/playlist-art: playlists' and album groups' pictures, see
                          * mc_playlist_art() */
   GtkStack *pages;      /* "library": the album grids and track list | "home" | "artists"
-                         * | "search" | "import" | "device" */
+                         * | "search" | "import" | "sync" */
   GtkWidget *import;    /* the import page, import_view.c */
   GtkWidget *search;    /* the search page, search_view.c */
   GtkWidget *artists;   /* the Artists page, artist_view.c */
@@ -37,6 +37,8 @@ typedef struct app {
   GtkListBox *top_nav;  /* the sidebar's Home and Search, above nav */
   GtkListBox *nav;      /* the sidebar's Albums, Artists, Playlists and Album groups */
   /* The rows pinned below it: */
+  GtkWidget *sync_row;
+  GtkWidget *sync_warning; /* on sync_row: something's wrong with this computer (devices.h) */
   GtkWidget *import_row;
   GtkWidget *stats_row;
   GtkWidget *settings;

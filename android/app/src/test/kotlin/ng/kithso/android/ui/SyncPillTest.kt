@@ -4,6 +4,7 @@ import ng.kithso.android.sync.SyncProgress
 import ng.kithso.android.sync.SyncStatus
 import ng.kithso.core.CoreSync
 import ng.kithso.core.DeviceKind
+import ng.kithso.core.SyncActivity
 import ng.kithso.core.SyncDevice
 import ng.kithso.core.SyncOutlook
 import org.junit.Assert.assertEquals
@@ -64,11 +65,12 @@ class SyncPillTest {
     }
 
     @Test
-    fun upToDateShakesButStillAsks() {
-        val state = pillState(group) as PillState.Idle
+    fun upToDateGoesAheadAndShowsTheLastSync() {
+        val state = pillState(group.copy(activity = SyncActivity(1, 100, 4, 0, "Last sync: ↑ 4 · ↓ 100"))) as PillState.Idle
         assertTrue(state.upToDate)
-        assertTrue(state.blocked)
+        assertFalse(state.blocked) // it shakes only once the sessions found nothing to do
         assertTrue(state.canSync) // playlists and plays aren't in the outlook
+        assertEquals("Last sync: ↑ 4 · ↓ 100", state.activity)
     }
 
     @Test

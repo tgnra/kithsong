@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
 
 /**
- * The phone's Customise page, from its main menu: the main screen's sections, to drag into the
+ * The phone's Customise page, from the top of Settings: the main screen's sections, to drag into the
  * order it shows them in. [onOrder] has each new order, once a drag is let go or a section is
  * moved by an accessibility action.
  */

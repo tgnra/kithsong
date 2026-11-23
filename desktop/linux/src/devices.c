@@ -3,26 +3,22 @@
 #include <string.h>
 
 #include "add_device.h"
-#include "device_view.h"
 #include "issue_dialog.h"
 #include "pair_dialog.h"
 #include "playback.h"
 #include "settings_view.h"
 #include "sync_bridge.h"
+#include "sync_view.h"
 
 enum {
   REFRESH_DEVICES_MS = 200, /* after sync events, once for a burst */
   NETWORK_CHANGED_MS = 1000, /* after the network changes, once for a burst */
   REFRESH_LIBRARY_MS = 500, /* after library rows or files arrive, once for a burst */
   POLL_DEVICES_S = 10,      /* renames elsewhere fire no event */
-  MAX_SYNCING = 16,         /* devices marked as syncing at once */
 };
 
 static struct {
   app *a;
-  GtkWidget *paired, *nearby, *nearby_heading, *none;
-  char selected[MC_UID_STRLEN]; /* the device whose page is picked; "" if none */
-  char syncing[MAX_SYNCING][MC_UID_STRLEN]; /* devices with a session in progress */
   guint refresh_source, library_source, poll_source, network_source;
   gulong network_handler; /* on g_network_monitor_get_default(), while sync runs */
   devices_state state; /* as of the last refresh */
@@ -43,28 +39,6 @@ static void alert(const char *heading, const char *body) {
 /* "address:port", with an IPv6 address in brackets; g_free it. */
 static char *format_address(const char *host, unsigned port) {
   return g_strdup_printf(strchr(host, ':') ? "[%s]:%u" : "%s:%u", host, port);
-}
-
-static int syncing_slot(const char *uid) {
-  for (int i = 0; i < MAX_SYNCING; i++)
-    if (d.syncing[i][0] && !strcmp(d.syncing[i], uid)) return i;
-  return -1;
-}
-
-/* Marks uid as syncing or not; TRUE if that changed. */
-static gboolean set_syncing(const char *uid, gboolean syncing) {
-  int i = syncing_slot(uid);
-  if (!syncing) {
-    if (i >= 0) d.syncing[i][0] = '\0';
-    return i >= 0;
-  }
-  if (i >= 0 || !uid[0]) return FALSE;
-  for (i = 0; i < MAX_SYNCING; i++)
-    if (!d.syncing[i][0]) {
-      g_strlcpy(d.syncing[i], uid, MC_UID_STRLEN);
-      return TRUE;
-    }
-  return FALSE; /* too many at once: just not marked */
 }
 
 /* --- Settings --- */
@@ -98,190 +72,44 @@ static void save_own_name(mc_sync *sync) {
   if (!same) save_name(name); /* failing, it's saved on the next refresh */
 }
 
-/* --- The section --- */
+/* --- Refreshing --- */
 
-static GtkWidget *kind_icon(int kind) {
-  const char *names[] = {kind == MC_DEVICE_PHONE ? "phone-symbolic" : "computer-symbolic", NULL};
-  GIcon *gicon = g_themed_icon_new_from_names((char **)names, -1);
-  GtkWidget *icon = gtk_image_new_from_gicon(gicon);
-  g_object_unref(gicon);
-  return icon;
+/* Shows the Sync page, picked in the sidebar. */
+static void show_sync_page(void) {
+  gtk_stack_set_visible_child_name(d.a->pages, "sync");
 }
 
-/* A row: the kind's icon, the name, a dim line under it (NULL for none; its tooltip too), a warning triangle
- * with warning as its tooltip (NULL for none), and a spinner while it syncs. */
-static GtkWidget *device_row(const char *uid, int kind, const char *name, const char *sub, const char *warning,
-                             gboolean busy, gboolean dim) {
-  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-  gtk_widget_set_margin_start(box, 6);
-  gtk_widget_set_margin_end(box, 6);
-  gtk_widget_set_margin_top(box, 6);
-  gtk_widget_set_margin_bottom(box, 6);
-  GtkWidget *icon = kind_icon(kind);
-  gtk_box_append(GTK_BOX(box), icon);
-  GtkWidget *text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-  gtk_widget_set_hexpand(text, TRUE);
-  gtk_widget_set_valign(text, GTK_ALIGN_CENTER);
-  GtkWidget *label = gtk_label_new(name && *name ? name : mc_str(MC_STR_DEVICE_UNNAMED));
-  gtk_label_set_xalign(GTK_LABEL(label), 0);
-  gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
-  gtk_box_append(GTK_BOX(text), label);
-  if (sub) {
-    GtkWidget *line = gtk_label_new(sub);
-    gtk_label_set_xalign(GTK_LABEL(line), 0);
-    /* The sidebar is narrow: an archive's "This computer. Keeps the whole library" wraps onto
-     * a second line, and only past that is cut short, with the whole of it as the tooltip. */
-    gtk_label_set_wrap(GTK_LABEL(line), TRUE);
-    gtk_label_set_wrap_mode(GTK_LABEL(line), PANGO_WRAP_WORD_CHAR);
-    gtk_label_set_lines(GTK_LABEL(line), 2);
-    gtk_label_set_ellipsize(GTK_LABEL(line), PANGO_ELLIPSIZE_END);
-    gtk_widget_add_css_class(line, "caption");
-    gtk_widget_add_css_class(line, "dim-label");
-    gtk_widget_set_tooltip_text(line, sub);
-    gtk_box_append(GTK_BOX(text), line);
-  }
-  gtk_box_append(GTK_BOX(box), text);
-  if (dim) {
-    gtk_widget_add_css_class(icon, "dim-label");
-    gtk_widget_add_css_class(label, "dim-label");
-  }
-  if (warning) {
-    GtkWidget *triangle = gtk_image_new_from_icon_name("dialog-warning-symbolic");
-    gtk_widget_add_css_class(triangle, "warning");
-    gtk_widget_set_tooltip_text(triangle, warning);
-    gtk_accessible_update_property(GTK_ACCESSIBLE(triangle), GTK_ACCESSIBLE_PROPERTY_LABEL, warning, -1);
-    gtk_box_append(GTK_BOX(box), triangle);
-  }
-  if (busy) {
-    GtkWidget *spinner = gtk_spinner_new();
-    gtk_spinner_start(GTK_SPINNER(spinner));
-    gtk_widget_set_tooltip_text(spinner, mc_str(MC_STR_SYNCING_PROGRESS));
-    gtk_box_append(GTK_BOX(box), spinner);
-  }
-  GtkWidget *row = gtk_list_box_row_new();
-  gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), box);
-  g_object_set_data_full(G_OBJECT(row), "uid", g_strdup(uid), g_free);
-  return row;
+/* What's wrong with this computer, on the Sync row: in a group, mc_sync_device_warning();
+ * outside one, whether other devices can reach it to pair. */
+static void set_sync_warning(const char *text) {
+  gtk_widget_set_visible(d.a->sync_warning, text[0] != '\0');
+  gtk_widget_set_tooltip_text(d.a->sync_warning, text[0] ? text : NULL);
+  gtk_accessible_update_property(GTK_ACCESSIBLE(d.a->sync_warning), GTK_ACCESSIBLE_PROPERTY_LABEL, text, -1);
 }
 
-static void clear_list(GtkWidget *list) {
-  GtkWidget *child;
-  while ((child = gtk_widget_get_first_child(list)) && GTK_IS_LIST_BOX_ROW(child))
-    gtk_list_box_remove(GTK_LIST_BOX(list), child);
-}
-
-static gboolean device_page_shown(void) {
-  return !g_strcmp0(gtk_stack_get_visible_child_name(d.a->pages), "device");
-}
-
-/* Back to Albums, as when the shown device leaves the group. */
-static void show_albums(void) {
-  d.selected[0] = '\0';
-  gtk_list_box_unselect_all(GTK_LIST_BOX(d.paired));
-  GtkListBoxRow *albums = gtk_list_box_get_row_at_index(d.a->nav, 0);
-  gtk_list_box_select_row(d.a->nav, albums);
-  g_signal_emit_by_name(d.a->nav, "row-activated", albums);
-}
-
-/* A warning icon's tooltip, or NULL for none: g_free it. */
-static char *reach_warning(mc_sync *sync, const char *uid, const char *name) {
-  char text[512];
-  mc_sync_reach_text(sync, uid, name, 1, text, sizeof text);
-  return text[0] ? g_strdup(text) : NULL;
-}
-
-static char *device_warning(mc_sync *sync, const mc_sync_device *dev) {
-  char text[768];
-  mc_sync_device_warning(sync, dev, 0, text, sizeof text);
-  return text[0] ? g_strdup(text) : NULL;
-}
-
-/* Rebuilds the section from sync, and everything that shows the devices. */
+/* Reads this computer's place in sync, and refreshes everything that shows the devices. */
 static void refresh_devices(void) {
   g_clear_handle_id(&d.refresh_source, g_source_remove);
   mc_sync *sync = sync_bridge_get();
-  mc_sync_device_list *paired = NULL;
-  mc_sync_nearby_list *nearby = NULL;
-  if (sync && mc_sync_list_devices(sync, &paired) != MC_OK) paired = NULL;
-  if (sync && mc_sync_list_nearby(sync, &nearby) != MC_OK) nearby = NULL;
-
-  clear_list(d.paired);
-  clear_list(d.nearby);
-  GtkWidget *selected = NULL;
-  int rows = 0;
-  /* This computer first, then the online devices, then the offline ones, each in the order
-   * listed (by name); removed ones left out. A device offline shows no warning: what was
-   * found while it was online may no longer hold. */
-  for (int pass = 0; paired && pass < 3; pass++)
-    for (int i = 0; i < paired->count; i++) {
-      const mc_sync_device *dev = &paired->items[i];
-      int in_pass = dev->is_self ? 0 : dev->online ? 1 : 2;
-      if (dev->removed || in_pass != pass) continue;
-      const char *sub = dev->is_self ? mc_str(MC_STR_LINUX_THIS_COMPUTER) : !dev->online ? mc_str(MC_STR_DEVICE_OFFLINE) : NULL;
-      /* An archive says so under its name, after its state, as Android's device list does:
-       * "Offline. Keeps the whole library". */
-      char archive[160];
-      if (dev->archive) {
-        mc_format(archive, sizeof archive, mc_str(MC_STR_DEVICE_ARCHIVE),
-                  MC_S(sub ? sub : mc_str(MC_STR_DEVICE_ONLINE)));
-        sub = archive;
-      }
-      /* What's wrong, most pressing first: its version, a hold on its side, reach, an archive
-       * away for long, too little space to transcode (mc_sync_device_warning()). */
-      char *warning = device_warning(sync, dev);
-      GtkWidget *row = device_row(dev->uid, dev->kind, dev->name, sub, warning, syncing_slot(dev->uid) >= 0,
-                                  !dev->is_self && !dev->online);
-      g_free(warning);
-      gtk_list_box_append(GTK_LIST_BOX(d.paired), row);
-      rows++;
-      if (!strcmp(dev->uid, d.selected)) selected = row;
+  mc_sync_device_list *list = NULL;
+  if (sync && mc_sync_list_devices(sync, &list) != MC_OK) list = NULL;
+  gboolean grouped = FALSE;
+  char warning[768] = "";
+  for (int i = 0; list && i < list->count && !grouped; i++)
+    if (list->items[i].is_self && !list->items[i].removed) {
+      grouped = TRUE;
+      mc_sync_device_warning(sync, &list->items[i], 0, warning, sizeof warning);
     }
-  devices_state state = !sync ? DEVICES_SYNC_OFF : rows ? DEVICES_GROUPED : DEVICES_ALONE;
-  /* Not in a group, this computer still has its row: its page renames it and says whether
-   * other devices can reach it. */
-  if (sync && !rows) {
-    const char *uid = mc_sync_device_uid(sync);
+  mc_sync_device_list_free(list);
+  if (sync && !grouped) {
     char name[MC_SYNC_DEVICE_NAME_MAX + 1] = "";
     mc_sync_get_device_name(sync, name, sizeof name);
-    char *warning = reach_warning(sync, uid, name);
-    GtkWidget *row = device_row(uid, MC_DEVICE_DESKTOP, name, mc_str(MC_STR_LINUX_THIS_COMPUTER), warning, FALSE, FALSE);
-    g_free(warning);
-    gtk_list_box_append(GTK_LIST_BOX(d.paired), row);
-    rows++;
-    if (!strcmp(uid, d.selected)) selected = row;
+    mc_sync_reach_text(sync, mc_sync_device_uid(sync), name, 1, warning, sizeof warning);
   }
-  int nn = nearby ? nearby->count : 0;
-  for (int i = 0; i < nn; i++) {
-    const mc_sync_nearby *dev = &nearby->items[i];
-    const char *sub = dev->in_other_group ? mc_str(MC_STR_DEVICE_OTHER_GROUP_TIP) : NULL;
-    char *warning = device_view_version_text(&dev->version, dev->name);
-    if (!warning) warning = reach_warning(sync, dev->uid, dev->name);
-    gtk_list_box_append(GTK_LIST_BOX(d.nearby), device_row(dev->uid, dev->kind, dev->name, sub, warning, FALSE, FALSE));
-    g_free(warning);
-  }
-  char heading[128];
-  mc_format(heading, sizeof heading, mc_str(MC_STR_DEVICES_UNPAIRED), MC_D(nn));
-  gtk_label_set_text(GTK_LABEL(d.nearby_heading), heading);
-  gtk_widget_set_visible(d.nearby_heading, nn > 0);
-  gtk_widget_set_visible(d.nearby, nn > 0);
-  /* The paired list's placeholder shows when there's nothing at all, or says sync is off. */
-  char *off = devices_sync_off_text();
-  gtk_label_set_text(GTK_LABEL(d.none), off ? off : mc_str(MC_STR_DEVICES_NONE));
-  g_free(off);
-  gtk_widget_set_visible(d.paired, rows > 0 || nn == 0);
-  mc_sync_device_list_free(paired);
-  mc_sync_nearby_list_free(nearby);
-
-  if (selected) {
-    gtk_list_box_select_row(GTK_LIST_BOX(d.paired), GTK_LIST_BOX_ROW(selected));
-    if (device_page_shown()) device_view_refresh();
-  } else if (d.selected[0]) {
-    /* The shown device left the group. */
-    gboolean shown = device_page_shown();
-    d.selected[0] = '\0';
-    if (shown) show_albums();
-  }
+  set_sync_warning(warning);
+  sync_view_refresh();
   if (sync) save_own_name(sync);
+  devices_state state = !sync ? DEVICES_SYNC_OFF : grouped ? DEVICES_GROUPED : DEVICES_ALONE;
   if (state != d.state) {
     d.state = state;
     app_update_empty_pages(d.a); /* pairing, or the sync profile */
@@ -319,35 +147,9 @@ static void schedule_library_refresh(void) {
   if (!d.library_source) d.library_source = g_timeout_add(REFRESH_LIBRARY_MS, on_library_timeout, NULL);
 }
 
-static void open_page(const char *uid) {
-  device_view_open(sync_bridge_get(), d.a->lib, uid);
-}
-
-static void open_device(const char *uid) {
-  g_strlcpy(d.selected, uid, sizeof d.selected);
-  gtk_list_box_unselect_all(d.a->top_nav);
-  gtk_list_box_unselect_all(d.a->nav);
-  open_page(uid);
-  gtk_stack_set_visible_child_name(d.a->pages, "device");
-}
-
 gboolean devices_open(const char *uid) {
-  if (!d.paired || !uid) return FALSE;
-  refresh_devices();
-  for (GtkWidget *row = gtk_widget_get_first_child(d.paired); row; row = gtk_widget_get_next_sibling(row)) {
-    const char *row_uid = g_object_get_data(G_OBJECT(row), "uid");
-    if (!GTK_IS_LIST_BOX_ROW(row) || !row_uid || strcmp(row_uid, uid)) continue;
-    open_device(uid);
-    gtk_list_box_select_row(GTK_LIST_BOX(d.paired), GTK_LIST_BOX_ROW(row));
-    return TRUE;
-  }
-  return FALSE;
-}
-
-static void on_paired_activated(GtkListBox *list, GtkListBoxRow *row, gpointer data) {
-  (void)list, (void)data;
-  const char *uid = g_object_get_data(G_OBJECT(row), "uid");
-  if (uid) open_device(uid);
+  show_sync_page();
+  return !uid || sync_view_open_device(uid);
 }
 
 /* --- Pairing --- */
@@ -391,9 +193,10 @@ static void pair_started(mc_status st, const char *name, const char *address) {
   g_free(text);
 }
 
-/* A nearby device was picked in the section. Even one in another group: pairing then says
+/* A nearby device was picked on the Sync page. Even one in another group: pairing then says
  * why it can't. */
-static void pair_nearby(const char *picked) {
+static void pair_nearby(void *user, const char *picked) {
+  (void)user;
   mc_sync *sync = sync_bridge_get();
   if (!picked) return;
   if (!sync) {
@@ -401,7 +204,7 @@ static void pair_nearby(const char *picked) {
     return;
   }
   char uid[MC_UID_STRLEN], *name = NULL;
-  g_strlcpy(uid, picked, sizeof uid); /* the row goes when the section refreshes */
+  g_strlcpy(uid, picked, sizeof uid); /* the row goes when the page refreshes */
   mc_sync_nearby_list *nearby = NULL;
   if (mc_sync_list_nearby(sync, &nearby) == MC_OK) {
     for (int i = 0; i < nearby->count && !name; i++)
@@ -412,11 +215,6 @@ static void pair_nearby(const char *picked) {
   pair_started(st, name, NULL);
   if (st == MC_OK) pair_dialog_set_target(uid, NULL, 0);
   g_free(name);
-}
-
-static void on_nearby_activated(GtkListBox *list, GtkListBoxRow *row, gpointer data) {
-  (void)list, (void)data;
-  pair_nearby(g_object_get_data(G_OBJECT(row), "uid"));
 }
 
 static void on_add_device_connect(void *user, const char *host, guint16 port) {
@@ -433,8 +231,8 @@ static void on_add_device_connect(void *user, const char *host, guint16 port) {
   g_free(address);
 }
 
-static void on_add_device(GtkButton *button, gpointer user) {
-  add_device_present(GTK_WIDGET(button), on_add_device_connect, user);
+static void add_device(void *user, GtkWidget *parent) {
+  add_device_present(parent, on_add_device_connect, user);
 }
 
 devices_state devices_sync_state(void) {
@@ -444,18 +242,19 @@ devices_state devices_sync_state(void) {
 void devices_open_self(void) {
   mc_sync *sync = sync_bridge_get();
   if (!sync || d.state != DEVICES_GROUPED) return;
-  open_device(mc_sync_device_uid(sync));
-  refresh_devices(); /* selects its row */
-  device_view_focus_what_to_sync();
+  show_sync_page();
+  sync_view_focus_what_to_sync();
 }
 
 /* --- The pairing dialogs' side --- */
 
-/* Choose What to Sync: the device's page (this computer's own, when it joined). */
+/* Choose What to Sync: the Sync page, at What to sync when this computer is the one that
+ * joined. */
 static void pair_show_device(const char *uid) {
-  open_device(uid);
-  refresh_devices(); /* selects its row */
-  device_view_focus_what_to_sync();
+  refresh_devices();
+  show_sync_page();
+  mc_sync *sync = sync_bridge_get();
+  if (sync && !strcmp(uid, mc_sync_device_uid(sync))) sync_view_focus_what_to_sync();
 }
 
 static gboolean open_library_for_pairing(void *user, const char *dir) {
@@ -527,30 +326,28 @@ static void on_sync_event(void *user, const sync_event *ev) {
     case SYNC_EV_REACH:
     case SYNC_EV_VERSION:
       schedule_refresh();
-      device_view_on_sync_event(ev);
+      sync_view_on_sync_event(ev);
       break;
     case SYNC_EV_DONE:
-      set_syncing(ev->uid, FALSE);
       schedule_refresh();
       /* Reconcile may have removed files after the last progress. */
       if (ev->library_synced) schedule_library_refresh();
-      device_view_on_sync_event(ev);
+      sync_view_on_sync_event(ev);
       break;
     case SYNC_EV_PAIR_CODE:
       pair_dialog_show_code(window(), sync, ev);
       break;
     case SYNC_EV_PAIR_RESULT:
-      /* Paired: the dialog's Choose What to Sync opens the page of the device that joined. */
+      /* Paired: the dialog's Choose What to Sync opens the Sync page. */
       if (pair_dialog_on_result(window(), ev)) refresh_devices();
       break;
     case SYNC_EV_PROGRESS:
-      if (set_syncing(ev->uid, ev->phase != MC_SYNC_PHASE_DONE)) schedule_refresh();
       if (ev->library_changed) schedule_library_refresh();
-      device_view_on_sync_event(ev);
+      sync_view_on_sync_event(ev);
       break;
     case SYNC_EV_WAITING:
       app_update_waiting(d.a);
-      device_view_on_sync_event(ev);
+      sync_view_on_sync_event(ev);
       issue_dialog_refresh();
       break;
     case SYNC_EV_DISSOLVED:
@@ -567,73 +364,19 @@ static void on_sync_event(void *user, const sync_event *ev) {
   }
 }
 
-/* --- Device page callbacks --- */
-
-static void on_rename_self(void *user, const char *name) {
-  devices_renamed(user, name);
-}
-
-static void on_devices_changed(void *user) {
+/* The Sync page left the group, or removed a member. */
+static void on_group_changed(void *user) {
   (void)user;
   schedule_refresh();
 }
 
 /* --- API --- */
 
-GtkWidget *devices_new(app *a) {
+void devices_init(app *a) {
   d.a = a;
   pair_dialog_init(&k_pair_host);
-  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-
-  /* The Devices heading, with + at the end to add a device by address. */
-  GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-  gtk_widget_set_margin_start(header, 18);
-  gtk_widget_set_margin_end(header, 12);
-  gtk_widget_set_margin_top(header, 12);
-  GtkWidget *heading = gtk_label_new(mc_str(MC_STR_DEVICES));
-  gtk_widget_add_css_class(heading, "heading");
-  gtk_widget_add_css_class(heading, "dim-label");
-  gtk_label_set_xalign(GTK_LABEL(heading), 0);
-  gtk_widget_set_hexpand(heading, TRUE);
-  gtk_box_append(GTK_BOX(header), heading);
-  GtkWidget *add = gtk_button_new_from_icon_name("list-add-symbolic");
-  gtk_widget_add_css_class(add, "flat");
-  gtk_widget_set_tooltip_text(add, mc_str(MC_STR_ADD_DEVICE_BY_ADDRESS));
-  g_signal_connect(add, "clicked", G_CALLBACK(on_add_device), a);
-  gtk_box_append(GTK_BOX(header), add);
-  gtk_box_append(GTK_BOX(box), header);
-
-  /* The group's devices. */
-  d.paired = gtk_list_box_new();
-  gtk_widget_add_css_class(d.paired, "navigation-sidebar");
-  d.none = gtk_label_new(mc_str(MC_STR_DEVICES_NONE));
-  gtk_label_set_wrap(GTK_LABEL(d.none), TRUE);
-  gtk_widget_set_margin_start(d.none, 12);
-  gtk_widget_set_margin_end(d.none, 12);
-  gtk_widget_add_css_class(d.none, "dim-label");
-  gtk_list_box_set_placeholder(GTK_LIST_BOX(d.paired), d.none);
-  g_signal_connect(d.paired, "row-activated", G_CALLBACK(on_paired_activated), a);
-  gtk_box_append(GTK_BOX(box), d.paired);
-
-  /* Devices nearby, outside the group: picking one asks it to pair. */
-  d.nearby_heading = gtk_label_new(NULL);
-  gtk_widget_add_css_class(d.nearby_heading, "heading");
-  gtk_widget_add_css_class(d.nearby_heading, "dim-label");
-  gtk_label_set_xalign(GTK_LABEL(d.nearby_heading), 0);
-  gtk_widget_set_margin_start(d.nearby_heading, 18);
-  gtk_widget_set_margin_top(d.nearby_heading, 12);
-  gtk_widget_set_visible(d.nearby_heading, FALSE);
-  gtk_box_append(GTK_BOX(box), d.nearby_heading);
-  d.nearby = gtk_list_box_new();
-  gtk_list_box_set_selection_mode(GTK_LIST_BOX(d.nearby), GTK_SELECTION_NONE);
-  gtk_widget_add_css_class(d.nearby, "navigation-sidebar");
-  gtk_widget_set_visible(d.nearby, FALSE);
-  g_signal_connect(d.nearby, "row-activated", G_CALLBACK(on_nearby_activated), a);
-  gtk_box_append(GTK_BOX(box), d.nearby);
-
-  const device_view_callbacks cb = {on_rename_self, on_devices_changed, a};
-  gtk_stack_add_named(a->pages, device_view_new(&cb), "device");
-  return box;
+  const sync_view_callbacks cb = {pair_nearby, add_device, on_group_changed, a};
+  gtk_stack_add_named(a->pages, sync_view_new(&cb), "sync");
 }
 
 static gboolean on_network_timeout(gpointer data) {
@@ -653,13 +396,10 @@ static void on_network_changed(GNetworkMonitor *monitor, gboolean available, gpo
 }
 
 void devices_start(app *a) {
-  memset(d.syncing, 0, sizeof d.syncing);
   char *name = saved_name();
   sync_bridge_start(a->lib, a->settings_dir, name, on_sync_event, a);
   g_free(name);
-  /* After a library switch on a device's page, it shows again on the new sync (or Albums, if
-   * the refresh finds the device gone). */
-  if (d.selected[0]) open_page(d.selected);
+  sync_view_open(sync_bridge_get(), a->lib);
   if (!d.poll_source) d.poll_source = g_timeout_add_seconds(POLL_DEVICES_S, on_poll, NULL);
   if (!d.network_handler)
     d.network_handler = g_signal_connect(g_network_monitor_get_default(), "network-changed", G_CALLBACK(on_network_changed), NULL);
@@ -671,7 +411,7 @@ void devices_start(app *a) {
 void devices_stop(app *a) {
   (void)a;
   pair_dialog_close_all();
-  device_view_open(NULL, NULL, NULL);
+  sync_view_open(NULL, NULL);
   issue_dialog_stop();
   if (d.network_handler) g_signal_handler_disconnect(g_network_monitor_get_default(), d.network_handler);
   d.network_handler = 0;
@@ -680,11 +420,6 @@ void devices_stop(app *a) {
   g_clear_handle_id(&d.refresh_source, g_source_remove);
   g_clear_handle_id(&d.library_source, g_source_remove);
   g_clear_handle_id(&d.poll_source, g_source_remove);
-}
-
-void devices_unselect(void) {
-  d.selected[0] = '\0';
-  if (d.paired) gtk_list_box_unselect_all(GTK_LIST_BOX(d.paired));
 }
 
 mc_sync *devices_sync(void) {

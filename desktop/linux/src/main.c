@@ -2,9 +2,9 @@
  *
  *   AdwToolbarView
  *   +- AdwHeaderBar: playback buttons, now-playing strip (now_playing.c), volume (volume_button.c)
- *   +- AdwOverlaySplitView (sidebar: pages, Recents (recents.c), Devices (devices.c))
+ *   +- AdwOverlaySplitView (sidebar: pages, Recents (recents.c); Sync, Import, … pinned below)
  *      +- AdwBanners: problems with the files here, tracks waiting for a device (app_update_waiting())
- *      +- GtkStack of pages: "library" | "home" | "artists" | "search" | "import" | "device"
+ *      +- GtkStack of pages: "library" | "home" | "artists" | "search" | "import" | "sync" (devices.c)
  *         +- AdwOverlaySplitView, the track list as its end sidebar while an album is picked
  *            +- GtkStack: albums | playlists | album groups (album_groups.c), each with an
  *                         empty-state page
@@ -495,7 +495,7 @@ static void on_settings(GtkButton *button, gpointer user) {
 static void close_confirmed(void *user, gboolean closed) {
   app *a = user;
   if (!closed) return;
-  devices_stop(a); /* while its dialogs and the device page are still there */
+  devices_stop(a); /* while its dialogs and the Sync page are still there */
   gtk_window_destroy(a->win);
 }
 
@@ -517,7 +517,7 @@ static gboolean on_close_request(GtkWindow *win, gpointer user) {
 
 enum { TOP_NAV_HOME, TOP_NAV_SEARCH }; /* top_nav's rows */
 /* The rows pinned below the rest, as on Windows. */
-enum { BOTTOM_IMPORT, BOTTOM_STATS, BOTTOM_SETTINGS, BOTTOM_ABOUT };
+enum { BOTTOM_SYNC, BOTTOM_IMPORT, BOTTOM_STATS, BOTTOM_SETTINGS, BOTTOM_ABOUT };
 
 static void show_album(app *a);
 static GtkWidget *shown_grid(app *a);
@@ -530,7 +530,6 @@ static void show_about(app *a);
 static void on_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
   (void)list;
   app *a = user;
-  devices_unselect();
   gtk_list_box_unselect_all(a->top_nav);
   app_view view = (app_view)gtk_list_box_row_get_index(row);
   if (view != a->view) {
@@ -558,7 +557,6 @@ static GtkWidget *nav_row(const char *icon, const char *label) {
 static void on_top_nav_activated(GtkListBox *list, GtkListBoxRow *row, gpointer user) {
   (void)list;
   app *a = user;
-  devices_unselect();
   gtk_list_box_unselect_all(a->nav);
   if (gtk_list_box_row_get_index(row) == TOP_NAV_HOME) {
     home_view_refresh();
@@ -589,7 +587,7 @@ static GtkWidget *build_top_nav(app *a) {
 }
 
 /* The arrow keys stop at the ends of a list; past them, they go on to the next or previous
- * one (Recents, Devices), as Tab does. */
+ * one (Recents, the rows pinned below), as Tab does. */
 static gboolean on_sidebar_keynav_failed(GtkWidget *list, GtkDirectionType dir, gpointer user) {
   (void)user;
   if (dir != GTK_DIR_UP && dir != GTK_DIR_DOWN) return FALSE;
@@ -616,6 +614,7 @@ static void on_bottom_activated(GtkListBox *list, GtkListBoxRow *row, gpointer u
   (void)list;
   app *a = user;
   switch (gtk_list_box_row_get_index(row)) {
+    case BOTTOM_SYNC: show_page(a, "sync"); break;
     case BOTTOM_IMPORT: show_page(a, "import"); break;
     case BOTTOM_STATS: stats_dialog_present(a); break;
     case BOTTOM_SETTINGS: on_settings(NULL, a); break;
@@ -631,12 +630,20 @@ static GtkWidget *add_bottom_row(GtkWidget *list, const char *icon, const char *
   return row;
 }
 
-/* Only Import is a page, and it shows as picked by the page rather than a selection
- * (show_import_picked()), so moving through these rows with the keyboard picks nothing. */
+/* Only Sync and Import are pages, and they show as picked by the page rather than a selection
+ * (show_bottom_picked()), so moving through these rows with the keyboard picks nothing. Sync
+ * has a warning triangle, which devices.c shows while something's wrong with this computer. */
 static GtkWidget *build_bottom_nav(app *a) {
   GtkWidget *list = gtk_list_box_new();
   gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_NONE);
   gtk_widget_add_css_class(list, "navigation-sidebar");
+  a->sync_row = add_bottom_row(list, "emblem-synchronizing-symbolic", mc_str(MC_STR_SYNC), NULL);
+  a->sync_warning = gtk_image_new_from_icon_name("dialog-warning-symbolic");
+  gtk_widget_add_css_class(a->sync_warning, "warning");
+  gtk_widget_set_hexpand(a->sync_warning, TRUE);
+  gtk_widget_set_halign(a->sync_warning, GTK_ALIGN_END);
+  gtk_widget_set_visible(a->sync_warning, FALSE);
+  gtk_box_append(GTK_BOX(gtk_list_box_row_get_child(GTK_LIST_BOX_ROW(a->sync_row))), a->sync_warning);
   a->import_row = add_bottom_row(list, "list-add-symbolic", mc_str(MC_STR_IMPORT_MUSIC), "<Control>o");
   a->stats_row = add_bottom_row(list, "x-office-spreadsheet-symbolic", mc_str(MC_STR_STATS_TITLE), NULL);
   a->settings = add_bottom_row(list, "emblem-system-symbolic", mc_str(MC_STR_SETTINGS), "<Control>comma");
@@ -663,7 +670,6 @@ static GtkWidget *build_sidebar(app *a) {
   a->nav = GTK_LIST_BOX(nav);
 
   gtk_box_append(GTK_BOX(box), recents_new(a));
-  gtk_box_append(GTK_BOX(box), devices_new(a));
 
   /* It all scrolls when it's taller than the window, with a scrollbar only then; moving the
    * focus with the keyboard scrolls the focused row into view. What's pinned below stays put. */
@@ -682,6 +688,7 @@ static GtkWidget *build_sidebar(app *a) {
   gtk_box_append(GTK_BOX(sidebar), sidebar_separator());
   gtk_box_append(GTK_BOX(sidebar), build_bottom_nav(a));
   connect_keynav(sidebar);
+  devices_init(a);
   return sidebar;
 }
 
@@ -1653,7 +1660,7 @@ static void prune_art(app *a) {
 }
 
 /* Sync goes with the window, before the library closes, if closing it didn't stop sync
- * already (it does, while the pairing dialogs and the device page are still there). */
+ * already (it does, while the pairing dialogs and the Sync page are still there). */
 static void on_window_destroy(GtkWidget *win, gpointer user) {
   (void)win;
   stats_dialog_stop();
@@ -1890,25 +1897,30 @@ void app_update_waiting(app *a) {
   show_banner(a->waiting, a->waiting_close, &a->waiting_dismissed, text);
 }
 
-/* The Import row shows as picked on its page, which everything that opens it comes through. */
-static void show_import_picked(app *a) {
-  gboolean picked = !g_strcmp0(gtk_stack_get_visible_child_name(a->pages), "import");
-  if (picked) {
-    devices_unselect();
+/* The Sync and Import rows show as picked on their pages, which everything that opens them
+ * comes through. */
+static void show_picked(GtkWidget *row, gboolean picked) {
+  if (picked) gtk_widget_set_state_flags(row, GTK_STATE_FLAG_SELECTED, FALSE);
+  else gtk_widget_unset_state_flags(row, GTK_STATE_FLAG_SELECTED);
+  gtk_accessible_update_state(GTK_ACCESSIBLE(row), GTK_ACCESSIBLE_STATE_SELECTED, picked, -1);
+}
+
+static void show_bottom_picked(app *a) {
+  const char *page = gtk_stack_get_visible_child_name(a->pages);
+  gboolean sync = !g_strcmp0(page, "sync"), import = !g_strcmp0(page, "import");
+  if (sync || import) {
     gtk_list_box_unselect_all(a->top_nav);
     gtk_list_box_unselect_all(a->nav);
-    gtk_widget_set_state_flags(a->import_row, GTK_STATE_FLAG_SELECTED, FALSE);
-  } else {
-    gtk_widget_unset_state_flags(a->import_row, GTK_STATE_FLAG_SELECTED);
   }
-  gtk_accessible_update_state(GTK_ACCESSIBLE(a->import_row), GTK_ACCESSIBLE_STATE_SELECTED, picked, -1);
+  show_picked(a->sync_row, sync);
+  show_picked(a->import_row, import);
 }
 
 static void on_page_changed(GObject *pages, GParamSpec *pspec, gpointer user) {
   (void)pages;
   (void)pspec;
   app *a = user;
-  if (a->import_row) show_import_picked(a);
+  if (a->import_row) show_bottom_picked(a);
   app_update_waiting(a);
 }
 

@@ -204,6 +204,23 @@ data class SyncOutlook(
     val upToDate: Boolean get() = receiveTracks == 0 && sendTracks == 0
 }
 
+/**
+ * The last session that moved or deleted files here (mc_sync_activity), kept across restarts:
+ * when it ended ([whenMs], 0 for none yet), its counts, and [text], "Last sync: ↑ 4 · ↓ 100 ·
+ * 10 deleted" ("" for none).
+ */
+data class SyncActivity(
+    val whenMs: Long,
+    val received: Int,
+    val sent: Int,
+    val deleted: Int,
+    val text: String,
+) {
+    companion object {
+        val None = SyncActivity(0, 0, 0, 0, "")
+    }
+}
+
 /** Tracks this device is transcoding for the member [uid] ("" if not said): mc_sync_transcode_target. */
 data class TranscodeTarget(val uid: String, val tracks: Int)
 
@@ -529,7 +546,10 @@ class CoreSync(
             val connected: Boolean = true,
             /** "Finished, but 3 tracks are still missing" in the core's language (mc_sync_finished_text()); "" when none are. */
             val finishedText: String = "",
-        ) : Event
+        ) : Event {
+            /** It moved or deleted files (mc_sync_result_changed()): the last activity is now its. */
+            val changed: Boolean get() = filesReceived > 0 || filesSent > 0 || filesDeleted > 0
+        }
 
         /** The tracks waiting for a device, or the problems, changed: read [CoreSync.waiting] and [CoreSync.problems] again. */
         data object Waiting : Event
@@ -645,6 +665,9 @@ class CoreSync(
     /** What the next sync would copy, as sync last worked it out. Doesn't block. */
     fun outlook(): SyncOutlook = nativeOutlook(handle)
 
+    /** What the last session that moved or deleted files did. Reads sync.db. */
+    fun lastActivity(): SyncActivity = nativeLastActivity(handle)
+
     /** What's wrong with the files here, as sync last worked it out. Doesn't block. */
     fun problems(): SyncProblems = nativeProblems(handle)
 
@@ -680,6 +703,9 @@ class CoreSync(
      * in a group or [uid] isn't a member.
      */
     fun profile(uid: String): SyncProfile = nativeGetProfile(handle, uid)
+
+    /** What [uid]'s profile syncs in one sentence (mc_sync_profile_summary()): "3 albums and 2 playlists". */
+    fun profileSummary(uid: String): String = nativeProfileSummary(handle, uid)
 
     /**
      * Stores [uid]'s profile, writing only what differs from the stored one, so read it with
@@ -925,6 +951,8 @@ class CoreSync(
         @JvmStatic private external fun nativeListNearby(handle: Long): Array<NearbyDevice>
         @JvmStatic private external fun nativeWaiting(handle: Long): SyncWaiting
         @JvmStatic private external fun nativeOutlook(handle: Long): SyncOutlook
+        @JvmStatic private external fun nativeLastActivity(handle: Long): SyncActivity
+        @JvmStatic private external fun nativeProfileSummary(handle: Long, uid: String): String
         @JvmStatic private external fun nativeProblems(handle: Long): SyncProblems
         @JvmStatic private external fun nativeRemoveLost(handle: Long, uids: Array<String>): Int
         @JvmStatic private external fun nativeDismissNotices(handle: Long)

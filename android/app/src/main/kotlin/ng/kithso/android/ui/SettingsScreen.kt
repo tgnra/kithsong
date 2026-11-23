@@ -77,6 +77,7 @@ import kotlinx.coroutines.withContext
 /**
  * The app's settings. [libraryDir] is the library folder, whose size is shown. In a sync group,
  * [binCount] is how many deletes the recycle bin holds, under Storage; null leaves it out.
+ * On the phone, Customise ([onCustomise]) and Library stats ([onStats]) come first.
  */
 @Composable
 fun SettingsScreen(
@@ -88,6 +89,8 @@ fun SettingsScreen(
     binCount: Int? = null,
     onRecycleBin: () -> Unit = {},
     onRunScrollTest: () -> Unit = {},
+    onCustomise: (() -> Unit)? = null,
+    onStats: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
@@ -98,6 +101,21 @@ fun SettingsScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             item(key = "header") { ScreenHeader(stringResource(R.string.settings), onBack) }
+
+            if (onCustomise != null) item(key = "customise") {
+                ListItem(
+                    leadingContent = { Icon(Icons.Tune, contentDescription = null) },
+                    headlineContent = { Text(stringResource(R.string.customise)) },
+                    modifier = Modifier.clickable(onClick = onCustomise),
+                )
+            }
+            if (onStats != null) item(key = "stats") {
+                ListItem(
+                    leadingContent = { Icon(Icons.BarChart, contentDescription = null) },
+                    headlineContent = { Text(stringResource(R.string.stats_title)) },
+                    modifier = Modifier.clickable(onClick = onStats),
+                )
+            }
 
             item(key = "playback") {
                 SettingsHeading(stringResource(R.string.settings_playback))

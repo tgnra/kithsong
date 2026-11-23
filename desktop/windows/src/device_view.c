@@ -5,54 +5,62 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <windowsx.h>
 
 #include "canvas.h"
 #include "firewall.h"
 #include "firewall_banner.h"
 #include "issue_dialog.h"
 #include "prompt_dialog.h"
+#include "scroller.h"
 #include "theme.h"
 #include "wstr.h"
 
+#define MAX_ROWS 24 /* devices listed, members and nearby ones together */
+
 enum {
-  ID_DEV_ICON = 400,
-  ID_DEV_TITLE,
-  ID_DEV_SYNC_NOW,
-  ID_DEV_REMOVE,
+  /* The page, above the panels. */
+  ID_DEV_SYNC_NOW = 400,
   ID_DEV_STATUS,
-  ID_DEV_FILES,
   ID_DEV_PROGRESS,
-  ID_DEV_PROGRESS_TEXT,
   ID_DEV_MESSAGE,
   ID_DEV_NOTICE,
-  ID_DEV_NAME_LABEL,
-  ID_DEV_NAME,
+  ID_DEV_ISSUES, /* Details: the issue dialog for this PC */
+  /* This PC's panel. */
+  ID_DEV_TITLE,
+  ID_DEV_FILES,
+  ID_DEV_NOTE,
+  ID_DEV_ARCHIVE_LABEL,
+  ID_DEV_ARCHIVE,
+  ID_DEV_ARCHIVE_TEXT,
+  ID_DEV_HEADING,
+  ID_DEV_SYNC_ALL,
+  ID_DEV_SYNC_ALL_LABEL,
+  ID_DEV_TAB, /* four of them */
+  ID_DEV_LIST = ID_DEV_TAB + 4,
+  ID_DEV_SELECT_ALL,
+  ID_DEV_SELECT_NONE,
+  ID_DEV_COUNT,
+  ID_DEV_QUALITY,
   ID_DEV_FORMAT_LABEL,
   ID_DEV_FORMAT,
   ID_DEV_BUDGET,
   ID_DEV_BUDGET_LABEL,
   ID_DEV_BUDGET_SIZE,
   ID_DEV_BUDGET_UNIT,
-  ID_DEV_HEADING,
-  ID_DEV_NOTE,
-  ID_DEV_SYNC_ALL,
-  ID_DEV_SYNC_ALL_LABEL,
-  ID_DEV_TAB, /* four of them */
-  ID_DEV_LIST = ID_DEV_TAB + 4,
-  ID_DEV_COUNT,
   ID_DEV_ESTIMATE,
-  ID_DEV_ARCHIVE_LABEL,
-  ID_DEV_ARCHIVE,
-  ID_DEV_ARCHIVE_TEXT,
-  ID_DEV_SELECT_ALL,
-  ID_DEV_SELECT_NONE,
+  /* The devices' panel. */
+  ID_DEV_DEVICES,
+  ID_DEV_UNPAIRED,
+  ID_DEV_NONE,
+  ID_DEV_ADD,
+  ID_DEV_LEAVE,
   ID_DEV_FIREWALL, /* and its two buttons */
   ID_DEV_FIREWALL_LAST = ID_DEV_FIREWALL + 2,
-  ID_DEV_ISSUES,   /* Details: the issue dialog for this device */
-  ID_DEV_TAKEOVER, /* Make this computer the archive…: the takeover offer */
+  ID_DEV_ROW, /* MAX_ROWS of them */
+  ID_DEV_ROW_LAST = ID_DEV_ROW + MAX_ROWS - 1,
   /* Timers on the parent, run by their TIMERPROCs rather than WM_TIMER. */
-  ID_DEV_APPLY_TIMER = 440,
-  ID_DEV_TICK_TIMER,
+  ID_DEV_APPLY_TIMER = 470,
   ID_DEV_REFRESH_TIMER,
   ID_DEV_ESTIMATE_TIMER,
   ID_DEV_FINISHED_TIMER,
@@ -67,14 +75,13 @@ enum {
 
 #define APPLY_DELAY_MS 400
 #define ESTIMATE_DELAY_MS 250 /* a read of every track: once the edits pause */
-#define TICK_MS 30000 /* "synced 3 minutes ago" moves on */
 #define FINISHED_MS 5000 /* a finished sync's full bar stays this long */
 #define PROGRESS_MAX 1000
 #define DEFAULT_BUDGET_GB 32
 #define AUTO_ITEM 1 /* the format list's item data for Auto; the others hold their kbps, 0 originals */
 #define GIB ((int64_t)1024 * 1024 * 1024)
 #define MAX_BUSY 16
-
+#define REVEAL_MARGIN 40 /* at 96 DPI: what's kept in view around a control tabbed to */
 
 enum { TAB_ALBUMS, TAB_ARTISTS, TAB_PLAYLISTS, TAB_GROUPS, NUM_TABS };
 static const mc_profile_item_kind k_tab_kind[NUM_TABS] = {MC_PROFILE_ALBUM, MC_PROFILE_ARTIST,
@@ -102,41 +109,75 @@ typedef struct uid_set {
   int count, cap;
 } uid_set;
 
+/* One of the two panels: a window that clips what scrolls in it, with the scrollbar in its
+ * right margin, as the settings page does. */
+typedef struct panel {
+  HWND view;    /* clips the content, and paints the scrollbar */
+  HWND content; /* as tall as the controls need, moved up and down in view; they're its children */
+  scroller scroll;
+  canvas canvas;
+  BOOL tracking; /* the mouse's leaving view */
+} panel;
+
+/* A row of the devices' panel: another member, or a device nearby that isn't paired. */
+typedef struct dev_row {
+  char uid[MC_UID_STRLEN];
+  BOOL nearby;
+  mc_device_kind kind;
+  BOOL warning; /* something's wrong with it: its details say what */
+  wchar_t name[MC_SYNC_DEVICE_NAME_MAX + 1];
+  wchar_t detail[256]; /* what it syncs; for a nearby device, why it can't pair, or "" */
+} dev_row;
+
+/* How a member's last session here went, for its details, when it didn't simply succeed. */
+typedef struct session_result {
+  char uid[MC_UID_STRLEN];
+  wchar_t text[256];
+} session_result;
+
 static struct {
-  HWND parent;
+  HWND parent; /* the main window */
   device_view_host host;
-  HWND icon, title, sync_now, remove, status, files, progress, progress_text, message, notice;
-  HWND issues, takeover; /* under the notice */
-  HWND name_label, name_edit, archive_label, archive_box, archive_text, format_label, format, budget, budget_label;
-  HWND budget_size, budget_unit;
-  HWND heading, note, sync_all, sync_all_label, tabs[NUM_TABS], select_all, select_none, list, count, combo_list,
-    estimate;
-  HFONT font, title_font, heading_font, icon_font;
+  HWND page;   /* the notices and the strip, then the panels */
+  panel left, right;
+  HWND status, progress, sync_now, message, notice, issues;
+  HWND title, files, note, archive_label, archive_box, archive_text, heading, sync_all, sync_all_label,
+    tabs[NUM_TABS], select_all, select_none, list, count, quality, format_label, format, combo_list, budget,
+    budget_label, budget_size, budget_unit, estimate;
+  HWND devices, dev_btns[MAX_ROWS], unpaired, none, add, leave; /* dev_btns: devs[], as buttons */
+  HWND hot; /* the owner-drawn button (a tab or a row) under the mouse, or NULL */
+  HFONT font, title_font, heading_font, icon_font, small_icon_font;
   HIMAGELIST checks; /* the list's checkboxes; the list owns them once set */
   UINT dpi;
   BOOL shown;
   BOOL refresh_later; /* a refresh came while the format drop-down was open */
-  int x, y, w, h; /* the last layout */
+  BOOL measuring;     /* layout_left() is only measuring: nothing moves */
+  int x, y, w, h;     /* the last layout */
+  int line_y, line_w, divider_x, divider_bottom; /* the page's lines, in it; line_y 0 for none */
 
   mc_sync *sync;
   mc_library *lib;
-  char uid[MC_UID_STRLEN];
+  char uid[MC_UID_STRLEN]; /* this PC's */
 
-  /* The device, from mc_sync_list_devices(). */
-  BOOL found, is_self;
+  /* This PC, from mc_sync_list_devices(). found: it's in a group. */
+  BOOL found, removed;
   wchar_t name[MC_SYNC_DEVICE_NAME_MAX + 1];
   wchar_t others[512]; /* the other members' names, for Leave group */
-  mc_device_kind kind;
-  int online, archive, removed, has_status;
-  int64_t last_sync_ms, expected, ok, missing, corrupt, bytes;
+  wchar_t files_text[256]; /* its own report of its files, or "" */
   mc_sync_lib_state lib_state;
-  int chosen; /* this PC: its user has chosen what it syncs */
-  mc_sync_version version; /* its version, if it can't sync with this one's */
-  char name_utf8[MC_SYNC_DEVICE_NAME_MAX + 1];
+  int chosen; /* its user has chosen what it syncs */
   wchar_t warning[1024]; /* mc_sync_device_warning(), or "" */
-  wchar_t hold_note[256]; /* mc_sync_device_note(): its next automatic sync, or why it's held */
-  BOOL has_issues, offer; /* issues about it, and one offers to take over its role */
+  wchar_t hold_note[256]; /* mc_sync_device_note(): its next automatic sync, or "" */
+  wchar_t activity[256]; /* what sync last did here: mc_sync_activity_text(), or "" */
+  wchar_t outlook[256];  /* what the next sync would change: mc_sync_outlook_text(), or "" */
+  BOOL has_issues; /* the problems hold issues about it */
   BOOL missing_shown; /* the message says the last session left tracks missing */
+
+  /* The other members, online ones first, then the nearby devices. */
+  dev_row devs[MAX_ROWS];
+  int ndevs, nmembers;
+  session_result results[MAX_ROWS];
+  int nresults;
 
   /* Its profile, with the pending edits applied; NULL if it couldn't be read. */
   mc_sync_profile *profile;
@@ -163,7 +204,7 @@ static struct {
     int ntoggles, cap;
   } pending;
 
-  /* Sessions in progress with this device (with any member, on this PC's own page). */
+  /* Sessions in progress, with any member. */
   uid_str busy[MAX_BUSY];
   int nbusy;
   mc_sync_phase phase;
@@ -177,8 +218,6 @@ static struct {
   BOOL finished;
   wchar_t finished_text[256];
 
-  int hot_tab; /* under the mouse, or -1 */
-
   /* The profile's size estimate, worked out on a thread of its own: one at a time. */
   struct {
     HANDLE thread; /* the one running, or NULL */
@@ -190,14 +229,19 @@ static struct {
   } est;
   HWND confirm_dlg;          /* the archive confirmation, while it's open */
   wchar_t confirm_text[512]; /* its text, which it shows from here */
-} g_dv = {.hot_tab = -1};
+} g_dv;
 
 static void layout_again(void);
 static void estimate_request(void);
 
-/* There's a device to show. */
+/* Sync is on. */
 static BOOL active(void) {
   return g_dv.sync != NULL;
+}
+
+/* This PC is in a group, and its profile can be shown. */
+static BOOL member(void) {
+  return g_dv.sync && g_dv.found && !g_dv.removed;
 }
 
 /* --- Text helpers --- */
@@ -398,65 +442,143 @@ static void free_profile(void) {
   g_dv.profile = NULL;
 }
 
-/* Reads the device's row from the device list. */
-static void load_device(void) {
-  g_dv.found = FALSE;
-  g_dv.others[0] = L'\0';
-  memset(&g_dv.version, 0, sizeof g_dv.version);
+/* A device's own report of its files: "1,204 of 1,210 files OK · 6 missing · 12 GB"; "" if it
+ * hasn't written one. */
+static void files_text(const mc_sync_device *d, wchar_t *text, int cap) {
+  text[0] = L'\0';
+  if (!d->has_status) return;
+  wchar_t ok[32], expected[32], n[32], size[32];
+  const wchar_t *sep = mc_wstr(MC_STR_IMPORT_LIST_SEPARATOR);
+  mc_wformat(text, (size_t)cap, mc_str_plural(MC_STR_FILES_OK, (long)d->expected),
+             MC_S(u8(wstr_count(ok, 32, d->ok))), MC_S(u8(wstr_count(expected, 32, d->expected))));
+  size_t used = wcslen(text), len = (size_t)cap;
+  if (d->missing > 0) {
+    used += (size_t)swprintf(text + used, len - used, L"%ls", sep);
+    mc_wformat(text + used, len - used, mc_str(MC_STR_FILES_MISSING), MC_S(u8(wstr_count(n, 32, d->missing))));
+    used = wcslen(text);
+  }
+  if (d->corrupt > 0) {
+    used += (size_t)swprintf(text + used, len - used, L"%ls", sep);
+    mc_wformat(text + used, len - used, mc_str(MC_STR_FILES_DAMAGED), MC_S(u8(wstr_count(n, 32, d->corrupt))));
+    used = wcslen(text);
+  }
+  swprintf(text + used, len - used, L"%ls%ls", sep, wstr_size(size, 32, d->bytes));
+}
+
+/* This PC's own row. */
+static void load_self(const mc_sync_device *d) {
+  char text[1024];
+  g_dv.found = TRUE;
+  g_dv.removed = d->removed;
+  files_text(d, g_dv.files_text, sizeof g_dv.files_text / sizeof *g_dv.files_text);
+  if (mc_sync_device_warning(g_dv.sync, d, 0, text, sizeof text))
+    wstr_from_utf8(g_dv.warning, sizeof g_dv.warning / sizeof *g_dv.warning, text);
+  if (mc_sync_device_note(d, 0, 1, text, sizeof text))
+    wstr_from_utf8(g_dv.hold_note, sizeof g_dv.hold_note / sizeof *g_dv.hold_note, text);
+}
+
+static dev_row *add_row(const char *uid, const char *name, mc_device_kind kind) {
+  if (g_dv.ndevs == MAX_ROWS) return NULL;
+  dev_row *r = &g_dv.devs[g_dv.ndevs++];
+  memset(r, 0, sizeof *r);
+  snprintf(r->uid, sizeof r->uid, "%s", uid);
+  widen(name && *name ? name : mc_str(MC_STR_DEVICE_UNNAMED), r->name, MC_SYNC_DEVICE_NAME_MAX + 1);
+  r->kind = kind;
+  return r;
+}
+
+/* Another member, with what its profile syncs in a sentence. */
+static void add_member(const mc_sync_device *d) {
+  dev_row *r = add_row(d->uid, d->name, d->kind);
+  if (!r) return;
+  g_dv.nmembers++;
+  char text[1024] = "";
+  r->warning = mc_sync_device_warning(g_dv.sync, d, 0, text, sizeof text) > 0;
+  mc_sync_profile *p = NULL;
+  text[0] = '\0';
+  if (mc_sync_get_profile(g_dv.sync, d->uid, &p) == MC_OK) mc_sync_profile_summary(p, text, sizeof text);
+  mc_sync_profile_free(p);
+  wstr_from_utf8(r->detail, sizeof r->detail / sizeof *r->detail, text);
+}
+
+/* A device nearby, with why pairing with it would be refused, if it would. */
+static void add_nearby(const mc_sync_nearby *n) {
+  dev_row *r = add_row(n->uid, n->name, n->kind);
+  if (!r) return;
+  r->nearby = TRUE;
+  char text[512];
+  if (n->version.outdated != MC_SYNC_VERSION_OK) {
+    mc_sync_version_text(n->name, &n->version, text, sizeof text);
+    wstr_from_utf8(r->detail, sizeof r->detail / sizeof *r->detail, text);
+  } else if (n->in_other_group) {
+    swprintf(r->detail, sizeof r->detail / sizeof *r->detail, L"%ls", mc_wstr(MC_STR_DEVICE_OTHER_GROUP_TIP));
+  }
+}
+
+/* Reads the devices: this PC's row, the other members and the devices nearby. */
+static void load_devices(void) {
+  g_dv.found = g_dv.removed = g_dv.has_issues = FALSE;
+  g_dv.others[0] = g_dv.files_text[0] = g_dv.warning[0] = g_dv.hold_note[0] = L'\0';
+  g_dv.activity[0] = g_dv.outlook[0] = L'\0';
   g_dv.lib_state = MC_SYNC_LIBRARY_GROUP;
-  g_dv.warning[0] = g_dv.hold_note[0] = L'\0';
-  g_dv.has_issues = g_dv.offer = FALSE;
+  g_dv.chosen = TRUE;
+  g_dv.ndevs = g_dv.nmembers = 0;
   if (!g_dv.sync) return;
-  g_dv.is_self = !strcmp(g_dv.uid, mc_sync_device_uid(g_dv.sync));
+  char text[512];
+  if (mc_sync_get_device_name(g_dv.sync, text, sizeof text) == MC_OK) widen(text, g_dv.name, MC_SYNC_DEVICE_NAME_MAX + 1);
+  else g_dv.name[0] = L'\0';
+
   mc_sync_device_list *list = NULL;
   if (mc_sync_list_devices(g_dv.sync, &list) == MC_OK && list) {
     size_t used = 0, cap = sizeof g_dv.others / sizeof g_dv.others[0];
-    for (int i = 0; i < list->count; i++) {
-      const mc_sync_device *d = &list->items[i];
-      if (!strcmp(d->uid, g_dv.uid)) {
-        g_dv.found = TRUE;
-        widen(d->name, g_dv.name, MC_SYNC_DEVICE_NAME_MAX + 1);
-        g_dv.kind = d->kind;
-        g_dv.online = d->online;
-        g_dv.archive = d->archive;
-        g_dv.removed = d->removed;
-        g_dv.last_sync_ms = d->last_sync_ms;
-        g_dv.has_status = d->has_status;
-        g_dv.expected = d->expected;
-        g_dv.ok = d->ok;
-        g_dv.missing = d->missing;
-        g_dv.corrupt = d->corrupt;
-        g_dv.bytes = d->bytes;
-        g_dv.version = d->version;
-        snprintf(g_dv.name_utf8, sizeof g_dv.name_utf8, "%s", d->name ? d->name : "");
-        char text[1024];
-        if (mc_sync_device_warning(g_dv.sync, d, 0, text, sizeof text))
-          wstr_from_utf8(g_dv.warning, sizeof g_dv.warning / sizeof *g_dv.warning, text);
-        if (mc_sync_device_note(d, 0, 1, text, sizeof text))
-          wstr_from_utf8(g_dv.hold_note, sizeof g_dv.hold_note / sizeof *g_dv.hold_note, text);
-      } else if (!d->is_self && !d->removed && d->name && used + 4 < cap) {
-        wchar_t name[MC_SYNC_DEVICE_NAME_MAX + 1];
-        widen(d->name, name, MC_SYNC_DEVICE_NAME_MAX + 1);
-        int n = swprintf(g_dv.others + used, cap - used, L"%ls%ls", used ? mc_wstr(MC_STR_IMPORT_LIST_SEPARATOR) : L"",
-                         name);
-        if (n > 0) used += (size_t)n;
+    for (int pass = 0; pass < 2; pass++)
+      for (int i = 0; i < list->count; i++) {
+        const mc_sync_device *d = &list->items[i];
+        if (d->is_self) {
+          if (pass == 0) load_self(d);
+          continue;
+        }
+        if (d->removed || (pass == 0) != (d->online != 0)) continue;
+        add_member(d);
+        if (d->name && used + 4 < cap) {
+          wchar_t name[MC_SYNC_DEVICE_NAME_MAX + 1];
+          widen(d->name, name, MC_SYNC_DEVICE_NAME_MAX + 1);
+          int n = swprintf(g_dv.others + used, cap - used, L"%ls%ls",
+                           used ? mc_wstr(MC_STR_IMPORT_LIST_SEPARATOR) : L"", name);
+          if (n > 0) used += (size_t)n;
+        }
       }
-    }
     mc_sync_device_list_free(list);
   }
-  if (g_dv.is_self) g_dv.online = 1;
+  mc_sync_nearby_list *nearby = NULL;
+  if (mc_sync_list_nearby(g_dv.sync, &nearby) == MC_OK && nearby) {
+    for (int i = 0; i < nearby->count; i++) add_nearby(&nearby->items[i]);
+    mc_sync_nearby_list_free(nearby);
+  }
+
   mc_sync_outlook o;
-  g_dv.chosen = !g_dv.is_self || mc_sync_get_outlook(g_dv.sync, &o) != MC_OK || o.chosen;
+  if (mc_sync_get_outlook(g_dv.sync, &o) == MC_OK) {
+    g_dv.chosen = o.chosen;
+    text[0] = '\0';
+    mc_sync_outlook_text(&o, text, sizeof text);
+    wstr_from_utf8(g_dv.outlook, sizeof g_dv.outlook / sizeof *g_dv.outlook, text);
+  }
+  mc_sync_activity a;
+  if (mc_sync_get_last_activity(g_dv.sync, &a) == MC_OK) {
+    text[0] = '\0';
+    mc_sync_activity_text(&a, text, sizeof text);
+    wstr_from_utf8(g_dv.activity, sizeof g_dv.activity / sizeof *g_dv.activity, text);
+  }
   mc_sync_lib_state state;
   if (mc_sync_library_state(g_dv.sync, &state) == MC_OK) g_dv.lib_state = state;
-  g_dv.has_issues = g_dv.found && issue_dialog_has_issues(g_dv.sync, g_dv.uid, &g_dv.offer);
+  g_dv.has_issues = g_dv.found && issue_dialog_has_issues(g_dv.sync, g_dv.uid, NULL);
 }
 
 /* Reads the profile afresh and lays the pending edits over it. */
 static void load_profile(void) {
   free_profile();
   g_dv.profile_status = MC_ERR_NOT_FOUND;
-  if (g_dv.sync && g_dv.found && !g_dv.removed) {
+  if (member()) {
     g_dv.profile_status = mc_sync_get_profile(g_dv.sync, g_dv.uid, &g_dv.profile);
     if (g_dv.profile_status == MC_OK) g_dv.profile_status = apply_pending(g_dv.profile);
     if (g_dv.profile_status != MC_OK) free_profile();
@@ -465,9 +587,9 @@ static void load_profile(void) {
   estimate_request();
 }
 
-/* Only a device changes its own profile. */
+/* An archive's profile is fixed. */
 static BOOL editable(void) {
-  return g_dv.is_self && g_dv.profile && !g_dv.profile->archive;
+  return g_dv.profile && !g_dv.profile->archive;
 }
 
 static BOOL syncing(void) {
@@ -512,58 +634,11 @@ static void set_sync_button(void) {
   if (wcscmp(have, want)) SetWindowTextW(g_dv.sync_now, want);
 }
 
-static void update_status(void) {
-  wchar_t text[256], ago[64];
-  if (!g_dv.found) {
-    swprintf(text, 256, L"%ls", mc_wstr(MC_STR_DEVICE_NOT_IN_GROUP));
-  } else if (g_dv.removed) {
-    swprintf(text, 256, L"%ls", mc_wstr(MC_STR_DEVICE_REMOVED));
-  } else {
-    const wchar_t *state;
-    wchar_t buf[128];
-    if (g_dv.last_sync_ms > 0) fmt_ago(g_dv.last_sync_ms, ago, 64);
-    if (syncing()) state = mc_wstr(MC_STR_SYNCING_PROGRESS);
-    else if (g_dv.is_self) state = mc_wstr(MC_STR_WINDOWS_THIS_PC);
-    else if (g_dv.online) {
-      if (g_dv.last_sync_ms > 0) mc_wformat(buf, 128, mc_str(MC_STR_DEVICE_ONLINE_SYNCED), MC_S(u8(ago)));
-      else swprintf(buf, 128, L"%ls", mc_wstr(MC_STR_DEVICE_ONLINE));
-      state = buf;
-    } else {
-      if (g_dv.last_sync_ms > 0) mc_wformat(buf, 128, mc_str(MC_STR_DEVICE_OFFLINE_SYNCED), MC_S(u8(ago)));
-      else swprintf(buf, 128, L"%ls", mc_wstr(MC_STR_DEVICE_NOT_SYNCED));
-      state = buf;
-    }
-    /* With when it next syncs by itself, or what holds it back; an archive's note says it
-     * keeps the whole library. */
-    if (!syncing() && g_dv.hold_note[0])
-      swprintf(text, 256, L"%ls%ls%ls", state, mc_wstr(MC_STR_SEPARATOR_DOT), g_dv.hold_note);
-    else swprintf(text, 256, L"%ls", state);
-  }
-  SetWindowTextW(g_dv.status, text);
-
-  text[0] = L'\0';
-  if (g_dv.found && g_dv.has_status) {
-    wchar_t ok[32], expected[32], n[32], size[32];
-    const wchar_t *sep = mc_wstr(MC_STR_IMPORT_LIST_SEPARATOR);
-    mc_wformat(text, 256, mc_str_plural(MC_STR_FILES_OK, (long)g_dv.expected),
-               MC_S(u8(wstr_count(ok, 32, g_dv.ok))), MC_S(u8(wstr_count(expected, 32, g_dv.expected))));
-    size_t used = wcslen(text);
-    if (g_dv.missing > 0) {
-      used += (size_t)swprintf(text + used, 256 - used, L"%ls", sep);
-      mc_wformat(text + used, 256 - used, mc_str(MC_STR_FILES_MISSING),
-                 MC_S(u8(wstr_count(n, 32, g_dv.missing))));
-      used = wcslen(text);
-    }
-    if (g_dv.corrupt > 0) {
-      used += (size_t)swprintf(text + used, 256 - used, L"%ls", sep);
-      mc_wformat(text + used, 256 - used, mc_str(MC_STR_FILES_DAMAGED),
-                 MC_S(u8(wstr_count(n, 32, g_dv.corrupt))));
-      used = wcslen(text);
-    }
-    swprintf(text + used, 256 - used, L"%ls%ls", sep, wstr_size(size, 32, g_dv.bytes));
-  }
-  SetWindowTextW(g_dv.files, text);
-
+/* The strip's line: how the sessions are going while they run, then for a moment how they
+ * went; else what sync last did here or, before it has done anything, what the next sync
+ * would change, with when this PC next syncs by itself. */
+static void update_strip(void) {
+  wchar_t text[256] = L"";
   static const enum mc_str_id phases[] = {
     [MC_SYNC_PHASE_CONNECTING] = MC_STR_PHASE_CONNECTING,
     [MC_SYNC_PHASE_GROUP] = MC_STR_PHASE_GROUP,
@@ -573,7 +648,6 @@ static void update_status(void) {
   };
   /* The other device's turn: it's fetching from this PC, or it's all there is. */
   BOOL sending = g_dv.sends_total > 0 && (g_dv.sends_done < g_dv.sends_total || g_dv.files_total <= 0);
-  text[0] = L'\0';
   if (syncing()) {
     BOOL known = (unsigned)g_dv.phase <= (unsigned)MC_SYNC_PHASE_DONE;
     const wchar_t *phase = mc_wstr(known ? phases[g_dv.phase] : MC_STR_SYNCING_PROGRESS);
@@ -610,29 +684,26 @@ static void update_status(void) {
   } else if (g_dv.finished) {
     swprintf(text, 256, L"%ls", g_dv.finished_text);
     SendMessageW(g_dv.progress, PBM_SETPOS, PROGRESS_MAX, 0);
+  } else if (!active()) {
+    swprintf(text, 256, L"%ls", mc_wstr(MC_STR_SYNC_IS_OFF));
+  } else if (member()) {
+    const wchar_t *last = g_dv.activity[0] ? g_dv.activity : g_dv.outlook;
+    if (last[0] && g_dv.hold_note[0]) swprintf(text, 256, L"%ls%ls%ls", last, mc_wstr(MC_STR_SEPARATOR_DOT), g_dv.hold_note);
+    else swprintf(text, 256, L"%ls", last[0] ? last : g_dv.hold_note);
   }
-  SetWindowTextW(g_dv.progress_text, text);
-
-  if (g_dv.found && !g_dv.removed && g_dv.version.outdated != MC_SYNC_VERSION_OK) {
-    char version[512];
-    mc_sync_version_text(g_dv.name_utf8, &g_dv.version, version, sizeof version);
-    wchar_t *wide = wstr_dup_from_utf8(version);
-    SetWindowTextW(g_dv.notice, wide ? wide : L"");
-    free(wide);
-  } else if (g_dv.found && !g_dv.removed && g_dv.warning[0]) /* unreachable, held, away, full */
-    SetWindowTextW(g_dv.notice, g_dv.warning);
-  else if (g_dv.lib_state == MC_SYNC_LIBRARY_OTHER)
-    SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_WINDOWS_PC_SYNC_OTHER_LIBRARY));
-  else if (g_dv.lib_state == MC_SYNC_LIBRARY_UNKNOWN)
-    SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_SYNC_UNKNOWN_LIBRARY));
-  else if (g_dv.found && !g_dv.removed && !g_dv.chosen)
-    SetWindowTextW(g_dv.notice, mc_wstr(MC_STR_SYNC_CHOOSE_FIRST));
-  else SetWindowTextW(g_dv.notice, L"");
-
-  /* While syncing, Sync now becomes Cancel sync; set only on a change, not every progress. */
+  SetWindowTextW(g_dv.status, text);
   set_sync_button();
-  EnableWindow(g_dv.sync_now, g_dv.found && !g_dv.removed && (syncing() || g_dv.online));
-  EnableWindow(g_dv.remove, g_dv.found && !g_dv.removed);
+  EnableWindow(g_dv.sync_now, member());
+}
+
+/* The page's notice: what's wrong here, or what keeps this PC from syncing music. */
+static void update_notice(void) {
+  const wchar_t *text = L"";
+  if (member() && g_dv.warning[0]) text = g_dv.warning; /* unreachable, low on space */
+  else if (g_dv.lib_state == MC_SYNC_LIBRARY_OTHER) text = mc_wstr(MC_STR_WINDOWS_PC_SYNC_OTHER_LIBRARY);
+  else if (g_dv.lib_state == MC_SYNC_LIBRARY_UNKNOWN) text = mc_wstr(MC_STR_SYNC_UNKNOWN_LIBRARY);
+  else if (member() && !g_dv.chosen) text = mc_wstr(MC_STR_SYNC_CHOOSE_FIRST);
+  SetWindowTextW(g_dv.notice, text);
 }
 
 static void set_check(int row, BOOL on) {
@@ -685,32 +756,44 @@ static void update_count(void) {
   SetWindowTextW(g_dv.count, text);
 }
 
-/* Every control's text, value and enabled state from the loaded device and profile. The edits
- * are left alone while they have the focus, unless force. */
+/* The devices' rows from devs. Each button's text is what screen readers read: the name and
+ * what it says under it. */
+static void update_rows(void) {
+  for (int i = 0; i < g_dv.ndevs; i++) {
+    const dev_row *r = &g_dv.devs[i];
+    wchar_t text[512], have[512];
+    if (r->detail[0]) swprintf(text, 512, L"%ls%ls%ls", r->name, mc_wstr(MC_STR_SEPARATOR_DOT), r->detail);
+    else swprintf(text, 512, L"%ls", r->name);
+    GetWindowTextW(g_dv.dev_btns[i], have, 512);
+    if (wcscmp(have, text)) SetWindowTextW(g_dv.dev_btns[i], text);
+    InvalidateRect(g_dv.dev_btns[i], NULL, FALSE); /* its marks may have changed */
+  }
+  wchar_t unpaired[64];
+  mc_wformat(unpaired, 64, mc_str(MC_STR_DEVICES_UNPAIRED), MC_D(g_dv.ndevs - g_dv.nmembers));
+  SetWindowTextW(g_dv.unpaired, unpaired);
+}
+
+/* What comes from the devices: this PC's name and files, the strip, the notice and the rows. */
+static void update_devices(void) {
+  wchar_t title[MC_SYNC_DEVICE_NAME_MAX + 32];
+  swprintf(title, MC_SYNC_DEVICE_NAME_MAX + 32, L"%ls%ls", g_dv.name, mc_wstr(MC_STR_WINDOWS_THIS_PC_SUFFIX));
+  SetWindowTextW(g_dv.title, title);
+  SetWindowTextW(g_dv.files, g_dv.files_text);
+  update_strip();
+  update_notice();
+  update_rows();
+}
+
+/* Every control's text, value and enabled state from the loaded devices and profile. The
+ * budget's edit is left alone while it has the focus, unless force. */
 static void update_controls(BOOL force) {
   g_dv.filling = TRUE;
-  static const wchar_t glyphs[] = {[MC_DEVICE_DESKTOP] = 0xE7F4, [MC_DEVICE_PHONE] = 0xE8EA};
-  wchar_t glyph[2] = {(unsigned)g_dv.kind <= (unsigned)MC_DEVICE_PHONE ? glyphs[g_dv.kind] : glyphs[0], 0};
-  SetWindowTextW(g_dv.icon, glyph);
-  SetWindowTextW(g_dv.title, !active()     ? mc_wstr(MC_STR_SYNC_IS_OFF)
-                             : g_dv.found ? g_dv.name
-                                          : mc_wstr(MC_STR_DEVICE_UNKNOWN));
-  SetWindowTextW(g_dv.remove,
-                 mc_wstr_mnemonic(g_dv.is_self ? MC_STR_LEAVE_GROUP_BUTTON : MC_STR_REMOVE_FROM_GROUP_BUTTON));
-  update_status();
-
-  if (force || GetFocus() != g_dv.name_edit) SetWindowTextW(g_dv.name_edit, g_dv.found ? g_dv.name : L"");
-  EnableWindow(g_dv.name_edit, g_dv.found && !g_dv.removed && g_dv.is_self);
+  update_devices();
 
   BOOL edit = editable();
   const mc_sync_profile *p = g_dv.profile;
   set_checked(g_dv.archive_box, p && p->archive);
-  EnableWindow(g_dv.archive_box, p && g_dv.is_self);
-  wchar_t archive_text[256];
-  if (p && p->archive && !g_dv.is_self)
-    mc_wformat(archive_text, 256, mc_str(MC_STR_PROFILE_ARCHIVE_OTHER), MC_S(u8(g_dv.name)));
-  else swprintf(archive_text, 256, L"%ls", mc_wstr(MC_STR_DEVICE_ARCHIVE_TEXT));
-  SetWindowTextW(g_dv.archive_text, archive_text);
+  EnableWindow(g_dv.archive_box, p != NULL);
 
   int sel = -1, n = (int)SendMessageW(g_dv.format, CB_GETCOUNT, 0, 0);
   for (int i = 0; p && i < n; i++) {
@@ -739,12 +822,13 @@ static void update_controls(BOOL force) {
   EnableWindow(g_dv.list, edit);
   update_select_buttons();
 
+  /* Outside a group the note stands in for the profile; in one it's under What to sync. */
   wchar_t note[256] = L"";
-  if (p && p->archive) swprintf(note, 256, L"%ls", mc_wstr(MC_STR_DEVICE_ARCHIVE_NOTE));
-  else if (!p && g_dv.found && !g_dv.removed)
+  if (active() && !g_dv.found) swprintf(note, 256, L"%ls", mc_wstr(MC_STR_DEVICE_NOT_IN_GROUP));
+  else if (active() && g_dv.removed) swprintf(note, 256, L"%ls", mc_wstr(MC_STR_DEVICE_REMOVED));
+  else if (p && p->archive) swprintf(note, 256, L"%ls", mc_wstr(MC_STR_DEVICE_ARCHIVE_NOTE));
+  else if (!p && member())
     mc_wformat(note, 256, mc_str(MC_STR_PROFILE_READ_FAILED), MC_S(mc_status_str(g_dv.profile_status)));
-  else if (p && !g_dv.is_self)
-    mc_wformat(note, 256, mc_str(MC_STR_SYNC_CHANGE_ON_DEVICE), MC_S(u8(g_dv.name)));
   SetWindowTextW(g_dv.note, note);
 
   update_count();
@@ -891,10 +975,10 @@ static void fill_list(BOOL keep) {
   update_select_buttons();
 }
 
-/* Reloads everything, keeping the pending edits. keep: it's the same device, so the list keeps
- * its place and focused edits their text. */
+/* Reloads everything, keeping the pending edits. keep: it's the same sync, so the list keeps
+ * its place and a focused edit its text. */
 static void reload(BOOL keep) {
-  load_device();
+  load_devices();
   load_profile();
   update_controls(!keep);
   fill_list(keep);
@@ -1045,7 +1129,6 @@ static void estimate_done(estimate_job *job) {
   if (g_dv.est.again) estimate_start();
 }
 
-/* Waits for the thread and drops its result, and anything queued: before sync goes. */
 /* --- Select All and Select None --- */
 
 /* One press: a long list takes seconds to store, and the window has to stay alive for it. */
@@ -1081,6 +1164,7 @@ static void select_wait(void) {
   g_dv.select_thread = NULL;
 }
 
+/* Waits for the threads and drops their results, and anything queued: before sync goes. */
 static void estimate_cancel(void) {
   KillTimer(g_dv.parent, ID_DEV_ESTIMATE_TIMER);
   select_wait(); /* it uses sync too */
@@ -1171,99 +1255,185 @@ static void schedule(void) {
   estimate_request(); /* for the edited profile, not waiting for it to be stored */
 }
 
-static void CALLBACK tick_timer(HWND wnd, UINT msg, UINT_PTR id, DWORD time) {
-  (void)wnd, (void)msg, (void)id, (void)time;
-  if (g_dv.shown && g_dv.found) update_status();
-}
+/* --- The group --- */
 
-static void apply_name(void) {
-  if (!g_dv.sync || !g_dv.found || g_dv.removed) return;
-  wchar_t buf[256], *s = buf;
-  GetWindowTextW(g_dv.name_edit, buf, 256);
-  while (*s == L' ' || *s == L'\t') s++;
-  size_t len = wcslen(s);
-  while (len && (s[len - 1] == L' ' || s[len - 1] == L'\t')) s[--len] = L'\0';
-  if (!*s || !wcscmp(s, g_dv.name)) {
-    SetWindowTextW(g_dv.name_edit, g_dv.name);
-    return;
-  }
-  char utf8[4 * MC_SYNC_DEVICE_NAME_MAX + 4], stored[sizeof utf8];
-  if (!WideCharToMultiByte(CP_UTF8, 0, s, -1, utf8, (int)sizeof utf8, NULL, NULL)) return;
-
-  mc_status st = g_dv.is_self ? mc_sync_set_device_name(g_dv.sync, utf8) : MC_ERR_LOCKED;
-  if (st != MC_OK) {
-    wchar_t text[256];
-    mc_wformat(text, 256, mc_str(MC_STR_DEVICE_RENAME_FAILED), MC_S(mc_status_str(st)));
-    set_message(text);
-    SetWindowTextW(g_dv.name_edit, g_dv.name);
-    layout_again();
-    return;
-  }
-  /* The core may have cut it. */
-  if (mc_sync_get_device_name(g_dv.sync, stored, sizeof stored) == MC_OK) {
-    widen(stored, g_dv.name, MC_SYNC_DEVICE_NAME_MAX + 1);
-  } else {
-    memcpy(stored, utf8, sizeof stored);
-    wcsncpy(g_dv.name, s, MC_SYNC_DEVICE_NAME_MAX);
-  }
-  g_dv.name[MC_SYNC_DEVICE_NAME_MAX] = L'\0';
-  SetWindowTextW(g_dv.title, g_dv.name);
-  SetWindowTextW(g_dv.name_edit, g_dv.name);
-  layout_again();
-  /* Either may come back here to refresh the page. */
-  device_view_host host = g_dv.host;
-  if (host.rename_self) host.rename_self(stored);
-  if (host.devices_changed) host.devices_changed();
-}
-
-static void remove_device(void) {
-  if (!g_dv.sync || !g_dv.found) return;
+static void leave_group(void) {
+  if (!member()) return;
   wchar_t text[1024];
-  const wchar_t *caption, *ok;
-  if (g_dv.is_self) {
-    caption = mc_wstr(MC_STR_LEAVE_GROUP);
-    ok = mc_wstr_mnemonic(MC_STR_LEAVE_GROUP);
-    mc_wformat(text, 1024, mc_str(MC_STR_WINDOWS_LEAVE_GROUP_CONFIRM_OTHERS),
-               MC_S(g_dv.others[0] ? u8(g_dv.others) : mc_str(MC_STR_OTHER_DEVICES)));
-  } else {
-    caption = mc_wstr(MC_STR_REMOVE_FROM_GROUP);
-    ok = mc_wstr_mnemonic(MC_STR_REMOVE_FROM_GROUP);
-    wchar_t title[256];
-    mc_wformat(title, 256, mc_str(MC_STR_REMOVE_DEVICE_TITLE), MC_S(u8(g_dv.name)));
-    swprintf(text, 1024, L"%ls\n\n%ls", title, mc_wstr(MC_STR_REMOVE_DEVICE_TEXT));
-  }
-  if (!confirm_dialog(g_dv.parent, caption, text, MB_ICONWARNING, ok, mc_wstr_mnemonic(MC_STR_CANCEL), TRUE)) return;
+  mc_wformat(text, 1024, mc_str(MC_STR_WINDOWS_LEAVE_GROUP_CONFIRM_OTHERS),
+             MC_S(g_dv.others[0] ? u8(g_dv.others) : mc_str(MC_STR_OTHER_DEVICES)));
+  if (!confirm_dialog(g_dv.parent, mc_wstr(MC_STR_LEAVE_GROUP), text, MB_ICONWARNING,
+                      mc_wstr_mnemonic(MC_STR_LEAVE_GROUP), mc_wstr_mnemonic(MC_STR_CANCEL), TRUE) ||
+      !member())
+    return;
   flush();
-
-  mc_status st;
-  if (g_dv.is_self) {
-    HCURSOR old = SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_WAIT)); /* blocks for a few seconds */
-    st = mc_sync_leave_group(g_dv.sync);
-    SetCursor(old);
-  } else {
-    st = mc_sync_remove_device(g_dv.sync, g_dv.uid);
-  }
+  HCURSOR old = SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_WAIT)); /* blocks for a few seconds */
+  mc_status st = mc_sync_leave_group(g_dv.sync);
+  SetCursor(old);
   if (st == MC_OK) {
     if (g_dv.host.devices_changed) g_dv.host.devices_changed();
     return;
   }
-  if (st == MC_ERR_LOCKED && g_dv.is_self)
-    swprintf(text, 1024, L"%ls", mc_wstr(MC_STR_WINDOWS_LEAVE_ONLY_ARCHIVE));
-  else if (st == MC_ERR_LOCKED)
-    mc_wformat(text, 1024, mc_str(MC_STR_REMOVE_ONLY_ARCHIVE), MC_S(u8(g_dv.name)));
-  else
-    mc_wformat(text, 1024,
-               mc_str(g_dv.is_self ? MC_STR_LEAVE_GROUP_FAILED : MC_STR_REMOVE_DEVICE_FAILED),
-               MC_S(mc_status_str(st)));
+  if (st == MC_ERR_LOCKED) swprintf(text, 1024, L"%ls", mc_wstr(MC_STR_WINDOWS_LEAVE_ONLY_ARCHIVE));
+  else mc_wformat(text, 1024, mc_str(MC_STR_LEAVE_GROUP_FAILED), MC_S(mc_status_str(st)));
   set_message(text);
   layout_again();
 }
+
+/* Removes member uid, called name, once confirmed. */
+static void remove_member(const char *uid, const wchar_t *name) {
+  wchar_t text[1024], title[256];
+  mc_wformat(title, 256, mc_str(MC_STR_REMOVE_DEVICE_TITLE), MC_S(u8(name)));
+  swprintf(text, 1024, L"%ls\n\n%ls", title, mc_wstr(MC_STR_REMOVE_DEVICE_TEXT));
+  if (!confirm_dialog(g_dv.parent, mc_wstr(MC_STR_REMOVE_FROM_GROUP), text, MB_ICONWARNING,
+                      mc_wstr_mnemonic(MC_STR_REMOVE_FROM_GROUP), mc_wstr_mnemonic(MC_STR_CANCEL), TRUE) ||
+      !g_dv.sync)
+    return;
+  mc_status st = mc_sync_remove_device(g_dv.sync, uid);
+  if (st == MC_OK) {
+    if (g_dv.host.devices_changed) g_dv.host.devices_changed();
+    return;
+  }
+  if (st == MC_ERR_LOCKED) mc_wformat(text, 1024, mc_str(MC_STR_REMOVE_ONLY_ARCHIVE), MC_S(u8(name)));
+  else mc_wformat(text, 1024, mc_str(MC_STR_REMOVE_DEVICE_FAILED), MC_S(mc_status_str(st)));
+  set_message(text);
+  layout_again();
+}
+
+/* How the last session with uid went, if it didn't simply succeed: text "" forgets it. */
+static void set_result(const char *uid, const wchar_t *text) {
+  int i = 0;
+  while (i < g_dv.nresults && strcmp(g_dv.results[i].uid, uid)) i++;
+  if (!text[0]) {
+    if (i < g_dv.nresults) g_dv.results[i] = g_dv.results[--g_dv.nresults];
+    return;
+  }
+  if (i == g_dv.nresults) {
+    if (i == MAX_ROWS) return;
+    g_dv.nresults++;
+  }
+  snprintf(g_dv.results[i].uid, sizeof g_dv.results[i].uid, "%s", uid);
+  swprintf(g_dv.results[i].text, sizeof g_dv.results[i].text / sizeof *g_dv.results[i].text, L"%ls", text);
+}
+
+/* Adds line, which may be UTF-8 (utf8) or wide, as a line of text; nothing for "". */
+static void add_line(wchar_t *text, size_t cap, const wchar_t *line, const char *utf8) {
+  wchar_t wide[1024];
+  if (utf8) line = wstr_from_utf8(wide, 1024, utf8);
+  if (!line || !line[0]) return;
+  size_t used = wcslen(text);
+  if (used + 1 < cap) swprintf(text + used, cap - used, L"%ls%ls", used ? L"\n" : L"", line);
+}
+
+/* "Original files", "Opus 128 kbps" or "Auto", into buf. */
+static const wchar_t *format_name(const mc_transcode_opts *f, wchar_t *buf, int cap) {
+  if (f->format == MC_FORMAT_AUTO) return mc_wstr(MC_STR_FORMAT_AUTO);
+  if (f->format == MC_FORMAT_ORIGINAL) return mc_wstr(MC_STR_FORMAT_ORIGINAL);
+  mc_wformat(buf, (size_t)cap, mc_str(MC_STR_FORMAT_OPUS), MC_D(f->bitrate_kbps));
+  return buf;
+}
+
+/* A member's details, as its page once showed them: how it's doing, its last session here,
+ * its files and its profile, how the two devices reach each other and where it was seen. */
+static void member_details(const mc_sync_device *d, wchar_t *text, size_t cap) {
+  wchar_t line[1024], ago[64], value[256];
+  char buf[1024];
+  if (d->last_sync_ms > 0) fmt_ago(d->last_sync_ms, ago, 64);
+  if (d->online && d->last_sync_ms > 0) mc_wformat(line, 1024, mc_str(MC_STR_DEVICE_ONLINE_SYNCED), MC_S(u8(ago)));
+  else if (d->online) swprintf(line, 1024, L"%ls", mc_wstr(MC_STR_DEVICE_ONLINE));
+  else if (d->last_sync_ms > 0) mc_wformat(line, 1024, mc_str(MC_STR_DEVICE_OFFLINE_SYNCED), MC_S(u8(ago)));
+  else swprintf(line, 1024, L"%ls", mc_wstr(MC_STR_DEVICE_NOT_SYNCED));
+  buf[0] = '\0';
+  mc_sync_device_note(d, 0, 1, buf, sizeof buf); /* when it next syncs by itself, or what holds it back */
+  if (buf[0]) {
+    size_t used = wcslen(line);
+    swprintf(line + used, 1024 - used, L"%ls%ls", mc_wstr(MC_STR_SEPARATOR_DOT), wstr_from_utf8(value, 256, buf));
+  }
+  add_line(text, cap, line, NULL);
+  buf[0] = '\0';
+  mc_sync_device_warning(g_dv.sync, d, 0, buf, sizeof buf); /* its version first */
+  add_line(text, cap, NULL, buf);
+  for (int i = 0; i < g_dv.nresults; i++)
+    if (!strcmp(g_dv.results[i].uid, d->uid)) add_line(text, cap, g_dv.results[i].text, NULL);
+  files_text(d, line, 1024);
+  add_line(text, cap, line, NULL);
+
+  mc_sync_profile *p = NULL;
+  if (mc_sync_get_profile(g_dv.sync, d->uid, &p) == MC_OK) {
+    add_line(text, cap, L" ", NULL); /* a blank line before the profile */
+    buf[0] = '\0';
+    mc_sync_profile_summary(p, buf, sizeof buf);
+    add_line(text, cap, NULL, buf);
+    if (p->archive) {
+      add_line(text, cap, mc_wstr(MC_STR_DEVICE_ARCHIVE_NOTE), NULL);
+    } else {
+      mc_wformat(line, 1024, mc_str(MC_STR_WINDOWS_SYNC_DETAIL), MC_S(mc_str(MC_STR_SYNC_FORMAT)),
+                 MC_S(u8(format_name(&p->format, value, 256))));
+      add_line(text, cap, line, NULL);
+      if (p->budget_enabled && p->budget_bytes > 0) {
+        mc_wformat(line, 1024, mc_str(MC_STR_WINDOWS_SYNC_BUDGET), MC_S(u8(wstr_size(value, 256, p->budget_bytes))));
+        add_line(text, cap, line, NULL);
+      }
+    }
+    mc_sync_profile_free(p);
+  }
+
+  add_line(text, cap, L" ", NULL); /* and before how they connect */
+  buf[0] = '\0';
+  mc_sync_reach_text(g_dv.sync, d->uid, d->name, 0, buf, sizeof buf);
+  add_line(text, cap, NULL, buf);
+  if (d->address && *d->address) mc_wformat(value, 256, mc_str(MC_STR_DEVICE_ADDRESS_PORT), MC_S(d->address), MC_D(d->port));
+  else swprintf(value, 256, L"%ls", mc_wstr(MC_STR_DEVICE_ADDRESS_UNKNOWN));
+  mc_wformat(line, 1024, mc_str(MC_STR_WINDOWS_SYNC_DETAIL), MC_S(mc_str(MC_STR_DEVICE_ADDRESS)), MC_S(u8(value)));
+  add_line(text, cap, line, NULL);
+}
+
+/* A member's row clicked: its details and profile, read-only, with Details for its issues,
+ * and Remove from group unless it's an archive, which the group can't do without. */
+static void show_member(const char *row_uid) {
+  mc_sync *sync = g_dv.sync;
+  mc_sync_device_list *list = NULL;
+  if (!sync || mc_sync_list_devices(sync, &list) != MC_OK || !list) return;
+  char uid[MC_UID_STRLEN]; /* the row's goes if the devices refresh while the dialog is open */
+  snprintf(uid, sizeof uid, "%s", row_uid);
+  wchar_t name[MC_SYNC_DEVICE_NAME_MAX + 1], text[4096] = L"";
+  BOOL found = FALSE, archive = FALSE;
+  for (int i = 0; i < list->count && !found; i++) {
+    const mc_sync_device *d = &list->items[i];
+    if (strcmp(d->uid, uid) || d->removed) continue;
+    found = TRUE;
+    archive = d->archive;
+    widen(d->name && *d->name ? d->name : mc_str(MC_STR_DEVICE_UNNAMED), name, MC_SYNC_DEVICE_NAME_MAX + 1);
+    member_details(d, text, sizeof text / sizeof *text);
+  }
+  mc_sync_device_list_free(list);
+  if (!found) return;
+  BOOL issues = issue_dialog_has_issues(sync, uid, NULL);
+
+  const wchar_t *close = mc_wstr_mnemonic(MC_STR_CLOSE), *details = mc_wstr_mnemonic(MC_STR_SYNC_ISSUES_DETAILS);
+  prompt_dialog ask = {.caption = mc_wstr(MC_STR_APP_NAME), .heading = name, .text = text};
+  ask.ok = !archive ? mc_wstr_mnemonic(MC_STR_REMOVE_FROM_GROUP_BUTTON) : issues ? details : close;
+  ask.other = !archive && issues ? details : NULL;
+  ask.cancel = ask.ok == close ? NULL : close;
+  ask.cancel_default = ask.cancel != NULL;
+  INT_PTR answer = prompt_dialog_show(GetAncestor(g_dv.parent, GA_ROOT), &ask);
+  if (sync != g_dv.sync) return; /* sync stopped meanwhile */
+  if (answer == IDOK && !archive) {
+    remove_member(uid, name);
+  } else if ((answer == IDOK && issues) || answer == IDNO) {
+    if (issue_dialog_show(GetAncestor(g_dv.parent, GA_ROOT), g_dv.lib, sync, uid) && g_dv.host.library_changed)
+      g_dv.host.library_changed();
+    device_view_issues_changed();
+  }
+}
+
+/* --- Syncing --- */
 
 static void sync_now(void) {
   if (!g_dv.sync) return;
   flush();
   /* Also chooses this PC's profile as it stands, if it wasn't. */
-  mc_status st = mc_sync_now(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
+  mc_status st = mc_sync_now(g_dv.sync, NULL);
   wchar_t text[256] = L"";
   if (st != MC_OK) mc_wformat(text, 256, mc_str(MC_STR_SYNC_START_FAILED), MC_S(mc_status_str(st)));
   set_message(text);
@@ -1271,9 +1441,9 @@ static void sync_now(void) {
   layout_again();
 }
 
-/* Ends the sessions the page shows, which on_sync_done then reports as cancelled. */
+/* Ends the sessions under way, which on_sync_done then reports as cancelled. */
 static void cancel_sync(void) {
-  if (g_dv.sync) mc_sync_cancel(g_dv.sync, g_dv.is_self ? NULL : g_dv.uid);
+  if (g_dv.sync) mc_sync_cancel(g_dv.sync, NULL);
 }
 
 /* --- Archive --- */
@@ -1284,12 +1454,11 @@ static void set_archive(BOOL archive) {
   mc_status st = mc_sync_set_archive(g_dv.sync, g_dv.uid, archive);
   wchar_t text[256] = L"";
   if (st == MC_OK) mc_sync_notify_changed(g_dv.sync);
-  else if (st == MC_ERR_LOCKED && !archive && g_dv.is_self)
+  else if (st == MC_ERR_LOCKED && !archive)
     swprintf(text, 256, L"%ls", mc_wstr(MC_STR_WINDOWS_PC_ARCHIVE_LOCKED));
   else mc_wformat(text, 256, mc_str(MC_STR_PROFILE_ARCHIVE_FAILED), MC_S(mc_status_str(st)));
   set_message(text);
   reload(TRUE);
-  if (g_dv.host.devices_changed) g_dv.host.devices_changed(); /* the sidebar's tooltip says it's one */
 }
 
 /* The confirmation's text, with the whole library's size once it's known. */
@@ -1338,7 +1507,7 @@ static void ask_make_archive(void) {
 /* The box shows what is until it's confirmed and stored. Only a device sets its own role;
  * stepping down isn't asked. */
 static void on_archive(void) {
-  if (!g_dv.profile || !g_dv.is_self || !IsWindowEnabled(g_dv.archive_box)) return;
+  if (!g_dv.profile || !IsWindowEnabled(g_dv.archive_box)) return;
   if (!g_dv.profile->archive) ask_make_archive();
   else set_archive(FALSE);
 }
@@ -1461,24 +1630,18 @@ static void select_tab(int tab) {
 
 /* --- Subclasses --- */
 
-/* Enter applies the name (or the budget straight away), Escape undoes the edit. */
+/* Enter in the budget's edit applies it straight away. */
 static LRESULT CALLBACK edit_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
   (void)data;
   switch (msg) {
     case WM_KEYDOWN:
       if (wp == VK_RETURN) {
-        if (wnd == g_dv.name_edit) apply_name();
-        else flush();
-        return 0;
-      }
-      if (wp == VK_ESCAPE && wnd == g_dv.name_edit) {
-        SetWindowTextW(wnd, g_dv.name);
-        SendMessageW(wnd, EM_SETSEL, 0, -1);
+        flush();
         return 0;
       }
       break;
     case WM_CHAR:
-      if (wp == L'\r' || wp == 27) return 0; /* no beep */
+      if (wp == L'\r') return 0; /* no beep */
       break;
     case WM_NCDESTROY:
       RemoveWindowSubclass(wnd, edit_proc, id);
@@ -1519,26 +1682,29 @@ static LRESULT CALLBACK list_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT
   return DefSubclassProc(wnd, msg, wp, lp);
 }
 
-/* Hover for the segmented buttons, which owner-drawn buttons don't track themselves. */
-static LRESULT CALLBACK tab_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+/* Hover for the owner-drawn buttons (the segmented ones and the devices' rows), which don't
+ * track it themselves. */
+static LRESULT CALLBACK hover_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR data) {
+  (void)data;
   switch (msg) {
     case WM_MOUSEMOVE:
-      if (g_dv.hot_tab != (int)data) {
-        if (g_dv.hot_tab >= 0) InvalidateRect(g_dv.tabs[g_dv.hot_tab], NULL, FALSE);
-        g_dv.hot_tab = (int)data;
+      if (g_dv.hot != wnd) {
+        if (g_dv.hot) InvalidateRect(g_dv.hot, NULL, FALSE);
+        g_dv.hot = wnd;
         InvalidateRect(wnd, NULL, FALSE);
         TRACKMOUSEEVENT tme = {.cbSize = sizeof tme, .dwFlags = TME_LEAVE, .hwndTrack = wnd};
         TrackMouseEvent(&tme);
       }
       break;
     case WM_MOUSELEAVE:
-      if (g_dv.hot_tab == (int)data) g_dv.hot_tab = -1;
+      if (g_dv.hot == wnd) g_dv.hot = NULL;
       InvalidateRect(wnd, NULL, FALSE);
       break;
     case WM_ERASEBKGND:
       return 1;
     case WM_NCDESTROY:
-      RemoveWindowSubclass(wnd, tab_proc, id);
+      if (g_dv.hot == wnd) g_dv.hot = NULL;
+      RemoveWindowSubclass(wnd, hover_proc, id);
       break;
   }
   return DefSubclassProc(wnd, msg, wp, lp);
@@ -1546,9 +1712,122 @@ static LRESULT CALLBACK tab_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_
 
 /* --- Window plumbing --- */
 
-static HWND child(const wchar_t *cls, const wchar_t *text, DWORD style, int id) {
-  return CreateWindowExW(0, cls, text, WS_CHILD | style, 0, 0, 0, 0, g_dv.parent, (HMENU)(INT_PTR)id,
+static int scale(int px) {
+  return MulDiv(px, (int)(g_dv.dpi ? g_dv.dpi : USER_DEFAULT_SCREEN_DPI), USER_DEFAULT_SCREEN_DPI);
+}
+
+static int busy_index(const char *uid) {
+  for (int i = 0; i < g_dv.nbusy; i++)
+    if (!strcmp(g_dv.busy[i], uid)) return i;
+  return -1;
+}
+
+static void left_scrolled(void) {
+  SetWindowPos(g_dv.left.content, NULL, 0, -g_dv.left.scroll.pos, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+static void right_scrolled(void) {
+  SetWindowPos(g_dv.right.content, NULL, 0, -g_dv.right.scroll.pos, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+/* The line under the strip and the one between the panels. */
+static void paint_lines(HDC dc) {
+  if (!g_dv.line_y) return;
+  SetDCBrushColor(dc, theme.line);
+  HBRUSH brush = GetStockObject(DC_BRUSH);
+  RECT under = {0, g_dv.line_y, g_dv.line_w, g_dv.line_y + 1};
+  RECT between = {g_dv.divider_x, g_dv.line_y + 1, g_dv.divider_x + 1, g_dv.divider_bottom};
+  FillRect(dc, &under, brush);
+  FillRect(dc, &between, brush);
+}
+
+/* The page and the panels' contents: their controls' messages go on to the main window, as
+ * if it were their parent. */
+static LRESULT CALLBACK forward_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
+  switch (msg) {
+    case WM_COMMAND:
+    case WM_NOTIFY:
+    case WM_DRAWITEM:
+    case WM_MEASUREITEM:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+    case WM_CTLCOLORSTATIC:
+      return SendMessageW(g_dv.parent, msg, wp, lp);
+    case WM_ERASEBKGND: /* also how themed controls draw their parent's background */
+    case WM_PRINTCLIENT: {
+      RECT client;
+      GetClientRect(wnd, &client);
+      FillRect((HDC)wp, &client, theme.bg_brush);
+      if (wnd == g_dv.page) paint_lines((HDC)wp);
+      return 1;
+    }
+  }
+  return DefWindowProcW(wnd, msg, wp, lp);
+}
+
+static panel *panel_of(HWND view) {
+  return view == g_dv.left.view ? &g_dv.left : view == g_dv.right.view ? &g_dv.right : NULL;
+}
+
+/* A panel's view: its scrollbar. The wheel comes through device_view_translate(). */
+static LRESULT CALLBACK panel_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
+  panel *p = panel_of(wnd);
+  if (!p) return DefWindowProcW(wnd, msg, wp, lp); /* before CreateWindowExW returns */
+  switch (msg) {
+    case WM_ERASEBKGND:
+      return 1;
+    case WM_PAINT: {
+      PAINTSTRUCT ps;
+      HDC dc = BeginPaint(wnd, &ps);
+      RECT client;
+      GetClientRect(wnd, &client);
+      if (canvas_reserve(&p->canvas, client.right, client.bottom)) {
+        canvas_clear(&p->canvas, &ps.rcPaint, theme.bg, 255);
+        scroller_paint(&p->scroll, &p->canvas);
+        canvas_blit(&p->canvas, dc, ps.rcPaint.left, ps.rcPaint.top, &ps.rcPaint);
+      }
+      EndPaint(wnd, &ps);
+      return 0;
+    }
+    case WM_TIMER:
+      scroller_timer(&p->scroll, wp);
+      return 0;
+    case WM_MOUSEMOVE:
+      if (!p->tracking) {
+        TRACKMOUSEEVENT tme = {sizeof tme, TME_LEAVE, wnd, 0};
+        p->tracking = TrackMouseEvent(&tme);
+      }
+      scroller_mouse_move(&p->scroll, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+      return 0;
+    case WM_MOUSELEAVE:
+      p->tracking = FALSE;
+      scroller_mouse_leave(&p->scroll);
+      return 0;
+    case WM_LBUTTONDOWN:
+      scroller_mouse_down(&p->scroll, GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+      return 0;
+    case WM_LBUTTONUP:
+      scroller_mouse_up(&p->scroll);
+      return 0;
+    case WM_CAPTURECHANGED:
+      scroller_capture_changed(&p->scroll);
+      return 0;
+  }
+  return DefWindowProcW(wnd, msg, wp, lp);
+}
+
+static HWND child(HWND parent, const wchar_t *cls, const wchar_t *text, DWORD style, int id) {
+  return CreateWindowExW(0, cls, text, WS_CHILD | style, 0, 0, 0, 0, parent, (HMENU)(INT_PTR)id,
                          GetModuleHandleW(NULL), NULL);
+}
+
+/* An edit as in Settings: a themed border, the text centred in it. */
+static HWND edit_child(HWND parent, DWORD style, int id) {
+  HWND edit = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, NULL, WS_CHILD | WS_TABSTOP | style, 0, 0, 0, 0, parent,
+                              (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
+  theme_center_edit(edit);
+  return edit;
 }
 
 static void firewall_changed(void) {
@@ -1559,37 +1838,83 @@ void device_view_create(HWND parent, const device_view_host *host) {
   g_dv.parent = parent;
   if (host) g_dv.host = *host;
   g_dv.rows_tab = -1;
+  HINSTANCE inst = GetModuleHandleW(NULL);
+  WNDCLASSEXW wc = {.cbSize = sizeof wc, .lpfnWndProc = forward_proc, .hInstance = inst,
+                    .hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW), .lpszClassName = L"kithsong_sync_content"};
+  RegisterClassExW(&wc);
+  wc.lpfnWndProc = panel_proc;
+  wc.lpszClassName = L"kithsong_sync_panel";
+  RegisterClassExW(&wc);
+  /* Tab goes through all of them (device_view_translate()), in the order they're made. */
+  g_dv.page = CreateWindowExW(WS_EX_CONTROLPARENT, L"kithsong_sync_content", NULL, WS_CHILD | WS_CLIPCHILDREN, 0, 0,
+                              0, 0, parent, NULL, inst, NULL);
+  HWND page = g_dv.page;
   DWORD label = SS_LEFT | SS_NOPREFIX, line = label | SS_ENDELLIPSIS;
-  g_dv.icon = child(WC_STATICW, NULL, SS_CENTER | SS_CENTERIMAGE | SS_NOPREFIX, ID_DEV_ICON);
-  g_dv.title = child(WC_STATICW, NULL, line, ID_DEV_TITLE);
-  g_dv.sync_now = child(WC_BUTTONW, mc_wstr(MC_STR_SYNC_NOW), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_SYNC_NOW);
-  g_dv.remove = child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_REMOVE_FROM_GROUP_BUTTON), BS_PUSHBUTTON | WS_TABSTOP,
-                      ID_DEV_REMOVE);
-  g_dv.status = child(WC_STATICW, NULL, line, ID_DEV_STATUS);
-  g_dv.files = child(WC_STATICW, NULL, line, ID_DEV_FILES);
-  g_dv.progress = child(PROGRESS_CLASSW, NULL, 0, ID_DEV_PROGRESS);
-  SendMessageW(g_dv.progress, PBM_SETRANGE32, 0, PROGRESS_MAX);
-  g_dv.progress_text = child(WC_STATICW, NULL, line, ID_DEV_PROGRESS_TEXT);
-  g_dv.message = child(WC_STATICW, NULL, label, ID_DEV_MESSAGE);
-  g_dv.notice = child(WC_STATICW, NULL, label, ID_DEV_NOTICE);
+  firewall_banner_create(page, ID_DEV_FIREWALL);
+  firewall_set_listener(firewall_changed);
+  g_dv.message = child(page, WC_STATICW, NULL, label, ID_DEV_MESSAGE);
+  g_dv.notice = child(page, WC_STATICW, NULL, label, ID_DEV_NOTICE);
   g_dv.issues =
-    child(WC_BUTTONW, mc_wstr_mnemonic(MC_STR_SYNC_ISSUES_DETAILS), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_ISSUES);
-  g_dv.takeover =
-    child(WC_BUTTONW, mc_wstr(MC_STR_WINDOWS_SYNC_OFFER_OPEN), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_TAKEOVER);
+    child(page, WC_BUTTONW, mc_wstr_mnemonic(MC_STR_SYNC_ISSUES_DETAILS), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_ISSUES);
+  g_dv.progress = child(page, PROGRESS_CLASSW, NULL, 0, ID_DEV_PROGRESS);
+  SendMessageW(g_dv.progress, PBM_SETRANGE32, 0, PROGRESS_MAX);
+  g_dv.status = child(page, WC_STATICW, NULL, line, ID_DEV_STATUS);
+  g_dv.sync_now = child(page, WC_BUTTONW, mc_wstr(MC_STR_SYNC_NOW), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_SYNC_NOW);
 
-  g_dv.name_label = child(WC_STATICW, mc_wstr(MC_STR_NAME), line, ID_DEV_NAME_LABEL);
-  /* The edits look as in Settings: a themed border, the text centred in it. */
-  g_dv.name_edit = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, NULL, WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0,
-                                   0, 0, parent, (HMENU)(INT_PTR)ID_DEV_NAME, GetModuleHandleW(NULL), NULL);
-  theme_center_edit(g_dv.name_edit);
-  SendMessageW(g_dv.name_edit, EM_LIMITTEXT, MC_SYNC_DEVICE_NAME_MAX, 0);
-  SetWindowSubclass(g_dv.name_edit, edit_proc, 0, 0);
-  g_dv.archive_label = child(WC_STATICW, mc_wstr(MC_STR_DEVICE_ARCHIVE_TITLE), line, ID_DEV_ARCHIVE_LABEL);
+  panel *panels[] = {&g_dv.left, &g_dv.right};
+  for (int i = 0; i < 2; i++) {
+    panel *p = panels[i];
+    p->view = CreateWindowExW(WS_EX_CONTROLPARENT, L"kithsong_sync_panel", NULL, WS_CHILD | WS_CLIPCHILDREN, 0, 0, 0,
+                              0, page, NULL, inst, NULL);
+    p->content = CreateWindowExW(WS_EX_CONTROLPARENT, L"kithsong_sync_content", NULL,
+                                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0, 0, 0, p->view, NULL, inst, NULL);
+    p->scroll.wnd = p->view;
+  }
+  g_dv.left.scroll.moved = left_scrolled;
+  g_dv.right.scroll.moved = right_scrolled;
+
+  /* This PC's panel. */
+  HWND left = g_dv.left.content;
+  g_dv.title = child(left, WC_STATICW, NULL, line, ID_DEV_TITLE);
+  g_dv.files = child(left, WC_STATICW, NULL, line, ID_DEV_FILES);
+  g_dv.archive_label = child(left, WC_STATICW, mc_wstr(MC_STR_DEVICE_ARCHIVE_TITLE), line, ID_DEV_ARCHIVE_LABEL);
   /* Not an auto checkbox: it shows the stored flag, which changes only once confirmed. */
-  g_dv.archive_box = child(WC_BUTTONW, NULL, BS_CHECKBOX | WS_TABSTOP, ID_DEV_ARCHIVE);
-  g_dv.archive_text = child(WC_STATICW, NULL, line | SS_NOTIFY, ID_DEV_ARCHIVE_TEXT);
-  g_dv.format_label = child(WC_STATICW, mc_wstr(MC_STR_SYNC_FORMAT), line, ID_DEV_FORMAT_LABEL);
-  g_dv.format = child(WC_COMBOBOXW, NULL, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, ID_DEV_FORMAT);
+  g_dv.archive_box = child(left, WC_BUTTONW, NULL, BS_CHECKBOX | WS_TABSTOP, ID_DEV_ARCHIVE);
+  g_dv.archive_text =
+    child(left, WC_STATICW, mc_wstr(MC_STR_DEVICE_ARCHIVE_TEXT), line | SS_NOTIFY, ID_DEV_ARCHIVE_TEXT);
+
+  g_dv.heading = child(left, WC_STATICW, mc_wstr(MC_STR_WHAT_TO_SYNC), line, ID_DEV_HEADING);
+  g_dv.note = child(left, WC_STATICW, NULL, label, ID_DEV_NOTE);
+  /* Checkboxes have no text of their own: a themed checkbox's text stays black in dark
+   * mode, so each has a label beside it, which toggles it too. */
+  g_dv.sync_all = child(left, WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEV_SYNC_ALL);
+  g_dv.sync_all_label =
+    child(left, WC_STATICW, mc_wstr(MC_STR_SYNC_EVERYTHING), line | SS_NOTIFY, ID_DEV_SYNC_ALL_LABEL);
+  for (int t = 0; t < NUM_TABS; t++) {
+    g_dv.tabs[t] = child(left, WC_BUTTONW, mc_wstr(k_tab_name[t]), BS_OWNERDRAW | WS_TABSTOP, ID_DEV_TAB + t);
+    SetWindowSubclass(g_dv.tabs[t], hover_proc, 0, 0);
+  }
+  g_dv.select_all =
+    child(left, WC_BUTTONW, mc_wstr(MC_STR_SELECT_ALL), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_SELECT_ALL);
+  g_dv.select_none =
+    child(left, WC_BUTTONW, mc_wstr(MC_STR_SELECT_NONE), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_SELECT_NONE);
+  g_dv.list = child(left, WC_LISTVIEWW, NULL,
+                    LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | WS_BORDER | WS_TABSTOP, ID_DEV_LIST);
+  SetWindowSubclass(g_dv.list, list_proc, 0, 0);
+  LVCOLUMNW col = {.mask = LVCF_WIDTH | LVCF_FMT, .fmt = LVCFMT_LEFT, .cx = 300};
+  SendMessageW(g_dv.list, LVM_INSERTCOLUMNW, 0, (LPARAM)&col);
+  col.fmt = LVCFMT_RIGHT;
+  col.cx = 100;
+  SendMessageW(g_dv.list, LVM_INSERTCOLUMNW, 1, (LPARAM)&col);
+  theme_apply_control(g_dv.list);
+  ListView_SetExtendedListViewStyleEx(g_dv.list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER,
+                                      LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+  set_check_images();
+  g_dv.count = child(left, WC_STATICW, NULL, line, ID_DEV_COUNT);
+
+  g_dv.quality = child(left, WC_STATICW, mc_wstr(MC_STR_WINDOWS_PC_SYNC_QUALITY), line, ID_DEV_QUALITY);
+  g_dv.format_label = child(left, WC_STATICW, mc_wstr(MC_STR_SYNC_FORMAT), line, ID_DEV_FORMAT_LABEL);
+  g_dv.format = child(left, WC_COMBOBOXW, NULL, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, ID_DEV_FORMAT);
   int i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)mc_wstr(MC_STR_FORMAT_AUTO));
   SendMessageW(g_dv.format, CB_SETITEMDATA, (WPARAM)i, AUTO_ITEM);
   i = (int)SendMessageW(g_dv.format, CB_ADDSTRING, 0, (LPARAM)mc_wstr(MC_STR_FORMAT_ORIGINAL));
@@ -1602,51 +1927,27 @@ void device_view_create(HWND parent, const device_view_host *host) {
   }
   COMBOBOXINFO info = {.cbSize = sizeof info};
   if (GetComboBoxInfo(g_dv.format, &info)) g_dv.combo_list = info.hwndList;
-
-  /* Checkboxes have no text of their own: a themed checkbox's text stays black in dark
-   * mode, so each has a label beside it, which toggles it too. */
-  g_dv.budget = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEV_BUDGET);
-  g_dv.budget_label = child(WC_STATICW, mc_wstr(MC_STR_BUDGET_LIMIT), line | SS_NOTIFY, ID_DEV_BUDGET_LABEL);
-  g_dv.budget_size = CreateWindowExW(WS_EX_CLIENTEDGE, WC_EDITW, NULL, WS_CHILD | WS_TABSTOP | ES_NUMBER | ES_RIGHT,
-                                     0, 0, 0, 0, parent, (HMENU)(INT_PTR)ID_DEV_BUDGET_SIZE, GetModuleHandleW(NULL),
-                                     NULL);
-  theme_center_edit(g_dv.budget_size);
+  g_dv.budget = child(left, WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEV_BUDGET);
+  g_dv.budget_label = child(left, WC_STATICW, mc_wstr(MC_STR_BUDGET_LIMIT), line | SS_NOTIFY, ID_DEV_BUDGET_LABEL);
+  g_dv.budget_size = edit_child(left, ES_NUMBER | ES_RIGHT, ID_DEV_BUDGET_SIZE);
   SendMessageW(g_dv.budget_size, EM_LIMITTEXT, 5, 0);
   SetWindowSubclass(g_dv.budget_size, edit_proc, 0, 0);
-  g_dv.budget_unit = child(WC_STATICW, mc_wstr(MC_STR_BUDGET_UNIT), line, ID_DEV_BUDGET_UNIT);
-  g_dv.estimate = child(WC_STATICW, NULL, label, ID_DEV_ESTIMATE);
+  g_dv.budget_unit = child(left, WC_STATICW, mc_wstr(MC_STR_BUDGET_UNIT), line, ID_DEV_BUDGET_UNIT);
+  g_dv.estimate = child(left, WC_STATICW, NULL, label, ID_DEV_ESTIMATE);
   SetWindowSubclass(g_dv.estimate, estimate_proc, 0, 0); /* receives the estimate's thread's results */
 
-  g_dv.heading = child(WC_STATICW, mc_wstr(MC_STR_WHAT_TO_SYNC), line, ID_DEV_HEADING);
-  g_dv.note = child(WC_STATICW, NULL, label, ID_DEV_NOTE);
-  g_dv.sync_all = child(WC_BUTTONW, NULL, BS_AUTOCHECKBOX | WS_TABSTOP, ID_DEV_SYNC_ALL);
-  g_dv.sync_all_label =
-    child(WC_STATICW, mc_wstr(MC_STR_SYNC_EVERYTHING), line | SS_NOTIFY, ID_DEV_SYNC_ALL_LABEL);
-  for (int t = 0; t < NUM_TABS; t++) {
-    g_dv.tabs[t] = child(WC_BUTTONW, mc_wstr(k_tab_name[t]), BS_OWNERDRAW | WS_TABSTOP, ID_DEV_TAB + t);
-    SetWindowSubclass(g_dv.tabs[t], tab_proc, 0, (DWORD_PTR)t);
+  /* The devices' panel. */
+  HWND right = g_dv.right.content;
+  g_dv.devices = child(right, WC_STATICW, mc_wstr(MC_STR_DEVICES), line, ID_DEV_DEVICES);
+  for (int r = 0; r < MAX_ROWS; r++) {
+    g_dv.dev_btns[r] = child(right, WC_BUTTONW, NULL, BS_OWNERDRAW | WS_TABSTOP, ID_DEV_ROW + r);
+    SetWindowSubclass(g_dv.dev_btns[r], hover_proc, 0, 0);
   }
-  g_dv.select_all = child(WC_BUTTONW, mc_wstr(MC_STR_SELECT_ALL), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_SELECT_ALL);
-  g_dv.select_none = child(WC_BUTTONW, mc_wstr(MC_STR_SELECT_NONE), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_SELECT_NONE);
-
-  g_dv.list = child(WC_LISTVIEWW, NULL, LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | WS_BORDER | WS_TABSTOP,
-                    ID_DEV_LIST);
-  SetWindowSubclass(g_dv.list, list_proc, 0, 0);
-  LVCOLUMNW col = {.mask = LVCF_WIDTH | LVCF_FMT, .fmt = LVCFMT_LEFT, .cx = 300};
-  SendMessageW(g_dv.list, LVM_INSERTCOLUMNW, 0, (LPARAM)&col);
-  col.fmt = LVCFMT_RIGHT;
-  col.cx = 100;
-  SendMessageW(g_dv.list, LVM_INSERTCOLUMNW, 1, (LPARAM)&col);
-  theme_apply_control(g_dv.list);
-  ListView_SetExtendedListViewStyleEx(g_dv.list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER,
-                                      LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-  set_check_images();
-  g_dv.count = child(WC_STATICW, NULL, line, ID_DEV_COUNT);
-
-  firewall_banner_create(parent, ID_DEV_FIREWALL);
-  firewall_set_listener(firewall_changed);
-
-  SetTimer(parent, ID_DEV_TICK_TIMER, TICK_MS, tick_timer);
+  g_dv.unpaired = child(right, WC_STATICW, NULL, line, ID_DEV_UNPAIRED);
+  g_dv.none = child(right, WC_STATICW, mc_wstr(MC_STR_DEVICES_NONE), label, ID_DEV_NONE);
+  g_dv.add = child(right, WC_BUTTONW, mc_wstr(MC_STR_ADD_DEVICE_BY_ADDRESS), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_ADD);
+  g_dv.leave =
+    child(right, WC_BUTTONW, mc_wstr_mnemonic(MC_STR_LEAVE_GROUP_BUTTON), BS_PUSHBUTTON | WS_TABSTOP, ID_DEV_LEAVE);
 }
 
 void device_view_destroy(void) {
@@ -1654,7 +1955,6 @@ void device_view_destroy(void) {
   firewall_watch(g_dv.parent, FALSE);
   estimate_cancel();
   KillTimer(g_dv.parent, ID_DEV_APPLY_TIMER);
-  KillTimer(g_dv.parent, ID_DEV_TICK_TIMER);
   KillTimer(g_dv.parent, ID_DEV_FINISHED_TIMER);
   KillTimer(g_dv.parent, ID_DEV_REFRESH_TIMER);
   pending_clear();
@@ -1673,10 +1973,12 @@ void device_view_destroy(void) {
   g_dv.nrows = 0;
   g_dv.sync = NULL;
   g_dv.lib = NULL;
-  HFONT fonts[] = {g_dv.title_font, g_dv.heading_font, g_dv.icon_font};
+  canvas_free(&g_dv.left.canvas);
+  canvas_free(&g_dv.right.canvas);
+  HFONT fonts[] = {g_dv.title_font, g_dv.heading_font, g_dv.icon_font, g_dv.small_icon_font};
   for (size_t i = 0; i < sizeof fonts / sizeof fonts[0]; i++)
     if (fonts[i]) DeleteObject(fonts[i]);
-  g_dv.title_font = g_dv.heading_font = g_dv.icon_font = NULL;
+  g_dv.title_font = g_dv.heading_font = g_dv.icon_font = g_dv.small_icon_font = NULL;
 }
 
 void device_view_set_font(HFONT font, UINT dpi) {
@@ -1695,23 +1997,27 @@ void device_view_set_font(HFONT font, UINT dpi) {
   lf.lfFaceName[LF_FACESIZE - 1] = L'\0';
   if (g_dv.icon_font) DeleteObject(g_dv.icon_font);
   g_dv.icon_font = CreateFontIndirectW(&lf);
+  lf.lfHeight = MulDiv(ncm.lfMessageFont.lfHeight, 12, 9); /* the rows' marks */
+  if (g_dv.small_icon_font) DeleteObject(g_dv.small_icon_font);
+  g_dv.small_icon_font = CreateFontIndirectW(&lf);
   lf = ncm.lfMessageFont;
   lf.lfHeight = MulDiv(lf.lfHeight, 14, 9); /* subtitle */
   lf.lfWeight = FW_SEMIBOLD;
   if (g_dv.heading_font) DeleteObject(g_dv.heading_font);
   g_dv.heading_font = CreateFontIndirectW(&lf);
 
-  SendMessageW(g_dv.title, WM_SETFONT, (WPARAM)g_dv.title_font, TRUE);
-  SendMessageW(g_dv.icon, WM_SETFONT, (WPARAM)g_dv.icon_font, TRUE);
-  SendMessageW(g_dv.heading, WM_SETFONT, (WPARAM)g_dv.heading_font, TRUE);
-  HWND body[] = {g_dv.sync_now, g_dv.remove, g_dv.status, g_dv.files, g_dv.progress_text, g_dv.message,
-                 g_dv.notice, g_dv.issues, g_dv.takeover, g_dv.name_label, g_dv.name_edit, g_dv.archive_label,
-                 g_dv.archive_text,
-                 g_dv.format_label, g_dv.format, g_dv.budget_label,
-                 g_dv.budget_size, g_dv.budget_unit, g_dv.estimate, g_dv.note, g_dv.sync_all_label,
-                 g_dv.select_all, g_dv.select_none, g_dv.list, g_dv.count};
+  HWND titles[] = {g_dv.title, g_dv.devices}, headings[] = {g_dv.heading, g_dv.quality, g_dv.unpaired};
+  for (size_t i = 0; i < sizeof titles / sizeof titles[0]; i++)
+    SendMessageW(titles[i], WM_SETFONT, (WPARAM)g_dv.title_font, TRUE);
+  for (size_t i = 0; i < sizeof headings / sizeof headings[0]; i++)
+    SendMessageW(headings[i], WM_SETFONT, (WPARAM)g_dv.heading_font, TRUE);
+  HWND body[] = {g_dv.sync_now, g_dv.status, g_dv.message, g_dv.notice, g_dv.issues, g_dv.files,
+                 g_dv.archive_label, g_dv.archive_text, g_dv.note, g_dv.sync_all_label, g_dv.select_all,
+                 g_dv.select_none, g_dv.list, g_dv.count, g_dv.format_label, g_dv.format, g_dv.budget_label,
+                 g_dv.budget_size, g_dv.budget_unit, g_dv.estimate, g_dv.none, g_dv.add, g_dv.leave};
   for (size_t i = 0; i < sizeof body / sizeof body[0]; i++) SendMessageW(body[i], WM_SETFONT, (WPARAM)font, TRUE);
   for (int i = 0; i < NUM_TABS; i++) InvalidateRect(g_dv.tabs[i], NULL, FALSE);
+  for (int i = 0; i < MAX_ROWS; i++) InvalidateRect(g_dv.dev_btns[i], NULL, FALSE);
   firewall_banner_set_font(font, dpi);
   set_check_images();
 }
@@ -1720,32 +2026,17 @@ void device_view_theme_changed(void) {
   firewall_banner_theme_changed();
 }
 
-static HWND *all_controls(size_t *n) {
-  static HWND all[48];
-  HWND list[] = {g_dv.icon, g_dv.title, g_dv.sync_now, g_dv.remove, g_dv.status, g_dv.files, g_dv.progress,
-                 g_dv.progress_text, g_dv.message, g_dv.notice, g_dv.issues, g_dv.takeover, g_dv.name_label,
-                 g_dv.name_edit, g_dv.archive_label, g_dv.archive_box, g_dv.archive_text, g_dv.format_label,
-                 g_dv.format, g_dv.budget, g_dv.budget_label, g_dv.budget_size, g_dv.budget_unit, g_dv.estimate,
-                 g_dv.heading,
-                 g_dv.note, g_dv.sync_all, g_dv.sync_all_label, g_dv.tabs[0], g_dv.tabs[1], g_dv.tabs[2],
-                 g_dv.tabs[3], g_dv.select_all, g_dv.select_none, g_dv.list, g_dv.count};
-  memcpy(all, list, sizeof list);
-  *n = sizeof list / sizeof list[0];
-  return all;
-}
-
 void device_view_show(BOOL show) {
   g_dv.shown = show;
   firewall_watch(g_dv.parent, show);
   if (!show) {
-    size_t n;
-    HWND *all = all_controls(&n);
-    for (size_t i = 0; i < n; i++) ShowWindow(all[i], SW_HIDE);
-    firewall_banner_place(FALSE, 0, 0, 0);
-  } else {
-    if (g_dv.found) update_status(); /* the times have moved on */
-    layout_again();
+    ShowWindow(g_dv.page, SW_HIDE);
+    return;
   }
+  layout_again();
+  /* A moment's sign that there's more below. */
+  scroller_show(&g_dv.left.scroll);
+  scroller_show(&g_dv.right.scroll);
 }
 
 static int text_width(HWND wnd, HFONT font) {
@@ -1767,22 +2058,26 @@ static BOOL has_text(HWND wnd) {
 /* Moves wnd unless it's there already: the page is laid out again on every refresh, and a
  * move would close an open drop-down and redraw for nothing. h < 0 keeps its height (a combo
  * box's is its own) and gives it drop_h, the drop-down's. Where it does move, both where it
- * was and where it goes are repainted, so it leaves nothing behind. */
+ * was and where it goes are repainted, so it leaves nothing behind. Nothing moves while
+ * layout_left() is only measuring. */
 static void move_to(HWND wnd, int x, int y, int w, int h, int drop_h) {
+  if (g_dv.measuring) return;
+  HWND parent = GetParent(wnd);
   RECT old, want = {x, y, x + w, y + h};
   GetWindowRect(wnd, &old);
-  MapWindowPoints(NULL, g_dv.parent, (POINT *)&old, 2);
+  MapWindowPoints(NULL, parent, (POINT *)&old, 2);
   if (h < 0) want.bottom = y + (old.bottom - old.top);
   if (EqualRect(&old, &want)) return;
   MoveWindow(wnd, x, y, w, h >= 0 ? h : drop_h, FALSE);
   UINT flags = RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN;
-  if (IsWindowVisible(wnd)) RedrawWindow(g_dv.parent, &old, NULL, flags);
+  if (IsWindowVisible(wnd)) RedrawWindow(parent, &old, NULL, flags);
   GetWindowRect(wnd, &want);
-  MapWindowPoints(NULL, g_dv.parent, (POINT *)&want, 2);
-  RedrawWindow(g_dv.parent, &want, NULL, flags);
+  MapWindowPoints(NULL, parent, (POINT *)&want, 2);
+  RedrawWindow(parent, &want, NULL, flags);
 }
 
 static void set_shown(HWND wnd, BOOL visible) {
+  if (g_dv.measuring) return;
   if (!(GetWindowLongW(wnd, GWL_STYLE) & WS_VISIBLE) != !visible) ShowWindow(wnd, visible ? SW_SHOW : SW_HIDE);
 }
 
@@ -1795,180 +2090,307 @@ static void set_column_width(int col, int w) {
   if (ListView_GetColumnWidth(g_dv.list, col) != w) ListView_SetColumnWidth(g_dv.list, col, w);
 }
 
-void device_view_layout(int x, int y, int w, int h, UINT dpi) {
-  g_dv.x = x, g_dv.y = y, g_dv.w = w, g_dv.h = h, g_dv.dpi = dpi;
-  if (!g_dv.shown || !g_dv.font) return;
-#define S(px) MulDiv((px), (int)dpi, USER_DEFAULT_SCREEN_DPI)
-  int pad = S(32), text_w = min(w - 2 * pad, S(720));
-  int left = x + pad, top = y + S(24), line_h = canvas_text_height(g_dv.status, g_dv.font, S(1000), 0);
-  BOOL on = active(), dev = on && g_dv.found;
-
-  /* The firewall banner, above everything: it's about every device in the group. */
-  int firewall_h = firewall_banner_place(g_dv.sync != NULL, left, top, text_w);
-  if (firewall_h) top += firewall_h + S(16);
-
-  /* Header: icon, name, buttons. */
-  int title_h = canvas_text_height(g_dv.title, g_dv.title_font, S(1000), 0), icon_w = S(40);
-  int btn_h = S(32), sync_w = text_width(g_dv.sync_now, g_dv.font) + S(32);
-  int remove_w = text_width(g_dv.remove, g_dv.font) + S(32);
-  int head_h = max(title_h, btn_h), right = left + text_w;
-  place(g_dv.icon, dev, left, top, icon_w, head_h);
-  place(g_dv.remove, dev, right - remove_w, top + (head_h - btn_h) / 2, remove_w, btn_h);
-  place(g_dv.sync_now, dev, right - remove_w - S(8) - sync_w, top + (head_h - btn_h) / 2, sync_w, btn_h);
-  int title_x = dev ? left + icon_w + S(8) : left;
-  int title_r = dev ? right - remove_w - sync_w - S(24) : right;
-  place(g_dv.title, TRUE, title_x, top + (head_h - title_h) / 2, max(title_r - title_x, S(40)), title_h);
-  top += head_h + S(4);
-
-  /* Status lines. While syncing, the progress takes the status line's place, so the page
-   * doesn't move. */
-  BOOL busy = dev && (syncing() || g_dv.finished);
-  int bar_w = S(120);
-  place(g_dv.status, on && !busy, left, top, text_w, line_h);
-  place(g_dv.progress, busy, left, top + (line_h - S(6)) / 2, bar_w, S(6));
-  place(g_dv.progress_text, busy, left + bar_w + S(12), top, text_w - bar_w - S(12), line_h);
-  if (on) top += line_h + S(2);
+/* Lays This PC's panel out down its content, w wide, and returns how tall that is: its name,
+ * its files, the archive switch, What to sync with the list list_h tall, then the format and
+ * the budget with the estimate. Measuring, nothing moves. */
+static int layout_left(int w, int list_h) {
+  BOOL on = active(), dev = member();
+  int line_h = canvas_text_height(g_dv.files, g_dv.font, scale(1000), 0);
+  int top = 0, th = canvas_text_height(g_dv.title, g_dv.title_font, scale(1000), 0);
+  place(g_dv.title, on, 0, top, w, th);
+  if (on) top += th + scale(4);
+  /* Outside a group the note stands in for everything below. */
+  int note_y = top + scale(8);
   BOOL files = dev && has_text(g_dv.files);
-  place(g_dv.files, files, left, top, text_w, line_h);
-  if (files) top += line_h + S(2);
-  BOOL message = dev && has_text(g_dv.message);
-  int mh = message ? canvas_text_height(g_dv.message, g_dv.font, text_w, 0) : 0;
-  place(g_dv.message, message, left, top + S(4), text_w, mh);
-  if (message) top += mh + S(6);
-  BOOL notice = dev && has_text(g_dv.notice);
-  int nh = notice ? canvas_text_height(g_dv.notice, g_dv.font, text_w, 0) : 0;
-  place(g_dv.notice, notice, left, top + S(4), text_w, nh);
-  if (notice) top += nh + S(6);
-  /* Details for its issues (or the missing tracks the last sync left), and the takeover
-   * offer, side by side. */
-  BOOL issues = dev && (g_dv.has_issues || g_dv.missing_shown), takeover = dev && g_dv.offer;
-  int issues_w = text_width(g_dv.issues, g_dv.font) + S(32), takeover_w = text_width(g_dv.takeover, g_dv.font) + S(32);
-  place(g_dv.issues, issues, left, top + S(4), issues_w, btn_h);
-  place(g_dv.takeover, takeover, left + (issues ? issues_w + S(8) : 0), top + S(4), takeover_w, btn_h);
-  if (issues || takeover) top += btn_h + S(10);
-  top += S(16);
-
-  /* Name, format and budget. */
-  int label_w = max(max(text_width(g_dv.name_label, g_dv.font), text_width(g_dv.archive_label, g_dv.font)),
-                    text_width(g_dv.format_label, g_dv.font));
-  label_w += S(16);
-  int field_h = S(30), edit_h = S(28), field_x = left + label_w;
-  place(g_dv.name_label, dev, left, top + (field_h - line_h) / 2, label_w, line_h);
-  place(g_dv.name_edit, dev, field_x, top + (field_h - edit_h) / 2, min(S(320), right - field_x), edit_h);
-  if (dev) top += field_h + S(8);
+  place(g_dv.files, files, 0, top, w, line_h);
+  if (files) top += line_h + scale(2);
+  if (dev) top += scale(16);
 
   /* Archive: the box, and what it means beside it, which toggles it too. */
-  int box = S(20), archive_x = field_x + box + S(8);
-  place(g_dv.archive_label, dev, left, top + (field_h - line_h) / 2, label_w, line_h);
+  int label_w = max(text_width(g_dv.archive_label, g_dv.font), text_width(g_dv.format_label, g_dv.font)) + scale(16);
+  int field_h = scale(30), edit_h = scale(28), box = scale(20), btn_h = scale(32), field_x = label_w;
+  int archive_x = field_x + box + scale(8);
+  place(g_dv.archive_label, dev, 0, top + (field_h - line_h) / 2, label_w, line_h);
   place(g_dv.archive_box, dev, field_x, top + (field_h - box) / 2, box, box);
   place(g_dv.archive_text, dev, archive_x, top + (field_h - line_h) / 2,
-        max(min(text_width(g_dv.archive_text, g_dv.font) + S(8), right - archive_x), S(40)), line_h);
-  if (dev) top += field_h + S(8);
-
-  /* Combo boxes are left alone while they're dropped down. */
-  int combo_w = S(180);
-  if (dev && !SendMessageW(g_dv.format, CB_GETDROPPEDSTATE, 0, 0)) {
-    RECT rc;
-    GetWindowRect(g_dv.format, &rc);
-    int ch = rc.bottom - rc.top;
-    move_to(g_dv.format, field_x, top + (ch > 0 && ch < field_h ? (field_h - ch) / 2 : 0), combo_w, -1, S(300));
-  }
-  set_shown(g_dv.format, dev);
-  place(g_dv.format_label, dev, left, top + (field_h - line_h) / 2, label_w, line_h);
-
-  int budget_label_w = text_width(g_dv.budget_label, g_dv.font) + S(8);
-  int unit_w = text_width(g_dv.budget_unit, g_dv.font) + S(4), size_w = S(64);
-  int budget_w = box + S(8) + budget_label_w + size_w + S(8) + unit_w;
-  int bx = field_x + combo_w + S(24);
-  if (bx + budget_w > right) { /* no room beside the format: on a line of its own */
-    top += field_h + S(8);
-    bx = field_x;
-  }
-  place(g_dv.budget, dev, bx, top + (field_h - box) / 2, box, box);
-  bx += box + S(8);
-  place(g_dv.budget_label, dev, bx, top + (field_h - line_h) / 2, budget_label_w, line_h);
-  bx += budget_label_w;
-  place(g_dv.budget_size, dev, bx, top + (field_h - edit_h) / 2, size_w, edit_h);
-  bx += size_w + S(8);
-  place(g_dv.budget_unit, dev, bx, top + (field_h - line_h) / 2, unit_w, line_h);
-  if (dev) top += field_h;
-  BOOL estimate = dev && has_text(g_dv.estimate);
-  int eh = estimate ? canvas_text_height(g_dv.estimate, g_dv.font, right - field_x, 0) : 0;
-  place(g_dv.estimate, estimate, field_x, top + S(4), right - field_x, eh);
-  if (estimate) top += eh + S(4);
-  if (dev) top += S(24);
+        max(min(text_width(g_dv.archive_text, g_dv.font) + scale(8), w - archive_x), scale(40)), line_h);
+  if (dev) top += field_h + scale(24);
 
   /* What to sync. */
-  int hh = canvas_text_height(g_dv.heading, g_dv.heading_font, text_w, 0);
-  place(g_dv.heading, dev, left, top, text_w, hh);
-  if (dev) top += hh + S(8);
-  BOOL note = dev && has_text(g_dv.note);
-  int noteh = note ? canvas_text_height(g_dv.note, g_dv.font, text_w, 0) : 0;
-  place(g_dv.note, note, left, top, text_w, noteh);
-  if (note) top += noteh + S(8);
+  int hh = canvas_text_height(g_dv.heading, g_dv.heading_font, w, 0);
+  place(g_dv.heading, dev, 0, top, w, hh);
+  if (dev) {
+    top += hh + scale(8);
+    note_y = top;
+  }
+  BOOL note = on && has_text(g_dv.note);
+  int noteh = note ? canvas_text_height(g_dv.note, g_dv.font, w, 0) : 0;
+  place(g_dv.note, note, 0, note_y, w, noteh);
+  if (note) top = note_y + noteh + scale(8);
   int row_h = max(box, line_h);
-  place(g_dv.sync_all, dev, left, top + (row_h - box) / 2, box, box);
-  place(g_dv.sync_all_label, dev, left + box + S(8), top + (row_h - line_h) / 2,
-        text_width(g_dv.sync_all_label, g_dv.font) + S(8), line_h);
-  if (dev) top += row_h + S(12);
+  place(g_dv.sync_all, dev, 0, top + (row_h - box) / 2, box, box);
+  place(g_dv.sync_all_label, dev, box + scale(8), top + (row_h - line_h) / 2,
+        text_width(g_dv.sync_all_label, g_dv.font) + scale(8), line_h);
+  if (dev) top += row_h + scale(12);
 
   /* Under Sync everything, what was removed shows unticked among the albums and artists. */
   BOOL pick = dev && g_dv.profile && !g_dv.profile->archive;
   BOOL choosing = pick && !g_dv.profile->sync_all;
   int tab_w = 0;
-  for (int i = 0; i < NUM_TABS; i++) tab_w = max(tab_w, text_width(g_dv.tabs[i], g_dv.font) + S(32));
-  tab_w = min(tab_w, text_w / NUM_TABS);
+  for (int i = 0; i < NUM_TABS; i++) tab_w = max(tab_w, text_width(g_dv.tabs[i], g_dv.font) + scale(32));
+  tab_w = min(tab_w, w / NUM_TABS);
   for (int i = 0; i < NUM_TABS; i++)
-    place(g_dv.tabs[i], choosing || (pick && i < TAB_PLAYLISTS), left + i * tab_w, top, tab_w, btn_h);
+    place(g_dv.tabs[i], choosing || (pick && i < TAB_PLAYLISTS), i * tab_w, top, tab_w, btn_h);
 
   /* Select All and Select None at the tabs' right, or on a line of their own if there's no room. */
-  int all_w = text_width(g_dv.select_all, g_dv.font) + S(24), none_w = text_width(g_dv.select_none, g_dv.font) + S(24);
-  if (choosing && NUM_TABS * tab_w + S(16) + all_w + S(8) + none_w > text_w) top += btn_h + S(8);
-  place(g_dv.select_none, choosing, right - none_w, top, none_w, btn_h);
-  place(g_dv.select_all, choosing, right - none_w - S(8) - all_w, top, all_w, btn_h);
-  if (pick) top += btn_h + S(8);
+  int all_w = text_width(g_dv.select_all, g_dv.font) + scale(24);
+  int none_w = text_width(g_dv.select_none, g_dv.font) + scale(24);
+  if (choosing && NUM_TABS * tab_w + scale(16) + all_w + scale(8) + none_w > w) top += btn_h + scale(8);
+  place(g_dv.select_none, choosing, w - none_w, top, none_w, btn_h);
+  place(g_dv.select_all, choosing, w - none_w - scale(8) - all_w, top, all_w, btn_h);
+  if (pick) top += btn_h + scale(8);
 
-  int count_y = y + h - S(24) - line_h;
-  place(g_dv.count, choosing, left, count_y, text_w, line_h);
-  int list_h = max(count_y - S(8) - top, S(80));
-  place(g_dv.list, pick, left, top, text_w, list_h);
-  if (pick) {
+  place(g_dv.list, pick, 0, top, w, list_h);
+  if (pick && !g_dv.measuring) {
     RECT rc;
     GetClientRect(g_dv.list, &rc);
-    int detail_w = S(110);
+    int detail_w = scale(110);
     set_column_width(1, detail_w);
-    set_column_width(0, max(rc.right - detail_w, S(80)));
+    set_column_width(0, max(rc.right - detail_w, scale(80)));
   }
-#undef S
+  if (pick) top += list_h + scale(8);
+  place(g_dv.count, choosing, 0, top, w, line_h);
+  if (choosing) top += line_h;
+  if (dev) top += scale(32);
+
+  /* Quality: the format and the budget, then the estimate. */
+  int qh = canvas_text_height(g_dv.quality, g_dv.heading_font, w, 0);
+  place(g_dv.quality, dev, 0, top, w, qh);
+  if (dev) top += qh + scale(8);
+  /* Combo boxes are left alone while they're dropped down. */
+  int combo_w = scale(180);
+  if (dev && !SendMessageW(g_dv.format, CB_GETDROPPEDSTATE, 0, 0)) {
+    RECT rc;
+    GetWindowRect(g_dv.format, &rc);
+    int ch = rc.bottom - rc.top;
+    move_to(g_dv.format, field_x, top + (ch > 0 && ch < field_h ? (field_h - ch) / 2 : 0), combo_w, -1, scale(300));
+  }
+  set_shown(g_dv.format, dev);
+  place(g_dv.format_label, dev, 0, top + (field_h - line_h) / 2, label_w, line_h);
+
+  int budget_label_w = text_width(g_dv.budget_label, g_dv.font) + scale(8);
+  int unit_w = text_width(g_dv.budget_unit, g_dv.font) + scale(4), size_w = scale(64);
+  int budget_w = box + scale(8) + budget_label_w + size_w + scale(8) + unit_w;
+  int bx = field_x + combo_w + scale(24);
+  if (bx + budget_w > w) { /* no room beside the format: on a line of its own */
+    if (dev) top += field_h + scale(8);
+    bx = field_x;
+  }
+  place(g_dv.budget, dev, bx, top + (field_h - box) / 2, box, box);
+  bx += box + scale(8);
+  place(g_dv.budget_label, dev, bx, top + (field_h - line_h) / 2, budget_label_w, line_h);
+  bx += budget_label_w;
+  place(g_dv.budget_size, dev, bx, top + (field_h - edit_h) / 2, size_w, edit_h);
+  bx += size_w + scale(8);
+  place(g_dv.budget_unit, dev, bx, top + (field_h - line_h) / 2, unit_w, line_h);
+  if (dev) top += field_h;
+  BOOL estimate = dev && has_text(g_dv.estimate);
+  int eh = estimate ? canvas_text_height(g_dv.estimate, g_dv.font, max(w - field_x, scale(40)), 0) : 0;
+  place(g_dv.estimate, estimate, field_x, top + scale(4), max(w - field_x, scale(40)), eh);
+  if (estimate) top += eh + scale(4);
+  return top + scale(24);
+}
+
+/* Lays the devices' panel out down its content, w wide, and returns how tall that is: the
+ * members, the devices nearby under a heading of their own, Add device by address and Leave
+ * group. */
+static int layout_right(int w) {
+  BOOL on = active(), dev = member();
+  int top = 0, btn_h = scale(32), row_h = scale(56);
+  int th = canvas_text_height(g_dv.devices, g_dv.title_font, scale(1000), 0);
+  place(g_dv.devices, on, 0, top, w, th);
+  if (on) top += th + scale(12);
+  BOOL unpaired = on && g_dv.ndevs > g_dv.nmembers;
+  int hh = canvas_text_height(g_dv.unpaired, g_dv.heading_font, w, 0);
+  for (int i = 0; i < MAX_ROWS; i++) {
+    BOOL shown = on && i < g_dv.ndevs;
+    if (shown && i == g_dv.nmembers) {
+      if (i) top += scale(16);
+      place(g_dv.unpaired, TRUE, 0, top, w, hh);
+      top += hh + scale(8);
+    }
+    place(g_dv.dev_btns[i], shown, 0, top, w, row_h);
+    if (shown) top += row_h + scale(4);
+  }
+  if (!unpaired) set_shown(g_dv.unpaired, FALSE);
+  BOOL none = on && !g_dv.ndevs;
+  int nh = none ? canvas_text_height(g_dv.none, g_dv.font, w, 0) : 0;
+  place(g_dv.none, none, 0, top, w, nh);
+  if (none) top += nh + scale(4);
+  int add_w = text_width(g_dv.add, g_dv.font) + scale(32);
+  place(g_dv.add, on, 0, top + scale(12), add_w, btn_h);
+  if (on) top += btn_h + scale(12);
+  int leave_w = text_width(g_dv.leave, g_dv.font) + scale(32);
+  place(g_dv.leave, dev, 0, top + scale(32), leave_w, btn_h);
+  if (dev) top += btn_h + scale(32);
+  return top + scale(24);
+}
+
+/* Puts p's view at x, y, w by h, with the content in it content_w wide and content_h tall. */
+static void place_panel(panel *p, BOOL visible, int x, int y, int w, int h, int content_w, int content_h) {
+  RECT view = {0, 0, w, h};
+  move_to(p->view, x, y, w, h, 0);
+  scroller_resize(&p->scroll, &view, content_h);
+  SetWindowPos(p->content, NULL, 0, -p->scroll.pos, content_w, content_h, SWP_NOZORDER | SWP_NOACTIVATE);
+  InvalidateRect(p->view, NULL, FALSE); /* the bar's size, or that it's gone */
+  set_shown(p->view, visible);
+}
+
+void device_view_layout(int x, int y, int w, int h, UINT dpi) {
+  g_dv.x = x, g_dv.y = y, g_dv.w = w, g_dv.h = h, g_dv.dpi = dpi;
+  if (!g_dv.shown || !g_dv.font) return;
+  /* The page leaves the main window the left margin and the band at the top, with the
+   * content area's border and rounded corner, as the settings page does: Mica's frame reaches
+   * down that far, and shows through what GDI draws. */
+  int pad = scale(32), band = scale(CONTENT_RADIUS);
+  int page_w = max(w - pad, 0), page_h = max(h - band, 0);
+  move_to(g_dv.page, x + pad, y + band, page_w, page_h, 0);
+  set_shown(g_dv.page, TRUE);
+  int full = max(page_w - pad, scale(240)), top = scale(24) - band, btn_h = scale(32);
+  int line_h = canvas_text_height(g_dv.status, g_dv.font, scale(1000), 0);
+  BOOL on = active(), dev = member();
+
+  /* The firewall banner, above everything: it's about every device in the group. */
+  int firewall_h = firewall_banner_place(on, 0, top, full);
+  if (firewall_h) top += firewall_h + scale(16);
+
+  /* What went wrong, what keeps this PC from syncing, and Details for its issues (or the
+   * missing tracks the last sync left). */
+  BOOL message = on && has_text(g_dv.message);
+  int mh = message ? canvas_text_height(g_dv.message, g_dv.font, full, 0) : 0;
+  place(g_dv.message, message, 0, top, full, mh);
+  if (message) top += mh + scale(10);
+  BOOL notice = on && has_text(g_dv.notice);
+  int nh = notice ? canvas_text_height(g_dv.notice, g_dv.font, full, 0) : 0;
+  place(g_dv.notice, notice, 0, top, full, nh);
+  if (notice) top += nh + scale(10);
+  BOOL issues = dev && (g_dv.has_issues || g_dv.missing_shown);
+  place(g_dv.issues, issues, 0, top, text_width(g_dv.issues, g_dv.font) + scale(32), btn_h);
+  if (issues) top += btn_h + scale(16);
+
+  /* The strip: what sync last did here, or how it's going, and Sync now. While syncing, the
+   * bar comes in front of the line. */
+  int sync_w = text_width(g_dv.sync_now, g_dv.font) + scale(32);
+  place(g_dv.sync_now, on, full - sync_w, top, sync_w, btn_h);
+  BOOL busy = dev && (syncing() || g_dv.finished);
+  int bar_w = scale(120), status_x = busy ? bar_w + scale(12) : 0;
+  place(g_dv.progress, busy, 0, top + (btn_h - scale(6)) / 2, bar_w, scale(6));
+  place(g_dv.status, TRUE, status_x, top + (btn_h - line_h) / 2, max(full - sync_w - scale(16) - status_x, scale(40)),
+        line_h);
+  top += btn_h + scale(12);
+
+  /* The panels, below a line: This PC's three fifths of the width, the devices' the rest,
+   * with a line between. Each view reaches that line (or the window's edge), its scrollbar
+   * in the margin past its content. */
+  int gap = scale(48), left_w = (full - gap) * 3 / 5, right_x = left_w + gap;
+  int lines[] = {on ? top : 0, full, left_w + gap / 2, page_h};
+  if (lines[0] != g_dv.line_y || lines[1] != g_dv.line_w || lines[2] != g_dv.divider_x ||
+      lines[3] != g_dv.divider_bottom) {
+    g_dv.line_y = lines[0], g_dv.line_w = lines[1], g_dv.divider_x = lines[2], g_dv.divider_bottom = lines[3];
+    InvalidateRect(g_dv.page, NULL, TRUE);
+  }
+  top += 1 + scale(16);
+  int panel_h = max(page_h - top, 0), right_w = max(full - right_x, scale(120));
+  g_dv.measuring = TRUE;
+  int fixed = layout_left(left_w, 0);
+  g_dv.measuring = FALSE;
+  int left_h = layout_left(left_w, max(scale(160), panel_h - fixed));
+  place_panel(&g_dv.left, on, 0, top, g_dv.divider_x, panel_h, left_w, left_h);
+  place_panel(&g_dv.right, on, right_x, top, max(page_w - right_x, 0), panel_h, right_w, layout_right(right_w));
 }
 
 static void layout_again(void) {
   if (g_dv.shown) device_view_layout(g_dv.x, g_dv.y, g_dv.w, g_dv.h, g_dv.dpi);
 }
 
-void device_view_focus_what_to_sync(void) {
-  SetFocus(g_dv.sync_all);
-  SendMessageW(GetAncestor(g_dv.sync_all, GA_ROOT), WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
+/* Scrolls ctl's panel to bring it into view, with what's around it. */
+static void reveal(HWND ctl) {
+  panel *p = IsChild(g_dv.left.content, ctl) ? &g_dv.left : IsChild(g_dv.right.content, ctl) ? &g_dv.right : NULL;
+  if (!p) return;
+  RECT r;
+  GetWindowRect(ctl, &r);
+  MapWindowPoints(NULL, p->content, (POINT *)&r, 2);
+  int margin = scale(REVEAL_MARGIN);
+  scroller_reveal(&p->scroll, r.top - margin, r.bottom + margin);
 }
 
-/* Opens a group member's page, or none. */
-void device_view_open(mc_sync *sync, mc_library *lib, const char *uid) {
-  /* Edits still waiting go to the device they were made for, while its sync is still
-   * there: opening with NULL comes before it stops. */
-  if (g_dv.sync && (sync == g_dv.sync || !sync)) {
-    if (GetFocus() == g_dv.name_edit) apply_name();
-    flush();
+/* Gives ctl the focus as Tab does in a dialog, which the main window isn't. */
+static void tab_to(HWND ctl) {
+  if (!ctl) return; /* nothing can take the focus */
+  SendMessageW(g_dv.parent, WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
+  SetFocus(ctl);
+  if (SendMessageW(ctl, WM_GETDLGCODE, 0, 0) & DLGC_HASSETSEL) SendMessageW(ctl, EM_SETSEL, 0, -1);
+  reveal(ctl);
+}
+
+void device_view_focus(void) {
+  if (g_dv.shown) tab_to(GetNextDlgTabItem(g_dv.page, NULL, FALSE));
+}
+
+void device_view_focus_what_to_sync(void) {
+  SetFocus(g_dv.sync_all);
+  SendMessageW(g_dv.parent, WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS), 0);
+  reveal(g_dv.heading);
+}
+
+BOOL device_view_translate(const MSG *msg) {
+  if (!g_dv.shown || GetAncestor(msg->hwnd, GA_ROOT) != g_dv.parent || !IsWindowEnabled(g_dv.parent)) return FALSE;
+  if (msg->message == WM_MOUSEMOVE) { /* over the controls, which the views don't hear of: their bars show */
+    panel *p = IsChild(g_dv.left.view, msg->hwnd) ? &g_dv.left : IsChild(g_dv.right.view, msg->hwnd) ? &g_dv.right : NULL;
+    if (p) {
+      POINT pt = {GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
+      MapWindowPoints(msg->hwnd, p->view, &pt, 1);
+      scroller_mouse_move(&p->scroll, pt.x, pt.y);
+    }
+    return FALSE;
   }
+  if (msg->message == WM_MOUSEWHEEL) { /* the panel under the mouse, but the list scrolls itself */
+    POINT pt = {GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
+    HWND under = WindowFromPoint(pt);
+    if (under == g_dv.list || IsChild(g_dv.list, under)) return FALSE;
+    panel *panels[] = {&g_dv.left, &g_dv.right};
+    for (int i = 0; i < 2; i++) {
+      RECT r;
+      GetWindowRect(panels[i]->view, &r);
+      if (!IsWindowVisible(panels[i]->view) || !PtInRect(&r, pt)) continue;
+      scroller_wheel(&panels[i]->scroll, GET_WHEEL_DELTA_WPARAM(msg->wParam));
+      return TRUE;
+    }
+    return FALSE;
+  }
+  /* Tab from anywhere in the window, as on the settings page. */
+  if (msg->message != WM_KEYDOWN || msg->wParam != VK_TAB || GetKeyState(VK_CONTROL) < 0 || GetKeyState(VK_MENU) < 0)
+    return FALSE;
+  tab_to(GetNextDlgTabItem(g_dv.page, IsChild(g_dv.page, msg->hwnd) ? msg->hwnd : NULL, GetKeyState(VK_SHIFT) < 0));
+  return TRUE;
+}
+
+/* Opens the page on sync, or on none. */
+void device_view_open(mc_sync *sync, mc_library *lib) {
+  /* Edits still waiting go in while their sync is still there: opening with NULL comes
+   * before it stops. */
+  if (g_dv.sync && (sync == g_dv.sync || !sync)) flush();
   KillTimer(g_dv.parent, ID_DEV_APPLY_TIMER);
   pending_clear();
-  BOOL same = uid && !strcmp(uid, g_dv.uid) && sync && sync == g_dv.sync;
+  BOOL same = sync && sync == g_dv.sync;
   if (sync != g_dv.sync) estimate_cancel(); /* it uses the old one */
   if (!same) set_estimate(NULL, FALSE);
   g_dv.sync = sync;
   g_dv.lib = lib;
   if (!same) {
-    snprintf(g_dv.uid, sizeof g_dv.uid, "%s", uid && sync ? uid : "");
-    g_dv.nbusy = 0;
+    const char *self = sync ? mc_sync_device_uid(sync) : NULL;
+    snprintf(g_dv.uid, sizeof g_dv.uid, "%s", self ? self : "");
+    g_dv.nbusy = g_dv.nresults = 0;
     set_finished(FALSE);
     g_dv.tab = TAB_ALBUMS;
     set_message(NULL);
@@ -1990,8 +2412,8 @@ static BOOL dropped_down(void) {
 
 void device_view_issues_changed(void) {
   if (!active() || dropped_down()) return; /* the drop-down's refresh reads them too */
-  load_device();
-  if (g_dv.found) update_status();
+  load_devices();
+  update_devices();
   layout_again();
 }
 
@@ -2010,29 +2432,14 @@ void device_view_refresh(void) {
 static void CALLBACK finished_timer(HWND wnd, UINT msg, UINT_PTR id, DWORD time) {
   (void)wnd, (void)msg, (void)id, (void)time;
   set_finished(FALSE);
-  if (g_dv.found) update_status();
+  update_strip();
   layout_again();
 }
 
-static int busy_index(const char *uid) {
-  for (int i = 0; i < g_dv.nbusy; i++)
-    if (!strcmp(g_dv.busy[i], uid)) return i;
-  return -1;
-}
-
 void device_view_on_sync_event(const sync_event *ev) {
-  if (!g_dv.sync || !g_dv.found || !ev->uid[0]) return;
-  if (!g_dv.is_self && strcmp(ev->uid, g_dv.uid)) return;
+  if (!member() || !ev->uid[0]) return;
   int i = busy_index(ev->uid);
   switch (ev->kind) {
-    case SYNC_EV_VERSION:
-      if (!g_dv.is_self) reload(TRUE); /* the notice says which device to update */
-      break;
-    case SYNC_EV_PEER:
-      if (g_dv.is_self) return;
-      g_dv.online = ev->online;
-      update_status();
-      break;
     case SYNC_EV_PROGRESS:
       if (ev->phase == MC_SYNC_PHASE_DONE) { /* over; on_sync_done may follow, or not */
         if (i < 0) return;
@@ -2044,7 +2451,8 @@ void device_view_on_sync_event(const sync_event *ev) {
           swprintf(g_dv.finished_text, 256, L"%ls", mc_wstr(MC_STR_PHASE_DONE));
           set_finished(TRUE);
         }
-        update_status();
+        update_strip();
+        update_rows(); /* its row's Sync mark goes */
         break;
       }
       if (i < 0 && g_dv.nbusy < MAX_BUSY) {
@@ -2062,8 +2470,11 @@ void device_view_on_sync_event(const sync_event *ev) {
       g_dv.bytes_received = ev->bytes_received;
       g_dv.bytes_sent = ev->bytes_sent;
       snprintf(g_dv.pace, sizeof g_dv.pace, "%s", ev->pace);
-      if (i < 0) set_message(NULL);
-      update_status();
+      if (i < 0) {
+        set_message(NULL);
+        update_rows(); /* its row gets the Sync mark */
+      }
+      update_strip();
       break;
     case SYNC_EV_DONE: {
       if (i >= 0) {
@@ -2074,7 +2485,7 @@ void device_view_on_sync_event(const sync_event *ev) {
       if (ev->cancelled || ev->peer_cancelled) {
         swprintf(text, 256, L"%ls", mc_wstr(MC_STR_SYNC_CANCELLED));
       } else if (ev->status != MC_OK) {
-        if (g_dv.is_self && ev->name[0])
+        if (ev->name[0])
           mc_wformat(text, 256, mc_str(MC_STR_SYNC_FAILED_WITH), MC_S(u8(ev->name)),
                      MC_S(mc_status_str(ev->status)));
         else mc_wformat(text, 256, mc_str(MC_STR_SYNC_FAILED), MC_S(mc_status_str(ev->status)));
@@ -2088,6 +2499,7 @@ void device_view_on_sync_event(const sync_event *ev) {
         wstr_from_utf8(text, 256, missing);
       }
       set_message(text);
+      set_result(ev->uid, text); /* for the member's details */
       g_dv.missing_shown = text[0] && ev->status == MC_OK && ev->library_synced && ev->files_missing > 0;
       /* The finished bar says what came in; a failure says so in the message instead. */
       if (ev->status != MC_OK) {
@@ -2099,7 +2511,7 @@ void device_view_on_sync_event(const sync_event *ev) {
                      MC_S(u8(wstr_count(n, 32, ev->files_received))), MC_S(u8(wstr_size(size, 32, ev->bytes_received))));
         else swprintf(g_dv.finished_text, 256, L"%ls", mc_wstr(MC_STR_SYNC_FINISHED));
       }
-      /* The last sync time, its files, maybe its profile, have changed. */
+      /* What sync last did, the devices' last sync, maybe a profile, have changed. */
       reload(TRUE);
       return;
     }
@@ -2116,22 +2528,16 @@ BOOL device_view_on_command(int id, int code) {
       if (code == BN_CLICKED && syncing()) cancel_sync();
       else if (code == BN_CLICKED) sync_now();
       return TRUE;
-    case ID_DEV_REMOVE:
-      if (code == BN_CLICKED) remove_device();
+    case ID_DEV_LEAVE:
+      if (code == BN_CLICKED) leave_group();
+      return TRUE;
+    case ID_DEV_ADD:
+      if (code == BN_CLICKED && g_dv.host.add_device) g_dv.host.add_device();
       return TRUE;
     case ID_DEV_ISSUES:
       if (code == BN_CLICKED && issue_dialog_show(GetAncestor(g_dv.parent, GA_ROOT), g_dv.lib, g_dv.sync, g_dv.uid) &&
           g_dv.host.library_changed)
         g_dv.host.library_changed();
-      return TRUE;
-    case ID_DEV_TAKEOVER:
-      if (code == BN_CLICKED) {
-        issue_dialog_offer(GetAncestor(g_dv.parent, GA_ROOT), g_dv.sync, g_dv.uid);
-        device_view_issues_changed();
-      }
-      return TRUE;
-    case ID_DEV_NAME:
-      if (code == EN_KILLFOCUS) apply_name();
       return TRUE;
     case ID_DEV_FORMAT:
       if (code == CBN_SELCHANGE && !g_dv.filling) on_format();
@@ -2171,7 +2577,14 @@ BOOL device_view_on_command(int id, int code) {
         if (code == BN_CLICKED) select_tab(id - ID_DEV_TAB);
         return TRUE;
       }
-      return (id >= ID_DEV_ICON && id < ID_DEV_FIREWALL) || id == ID_DEV_ISSUES || id == ID_DEV_TAKEOVER;
+      if (id >= ID_DEV_ROW && id <= ID_DEV_ROW_LAST) {
+        const dev_row *r = id - ID_DEV_ROW < g_dv.ndevs ? &g_dv.devs[id - ID_DEV_ROW] : NULL;
+        if (code != BN_CLICKED || !r) return TRUE;
+        if (r->nearby && g_dv.host.pair) g_dv.host.pair(r->uid);
+        else if (!r->nearby) show_member(r->uid);
+        return TRUE;
+      }
+      return id >= ID_DEV_SYNC_NOW && id < ID_DEV_FIREWALL;
   }
 }
 
@@ -2211,17 +2624,56 @@ BOOL device_view_on_notify(const NMHDR *nm, LRESULT *result) {
   return TRUE;
 }
 
+/* A device's row: its kind's icon, its name and what it says under it, and at its end Sync
+ * while a session with it runs, else Warning while something's wrong with it. */
+static void draw_dev_row(canvas *c, const RECT *rc, int i, control_state state) {
+  canvas_clear(c, rc, theme.bg, 255);
+  if (i >= g_dv.ndevs) return;
+  const dev_row *r = &g_dv.devs[i];
+  COLORREF color = theme_draw_state(c, rc, scale(6), state);
+  COLORREF dim = color == theme.text ? theme.text2 : color;
+  static const wchar_t icons[] = {[MC_DEVICE_DESKTOP] = 0xE977, /* PC */
+                                  [MC_DEVICE_PHONE] = 0xE8EA};  /* CellPhone */
+  wchar_t icon = (unsigned)r->kind <= (unsigned)MC_DEVICE_PHONE ? icons[r->kind] : icons[0];
+  UINT one = DT_SINGLELINE | DT_NOPREFIX;
+  RECT at = {rc->left + scale(12), rc->top, rc->left + scale(44), rc->bottom};
+  canvas_text(c, &icon, 1, &at, one | DT_CENTER | DT_VCENTER, g_dv.icon_font, color);
+  int right = rc->right - scale(12);
+  wchar_t mark = busy_index(r->uid) >= 0 ? 0xE895 : r->warning ? 0xE7BA : 0;
+  if (mark) {
+    RECT m = {right - scale(20), rc->top, right, rc->bottom};
+    canvas_text(c, &mark, 1, &m, one | DT_CENTER | DT_VCENTER, g_dv.small_icon_font, dim);
+    right = m.left - scale(8);
+  }
+  int x = rc->left + scale(56), mid = (rc->top + rc->bottom) / 2;
+  if (!r->detail[0]) {
+    RECT name = {x, rc->top, right, rc->bottom};
+    canvas_text(c, r->name, -1, &name, one | DT_END_ELLIPSIS | DT_VCENTER, g_dv.font, color);
+    return;
+  }
+  RECT name = {x, rc->top, right, mid}, detail = {x, mid, right, rc->bottom};
+  canvas_text(c, r->name, -1, &name, one | DT_END_ELLIPSIS | DT_BOTTOM, g_dv.font, color);
+  canvas_text(c, r->detail, -1, &detail, one | DT_END_ELLIPSIS | DT_TOP, g_dv.font, dim);
+}
+
 BOOL device_view_draw_item(const DRAWITEMSTRUCT *dis) {
-  int t = (int)dis->CtlID - ID_DEV_TAB;
-  if (t < 0 || t >= NUM_TABS) return FALSE;
+  int t = (int)dis->CtlID - ID_DEV_TAB, row = (int)dis->CtlID - ID_DEV_ROW;
+  BOOL tab = t >= 0 && t < NUM_TABS;
+  if (!tab && (row < 0 || row >= MAX_ROWS)) return FALSE;
   RECT rc = {0, 0, dis->rcItem.right - dis->rcItem.left, dis->rcItem.bottom - dis->rcItem.top};
   canvas c = {0};
   if (!canvas_reserve(&c, rc.right, rc.bottom)) return TRUE;
-  control_state state = dis->itemState & ODS_SELECTED ? STATE_PRESSED : g_dv.hot_tab == t ? STATE_HOT : STATE_NORMAL;
-  int radius = MulDiv(4, (int)g_dv.dpi, USER_DEFAULT_SCREEN_DPI);
-  theme_draw_segment(&c, &rc, radius, mc_wstr(k_tab_name[t]), g_dv.font, t == 0, t == NUM_TABS - 1, t == g_dv.tab,
-                     state);
-  if (dis->itemState & ODS_DISABLED) canvas_fill(&c, &rc, 0, theme.bg, 128);
+  control_state state = dis->itemState & ODS_SELECTED ? STATE_PRESSED
+                        : g_dv.hot == dis->hwndItem   ? STATE_HOT
+                                                      : STATE_NORMAL;
+  int radius = scale(tab ? 4 : 6);
+  if (tab) {
+    theme_draw_segment(&c, &rc, radius, mc_wstr(k_tab_name[t]), g_dv.font, t == 0, t == NUM_TABS - 1,
+                       t == g_dv.tab, state);
+    if (dis->itemState & ODS_DISABLED) canvas_fill(&c, &rc, 0, theme.bg, 128);
+  } else {
+    draw_dev_row(&c, &rc, row, state);
+  }
   if ((dis->itemState & ODS_FOCUS) && !(dis->itemState & ODS_NOFOCUSRECT)) {
     RECT focus = rc;
     InflateRect(&focus, -2, -2);
@@ -2241,13 +2693,13 @@ HBRUSH device_view_ctlcolor(UINT msg, HWND wnd, HDC dc) {
       SetBkColor(dc, theme.field);
       return theme.field_brush;
     case WM_CTLCOLOREDIT:
-      if (wnd != g_dv.name_edit && wnd != g_dv.budget_size && wnd != g_dv.format) return NULL;
+      if (wnd != g_dv.budget_size && wnd != g_dv.format) return NULL;
       return theme_ctlcolor(msg, dc);
     case WM_CTLCOLORBTN: {
       HBRUSH firewall = firewall_banner_ctlcolor(wnd, dc);
       if (firewall) return firewall;
-      if (wnd != g_dv.sync_now && wnd != g_dv.remove && wnd != g_dv.budget && wnd != g_dv.sync_all &&
-          wnd != g_dv.archive_box && wnd != g_dv.select_all && wnd != g_dv.select_none)
+      if (wnd != g_dv.sync_now && wnd != g_dv.leave && wnd != g_dv.add && wnd != g_dv.budget &&
+          wnd != g_dv.sync_all && wnd != g_dv.archive_box && wnd != g_dv.select_all && wnd != g_dv.select_none)
         return NULL;
       SetBkColor(dc, theme.bg);
       return theme.bg_brush;
@@ -2257,9 +2709,9 @@ HBRUSH device_view_ctlcolor(UINT msg, HWND wnd, HDC dc) {
     default:
       return NULL;
   }
-  /* Disabled edits ask as statics. They lose the field colour too, as the disabled combo box
-   * does, so they don't look editable. */
-  if (wnd == g_dv.name_edit || wnd == g_dv.budget_size) {
+  /* The disabled edit asks as a static. It loses the field colour too, as the disabled combo
+   * box does, so it doesn't look editable. */
+  if (wnd == g_dv.budget_size) {
     COLORREF bg = theme.dark || theme.high_contrast ? theme.bg : theme.frame;
     SetTextColor(dc, theme.text3);
     SetBkColor(dc, bg);
@@ -2267,11 +2719,10 @@ HBRUSH device_view_ctlcolor(UINT msg, HWND wnd, HDC dc) {
     return GetStockObject(DC_BRUSH);
   }
   COLORREF color;
-  if (wnd == g_dv.title || wnd == g_dv.icon || wnd == g_dv.heading || wnd == g_dv.message || wnd == g_dv.notice ||
-      wnd == g_dv.name_label)
+  if (wnd == g_dv.title || wnd == g_dv.devices || wnd == g_dv.heading || wnd == g_dv.quality ||
+      wnd == g_dv.unpaired || wnd == g_dv.message || wnd == g_dv.notice)
     color = theme.text;
-  else if (wnd == g_dv.status || wnd == g_dv.files || wnd == g_dv.progress_text || wnd == g_dv.note ||
-           wnd == g_dv.count)
+  else if (wnd == g_dv.status || wnd == g_dv.files || wnd == g_dv.note || wnd == g_dv.count || wnd == g_dv.none)
     color = theme.text2;
   else if (wnd == g_dv.archive_label)
     color = IsWindowEnabled(g_dv.archive_box) ? theme.text : theme.text3;

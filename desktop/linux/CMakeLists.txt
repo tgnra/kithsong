@@ -23,7 +23,8 @@ add_executable(kithsong
   src/drag.c
   src/recents.c
   src/search_view.c
-  src/device_view.c
+  src/device_dialog.c
+  src/sync_view.c
   src/issue_dialog.c
   src/pair_dialog.c
   src/sync_bridge.c

@@ -378,6 +378,27 @@ mc_status mc_sync_get_outlook(mc_sync *sync, mc_sync_outlook *out);
  * or "Up to date". Like snprintf: returns the length it wanted. */
 size_t mc_sync_outlook_text(const mc_sync_outlook *o, char *buf, size_t size);
 
+/* --- Last activity ---
+ * The last session that moved or deleted files here, for a one-line summary of what sync
+ * last did ("Last sync: ↑ 4 · ↓ 100 · 10 deleted"). Kept in sync.db, so it outlasts a
+ * restart; a session that moved nothing leaves it as it was. Forgotten on leaving the group.
+ * It changes just before on_sync_done reports the session that changed it. */
+
+typedef struct mc_sync_activity {
+  int64_t when_ms; /* when that session ended (Unix ms); 0 if none yet */
+  int received;    /* files fetched here (mc_sync_result.files_received) */
+  int sent;        /* files served to the member (files_sent) */
+  int deleted;     /* files removed here (files_deleted) */
+} mc_sync_activity;
+
+mc_status mc_sync_get_last_activity(mc_sync *sync, mc_sync_activity *out);
+/* Whether r moved or deleted files: whether it becomes the last activity. A press of Sync
+ * whose sessions all end without one found nothing to do. */
+int mc_sync_result_changed(const mc_sync_result *r);
+/* a as "Last sync: ↑ 4 · ↓ 100 · 10 deleted", with only the counts above 0; "" if when_ms
+ * is 0. Like snprintf: returns the length it wanted. */
+size_t mc_sync_activity_text(const mc_sync_activity *a, char *buf, size_t size);
+
 /* The library or a profile changed here; members hear in a few seconds. Optional (sync
  * also polls). Any thread. */
 void mc_sync_notify_changed(mc_sync *sync);
@@ -656,6 +677,11 @@ typedef struct mc_sync_profile {
   mc_profile_item *removed;
   int removed_count;
 } mc_sync_profile;
+
+/* What p syncs in one sentence, for a device's row: "Archive", "Whole library", "Whole
+ * library at a lower quality", "3 albums and 2 playlists" (with " at a lower quality" when
+ * not originals) or "Nothing chosen yet". Like snprintf: returns the length it wanted. */
+size_t mc_sync_profile_summary(const mc_sync_profile *p, char *buf, size_t size);
 
 /* Any member's profile. An archive's reads as everything, originals, no budget, whatever its
  * row holds. With none stored (briefly, after pairing) returns an editor's starting point:

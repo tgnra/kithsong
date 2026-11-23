@@ -4,7 +4,7 @@
 #include <string.h>
 
 #include "delete_dialog.h"
-#include "device_view.h"
+#include "sync_view.h"
 #include "devices.h"
 
 enum {
@@ -138,14 +138,14 @@ static gboolean on_read_done(gpointer user) {
   gboolean changed = !same_offer(offer, g.offer);
   mc_sync_archive_offer_free(g.offer);
   g.offer = offer;
-  /* Once by itself; then from the device's page and row. */
+  /* Once by itself; then from the Sync page's banner. */
   if (offer && !offer->asked && !g.offer_dialog && g.a && g.a->win) {
     show_offer(NULL, offer);
     mc_sync *sync = devices_sync();
     if (sync && g.offer_dialog) mc_sync_archive_offer_seen(sync, offer->device_uid);
     offer->asked = 1;
   }
-  if (changed) device_view_update();
+  if (changed) sync_view_update();
   if (g.again) {
     g.again = FALSE;
     read_start();
@@ -340,5 +340,5 @@ void issue_dialog_stop(void) {
   g.again = FALSE;
   gboolean had = g.offer != NULL;
   g_clear_pointer(&g.offer, mc_sync_archive_offer_free);
-  if (had) device_view_update();
+  if (had) sync_view_update();
 }

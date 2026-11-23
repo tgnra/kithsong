@@ -139,6 +139,12 @@ static const char *const k_migrations[] = {
   "ALTER TABLE peer_contact ADD COLUMN seen_ms INTEGER;"
   "ALTER TABLE peer_contact ADD COLUMN offer_asked INTEGER NOT NULL DEFAULT 0;"
   "ALTER TABLE local ADD COLUMN takeover_uid TEXT;",
+  /* v14: the last session that moved or deleted files here (mc_sync_get_last_activity()):
+   * when it ended (Unix ms, NULL for none yet) and its counts. */
+  "ALTER TABLE local ADD COLUMN activity_ms INTEGER;"
+  "ALTER TABLE local ADD COLUMN activity_received INTEGER NOT NULL DEFAULT 0;"
+  "ALTER TABLE local ADD COLUMN activity_sent INTEGER NOT NULL DEFAULT 0;"
+  "ALTER TABLE local ADD COLUMN activity_deleted INTEGER NOT NULL DEFAULT 0;",
 };
 #define MC_SYNC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -442,7 +448,8 @@ mc_status mc_sync_db_clear_group(mc_sync_db *sdb) {
   }
   if (st == MC_OK) st = exec(sdb, "DELETE FROM peer_contact");
   if (st == MC_OK) st = exec(sdb, "DELETE FROM peer_lacks");
-  if (st == MC_OK) st = exec(sdb, "UPDATE local SET group_uid = NULL, profile_chosen = 0, takeover_uid = NULL WHERE id = 1");
+  if (st == MC_OK) st = exec(sdb, "UPDATE local SET group_uid = NULL, profile_chosen = 0, takeover_uid = NULL,"
+                                  " activity_ms = NULL WHERE id = 1");
   sdb->applying_remote = 0;
   if (st == MC_OK) st = mc_sync_db_commit(sdb);
   if (st != MC_OK) mc_sync_db_rollback(sdb);
