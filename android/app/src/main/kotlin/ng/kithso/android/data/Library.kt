@@ -28,7 +28,8 @@ data class Album(
 /**
  * An artist with something on this phone: [albumCount] albums here as album artist, and
  * [trackCount] tracks here credited to them. [sortName] is what artists are ordered by: their
- * sort name ("Beatles, The"), else their name.
+ * sort name ("Beatles, The"), else their name. [creditOnly] is true for one only credited on
+ * tracks of others' albums here, with no release of their own here, singles included.
  */
 @Immutable
 data class Artist(
@@ -38,6 +39,7 @@ data class Artist(
     val art: ArtRef,
     val trackCount: Int = 0,
     val sortName: String = name,
+    val creditOnly: Boolean = false,
 )
 
 @Immutable

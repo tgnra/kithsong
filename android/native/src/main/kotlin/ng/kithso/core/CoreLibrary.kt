@@ -59,7 +59,9 @@ data class NamedInfo(val uid: String, val name: String, val albumCount: Int, val
  * mc_library_list_artists(), [albumCount] is all their albums and [trackCount] 0. [sortName]
  * is what artists are ordered by: their sort name ("Beatles, The"), else their name.
  * [coverDir] holds their picture: the cover of their first own album here that has one
- * ([NativeCore.coverFile] finds it); null if none has.
+ * ([NativeCore.coverFile] finds it); null if none has. From mc_library_list_artists_here() only,
+ * [creditOnly] is true for an artist only credited on tracks of others' albums here, with no
+ * release of their own here, singles included.
  */
 data class ArtistInfo(
     val uid: String,
@@ -68,6 +70,7 @@ data class ArtistInfo(
     val trackCount: Int,
     val sortName: String,
     val coverDir: String? = null,
+    val creditOnly: Boolean = false,
 )
 
 /** An open library (mc_library), in folder [dir]. Not thread-safe; close it when done. */

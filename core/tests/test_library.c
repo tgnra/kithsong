@@ -889,6 +889,64 @@ static void test_credited_artists(const char *scratch) {
   mc_library_close(lib);
 }
 
+/* The artists here's credit_only flags, in order, as "0110" into out. */
+static void credit_flags(mc_library *lib, char *out, size_t n) {
+  mc_artist_list *artists = NULL;
+  size_t len = 0;
+  out[0] = '\0';
+  CHECK(mc_library_list_artists_here(lib, &artists) == MC_OK && artists);
+  for (int i = 0; artists && i < artists->count && len + 1 < n; i++) out[len++] = artists->items[i].credit_only ? '1' : '0';
+  out[len] = '\0';
+  mc_artist_list_free(artists);
+}
+
+/* An artist is credit_only who's only credited on tracks of others' albums here: not the album
+ * artist of anything here, compilations and singles included, and with no single of their own. */
+static void test_credit_only(const char *scratch) {
+  char path[1024];
+  snprintf(path, sizeof path, "%s/test_library_credit_only.d", scratch);
+  remove_db(path);
+  mc_library *lib = NULL;
+  CHECK(mc_library_open(path, &lib) == MC_OK);
+  if (!lib) return;
+  sqlite3 *db = mc_library_db(lib);
+
+  /* Anna's album al1 has Gus's t1 and Anna feat. Fay's t2. Various Artists' compilation al2
+   * has Pip's t3 and Anna's t4, and their al4 just Tom's t7, a single. Sam's al3 is one track,
+   * a single, and Ned's t6 has no album. Gus's own al5 has nothing here. */
+  CHECK(exec(db, "INSERT INTO artists (uid, name) VALUES ('A', 'Anna'), ('F', 'Fay'), ('G', 'Gus'),"
+                 " ('N', 'Ned'), ('P', 'Pip'), ('S', 'Sam'), ('T', 'Tom'), ('V', 'Various Artists');"
+                 "INSERT INTO albums (uid, title, artist_uid) VALUES ('al1', 'Own', 'A'),"
+                 " ('al2', 'Hits', 'V'), ('al3', 'Solo', 'S'), ('al4', 'Promo', 'V'), ('al5', 'Away', 'G');"
+                 "INSERT INTO tracks (uid, album_uid, artist_uid, title) VALUES"
+                 " ('t1', 'al1', 'G', '1'), ('t2', 'al1', 'A', '2'), ('t3', 'al2', 'P', '3'),"
+                 " ('t4', 'al2', 'A', '4'), ('t5', 'al3', NULL, '5'), ('t6', NULL, 'N', '6'),"
+                 " ('t7', 'al4', 'T', '7'), ('t8', 'al5', 'G', '8'), ('t9', 'al5', 'G', '9');"
+                 "INSERT INTO track_artists (uid, track_uid, artist_uid, position, joinphrase) VALUES"
+                 " ('ta1', 't2', 'A', 0, ' feat. '), ('ta2', 't2', 'F', 1, '');"
+                 "INSERT INTO files (uid, track_uid, path, format) VALUES"
+                 " ('f1', 't1', '1.flac', 'flac'), ('f2', 't2', '2.flac', 'flac'), ('f3', 't3', '3.flac', 'flac'),"
+                 " ('f4', 't4', '4.flac', 'flac'), ('f5', 't5', '5.flac', 'flac'), ('f6', 't6', '6.flac', 'flac'),"
+                 " ('f7', 't7', '7.flac', 'flac');") == SQLITE_OK);
+
+  /* Anna, Fay, Gus, Ned, Pip, Sam, Tom, Various Artists. */
+  char flags[16];
+  credit_flags(lib, flags, sizeof flags);
+  CHECK_STR(flags, "01101000");
+  /* With a file of Gus's own album here, Gus isn't. */
+  CHECK(exec(db, "INSERT INTO files (uid, track_uid, path, format) VALUES ('f8', 't8', '8.flac', 'flac')") ==
+        SQLITE_OK);
+  credit_flags(lib, flags, sizeof flags);
+  CHECK_STR(flags, "01001000");
+
+  /* Never set by mc_library_list_artists(). */
+  mc_artist_list *artists = NULL;
+  CHECK(mc_library_list_artists(lib, &artists) == MC_OK && artists && artists->count == 8);
+  for (int i = 0; artists && i < artists->count; i++) CHECK(artists->items[i].credit_only == 0);
+  mc_artist_list_free(artists);
+  mc_library_close(lib);
+}
+
 /* An artist's picture is the cover of their first own album here with one, by year then
  * title; singles, albums with nothing here and those they're only featured on don't count. */
 static void test_artist_cover(const char *scratch) {
@@ -2070,6 +2128,7 @@ int main(int argc, char **argv) {
   test_play_log(argc > 1 ? argv[1] : ".");
   test_credited_artists(argc > 1 ? argv[1] : ".");
   test_artist_cover(argc > 1 ? argv[1] : ".");
+  test_credit_only(argc > 1 ? argv[1] : ".");
   test_playlists(argc > 1 ? argv[1] : ".");
   test_playable(argc > 1 ? argv[1] : ".");
   test_empty_here(argc > 1 ? argv[1] : ".");

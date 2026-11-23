@@ -1294,10 +1294,14 @@
 
     "cover_of": "Cover of {0}",
     "albums": { "one": "{0:d} album", "other": "{0:d} albums" },
+    "album_tiles_larger": { "text": "Larger album tiles", "note": "TalkBack action on an album on the phone's main screen: fewer, larger albums across, as pinching the album grid out does." },
+    "album_tiles_smaller": { "text": "Smaller album tiles", "note": "TalkBack action on an album on the phone's main screen: more, smaller albums across, as pinching the album grid in does." },
 
     "customise": { "text": "Customise", "note": "A row at the top of the phone's Settings, and the title of the page it opens, which changes how the main screen looks." },
     "customise_sections": { "text": "Section order", "note": "Heading on the Customise page, over the main screen's sections (Recents, Playlists, Albums and so on) to drag into order." },
     "customise_sections_text": { "text": "Drag the sections into the order the main screen shows them in, under Recents.", "note": "Under customise_sections." },
+    "customise_fold_credited": { "text": "Fold away artists only credited on tracks", "note": "Checkbox under Artists on the Customise page. When on, artists with no album or single of their own on the phone, only featured on others' tracks, go at the end of the main screen's Artists, under a row that opens to show them (credited_artists_more)." },
+    "credited_artists_more": { "one": "{0:d} more artist, credited on tracks", "other": "{0:d} more artists, credited on tracks", "note": "A row at the end of the main screen's Artists that opens to show the artists only featured on others' tracks, with no album or single of their own on the phone." },
 
     "jump_to_section": "Jump to a section",
     "jump_to_named_section": { "text": "Jump to {0}", "note": "An accessibility action on the main screen's section headings. {0} is a section, such as Albums." },

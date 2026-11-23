@@ -55,6 +55,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalDensity
@@ -62,14 +63,17 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.collapse
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.expand
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.R
@@ -86,6 +90,7 @@ import ng.kithso.android.ui.art.PrefetchArt
 import ng.kithso.android.ui.theme.ArtBackdrop
 import ng.kithso.android.ui.theme.rememberOnScreenArtColors
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -169,9 +174,10 @@ internal sealed interface MainItem {
         override val art get() = groups.take(ROW_ART).map { it.art }
     }
 
-    data class AlbumRow(val albums: List<Album>) : MainItem {
+    /** A row of the album grid, [columns] across. */
+    data class AlbumRow(val albums: List<Album>, val columns: Int) : MainItem {
         override val key get() = "albums:${albums.first().uid}"
-        override val contentType get() = "albums"
+        override val contentType get() = AlbumRowType(columns)
         override val art get() = albums.map { it.art }
     }
 
@@ -179,6 +185,12 @@ internal sealed interface MainItem {
         override val key get() = "artist:${artist.uid}"
         override val contentType get() = "artist"
         override val art get() = listOf(artist.art)
+    }
+
+    /** The row at the end of Artists that opens to show the [count] artists folded away under it. */
+    data class CreditedArtistsRow(val count: Int, val open: Boolean) : MainItem {
+        override val key get() = "row:credited-artists"
+        override val contentType get() = "credited-artists"
     }
 }
 
@@ -189,18 +201,28 @@ internal const val PHONE_RECENTS = 8
 private const val ALBUM_GROUPS_ROW_KEY = "row:album-groups"
 private const val TILE_ROW_TYPE = "tiles"
 
+/**
+ * An album row's content type: a grid's rows with fewer columns are taller, which the fast
+ * scroll strip, measuring each type once, has to know apart.
+ */
+internal data class AlbumRowType(val columns: Int)
+
 /** How many of a row's tiles count towards art prefetching and the backdrop: about a screen's. */
 private const val ROW_ART = 6
 
 // Null while the library is being read: just the header, rather than a flash of the empty state.
 // With lists to make ([canMake]), Playlists and Album groups show even when empty, for their +
-// buttons; with no music, only for what's already there. The sections come in [order].
+// buttons; with no music, only for what's already there. The sections come in [order]. With
+// [foldCredited], the artists only credited on others' tracks ([Artist.creditOnly]) go at the end
+// of Artists, under a row that shows them while [creditedOpen].
 internal fun mainItems(
     library: Library?,
     columns: Int,
     banner: Boolean,
     canMake: Boolean,
     order: List<Section> = Section.entries,
+    foldCredited: Boolean = false,
+    creditedOpen: Boolean = false,
 ): List<MainItem> = buildList {
     add(MainItem.Header)
     if (banner) add(MainItem.Banner)
@@ -222,11 +244,16 @@ internal fun mainItems(
         }
         Section.Albums -> if (library.albums.isNotEmpty()) {
             add(MainItem.Heading(Section.Albums))
-            library.albums.chunked(columns).mapTo(this, MainItem::AlbumRow)
+            library.albums.chunked(columns).mapTo(this) { MainItem.AlbumRow(it, columns) }
         }
         Section.Artists -> if (library.artists.isNotEmpty()) {
             add(MainItem.Heading(Section.Artists))
-            library.artists.mapTo(this, MainItem::ArtistItem)
+            val (credited, own) = if (foldCredited) library.artists.partition { it.creditOnly } else emptyList<Artist>() to library.artists
+            own.mapTo(this, MainItem::ArtistItem)
+            if (credited.isNotEmpty()) {
+                add(MainItem.CreditedArtistsRow(credited.size, creditedOpen))
+                if (creditedOpen) credited.mapTo(this, MainItem::ArtistItem)
+            }
         }
     }
 }
@@ -251,7 +278,8 @@ private const val ALBUMS_MIN_SHARE = 0.6f
  * The fast scroll strip's entries for [items]: each section's heading, then the letters of an
  * alphabetical section long enough for them (playlists by name, albums by title, artists by sort
  * name, as the library orders them). Recents and album groups are a single row, with no
- * places in it for the strip to go.
+ * places in it for the strip to go. The artists under an open [MainItem.CreditedArtistsRow]
+ * have letters of their own after the others', as they start again from A.
  */
 internal fun fastScrollEntries(items: List<MainItem>, titles: Map<Section, String>, other: String): List<FastScrollEntry> =
     buildList {
@@ -267,18 +295,24 @@ internal fun fastScrollEntries(items: List<MainItem>, titles: Map<Section, Strin
             val start = i + 1
             var end = start
             while (end < items.size && items[end] !is MainItem.Heading) end++
-            // Each item's position, and the sort key of each name in turn.
+            // Each item's position, and the sort key of each name in turn; and where in them each
+            // alphabetical run starts.
             val at = ArrayList<Int>()
             val keys = ArrayList<String>()
+            val runs = arrayListOf(0)
             for (j in start until end) {
                 when (val item = items[j]) {
                     is MainItem.PlaylistItem -> { at += j; keys += item.playlist.name }
                     is MainItem.ArtistItem -> { at += j; keys += item.artist.sortName }
                     is MainItem.AlbumRow -> item.albums.forEach { at += j; keys += it.title }
+                    is MainItem.CreditedArtistsRow -> runs += keys.size
                     else -> {}
                 }
             }
-            if (keys.size >= LETTERS_FROM) letterEntries(this, keys, other, title) { at[it] }
+            if (keys.size >= LETTERS_FROM) runs.forEachIndexed { r, from ->
+                val until = runs.getOrElse(r + 1) { keys.size }
+                letterEntries(this, keys.subList(from, until), other, title) { at[from + it] }
+            }
             i = end
         }
     }
@@ -338,6 +372,11 @@ fun MainScreen(
     syncDot: Boolean = false,
     // The sections' order, from the Customise page.
     sectionOrder: List<Section> = Section.entries,
+    // Whether the artists only credited on others' tracks are folded away, from the Customise page.
+    foldCredited: Boolean = false,
+    // Smaller album tiles, a column more across; pinching the grid changes it, with this.
+    smallAlbumTiles: Boolean = false,
+    onSmallAlbumTiles: ((Boolean) -> Unit)? = null,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -345,14 +384,18 @@ fun MainScreen(
         val sides = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
         val layoutDirection = LocalLayoutDirection.current
         val width = maxWidth - with(density) { (sides.getLeft(density, layoutDirection) + sides.getRight(density, layoutDirection)).toDp() }
-        val columns = albumColumns(width)
-        val cellPx = with(density) { ((width - Gutter * 2 - TileSpacing * (columns - 1)) / columns).roundToPx() }
+        val columns = phoneAlbumColumns(width, smallAlbumTiles)
+        // An album tile's width with n columns across.
+        val cellWidth = { n: Int -> with(density) { ((width - Gutter * 2 - TileSpacing * (n - 1)) / n).roundToPx() } }
+        val cellPx = cellWidth(columns)
         val statusBarPx = WindowInsets.statusBars.getTop(density)
 
         val hasBanner = banner != null
         val canMake = onNewList != null
-        val items = remember(library, columns, hasBanner, canMake, sectionOrder) {
-            mainItems(library, columns, hasBanner, canMake, sectionOrder)
+        // The folded artists are hidden each time the app starts.
+        var creditedOpen by rememberSaveable { mutableStateOf(false) }
+        val items = remember(library, columns, hasBanner, canMake, sectionOrder, foldCredited, creditedOpen) {
+            mainItems(library, columns, hasBanner, canMake, sectionOrder, foldCredited, creditedOpen)
         }
         val sections = remember(items) {
             items.mapIndexedNotNull { i, item -> (item as? MainItem.Heading)?.let { SectionStart(it.section, i) } }
@@ -415,6 +458,47 @@ fun MainScreen(
         val slidePx = constraints.maxHeight * LIBRARY_SLIDE
         // Pulling down from the top focuses the header's search.
         val pull = rememberPullToSearch(openSearch)
+        // Pinching the album grid ([albumPinch]) makes its tiles larger or smaller, keeping the
+        // album under the fingers where it was; TalkBack's action on a tile does, for that tile's.
+        val firstAlbumRow = sections.find { it.section == Section.Albums }?.let { it.index + 1 }
+        val albumRowAt = { y: Float ->
+            listState.layoutInfo.visibleItemsInfo
+                .find { y >= it.offset && y < it.offset + it.size }
+                ?.takeIf { items.getOrNull(it.index) is MainItem.AlbumRow }
+        }
+        fun switchTiles(small: Boolean, album: Int, y: Int?) {
+            val change = onSmallAlbumTiles ?: return
+            val first = firstAlbumRow ?: return
+            val newColumns = phoneAlbumColumns(width, small)
+            listState.layoutInfo.visibleItemsInfo.find { it.index == first + album / columns }?.let { row ->
+                val newRowHeight = cellWidth(newColumns) + with(density) { AlbumLabelsHeight.roundToPx() }
+                val place = keptAlbumPlace(album, first, newColumns, y ?: row.offset, row.offset, row.size, newRowHeight)
+                listState.requestScrollToItem(place.index, place.offset)
+            }
+            change(small)
+        }
+        val canPinch = { at: Offset -> onSmallAlbumTiles != null && !searching && slide == 0f && albumRowAt(at.y) != null }
+        val pinchTo = pinch@{ small: Boolean, at: Offset ->
+            val first = firstAlbumRow ?: return@pinch
+            val info = albumRowAt(at.y) ?: return@pinch
+            val row = items[info.index] as MainItem.AlbumRow
+            // The column under the fingers, counted from the start, which is the right in RTL.
+            val step = cellPx + with(density) { TileSpacing.roundToPx() }
+            val fromLeft = ((at.x - sides.getLeft(density, layoutDirection) - with(density) { Gutter.toPx() }) / step).toInt()
+            val column = (if (layoutDirection == LayoutDirection.Rtl) columns - 1 - fromLeft else fromLeft).coerceIn(0, row.albums.lastIndex)
+            switchTiles(small, (info.index - first) * columns + column, at.y.roundToInt())
+        }
+        val largerTiles = stringResource(R.string.album_tiles_larger)
+        val smallerTiles = stringResource(R.string.album_tiles_smaller)
+        val tileActions: ((Album) -> List<CustomAccessibilityAction>)? = if (onSmallAlbumTiles == null) null else { album ->
+            listOf(
+                CustomAccessibilityAction(if (smallAlbumTiles) largerTiles else smallerTiles) {
+                    val i = library?.albums?.indexOfFirst { it.uid == album.uid } ?: -1
+                    if (i >= 0) switchTiles(!smallAlbumTiles, i, null)
+                    i >= 0
+                },
+            )
+        }
 
         PrefetchArt(listState, cellPx) { index -> items.getOrNull(index)?.art.orEmpty() }
         ArtBackdrop(
@@ -429,7 +513,10 @@ fun MainScreen(
                 .add(WindowInsets(bottom = bottomPadding))
                 .asPaddingValues(),
             userScrollEnabled = !searching,
-            modifier = Modifier.fillMaxSize().pullToSearch(pull, listState),
+            modifier = Modifier
+                .fillMaxSize()
+                .albumPinch(smallAlbumTiles, canPinch, pinchTo)
+                .pullToSearch(pull, listState),
         ) {
             items(items, key = { it.key }, contentType = { it.contentType }) { item ->
                 if (item == MainItem.Header) {
@@ -503,7 +590,7 @@ fun MainScreen(
                         },
                         state = albumGroupsRow,
                     )
-                    is MainItem.AlbumRow -> AlbumGridRow(item.albums, columns, onOpen, onAlbumMenu)
+                    is MainItem.AlbumRow -> AlbumGridRow(item.albums, item.columns, onOpen, onAlbumMenu, tileActions)
                     is MainItem.ArtistItem -> LibraryRow(
                         item.artist.name,
                         item.artist.subtitle(),
@@ -511,6 +598,7 @@ fun MainScreen(
                         CircleShape,
                         onLongClick = { onArtistMenu(item.artist) },
                     ) { onOpen(CollectionRef(CollectionRef.Kind.Artist, item.artist.uid)) }
+                    is MainItem.CreditedArtistsRow -> CreditedArtistsRow(item.count, item.open) { creditedOpen = !creditedOpen }
                 }
                 }
             }
@@ -525,7 +613,7 @@ fun MainScreen(
             // Known before the list reaches them, from the width of their tiles.
             estimate = { kind ->
                 when (kind) {
-                    "albums" -> cellPx + with(density) { AlbumLabelsHeight.roundToPx() }
+                    is AlbumRowType -> cellPx + with(density) { AlbumLabelsHeight.roundToPx() }
                     TILE_ROW_TYPE -> with(density) { (tileWidth(width) + AlbumLabelsHeight).roundToPx() }
                     else -> null
                 }
@@ -831,6 +919,28 @@ internal fun LibraryRow(
         leadingContent = { AlbumArt(art, contentDescription = null, shape = artShape, modifier = Modifier.size(ListArtSize)) },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier.listItemKeys(ListRowFocusShape, onLongClick).menuClickable(onLongClick, onClick),
+    )
+}
+
+/**
+ * The row at the end of Artists over the [count] artists only credited on others' tracks, which
+ * shows them while [open]; tapping it opens or closes it. Its arrow is where the artists' pictures
+ * are, clear of the fast scroll strip.
+ */
+@Composable
+private fun CreditedArtistsRow(count: Int, open: Boolean, onToggle: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(pluralStringResource(R.plurals.credited_artists_more, count, count)) },
+        leadingContent = {
+            Box(Modifier.size(ListArtSize), contentAlignment = Alignment.Center) {
+                Icon(if (open) Icons.ExpandLess else Icons.ExpandMore, contentDescription = null)
+            }
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier
+            .listItemKeys(ListRowFocusShape, null)
+            .clickable(onClick = onToggle)
+            .semantics { if (open) collapse { onToggle(); true } else expand { onToggle(); true } },
     )
 }
 

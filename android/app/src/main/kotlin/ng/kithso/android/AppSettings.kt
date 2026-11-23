@@ -114,6 +114,28 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
             save()
         }
 
+    /**
+     * Whether the phone's main screen has smaller album tiles, a column more across, as the
+     * album grid was last pinched to (see [ng.kithso.android.ui.phoneAlbumColumns]).
+     */
+    var smallAlbumTiles: Boolean
+        get() = core.bool(KEY_SMALL_ALBUM_TILES, false)
+        set(value) {
+            core.setBool(KEY_SMALL_ALBUM_TILES, value)
+            save()
+        }
+
+    /**
+     * Whether the phone's main screen folds away the artists only credited on others' tracks, at
+     * the end of Artists (see [ng.kithso.android.ui.mainItems]). On if never set.
+     */
+    var foldCreditedArtists: Boolean
+        get() = core.bool(KEY_FOLD_CREDITED_ARTISTS, true)
+        set(value) {
+            core.setBool(KEY_FOLD_CREDITED_ARTISTS, value)
+            save()
+        }
+
     /** The playback volume, 0 to 100, as it was left; nothing sets it yet. */
     val volume: Int get() = core.volume
 
@@ -133,6 +155,8 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
         const val KEY_ASKED_FOR_NOTIFICATIONS = "android_asked_for_notifications"
         const val KEY_ARCHIVE_EXPLAINED = "archive_explained"
         const val KEY_SECTION_ORDER = "android_section_order"
+        const val KEY_SMALL_ALBUM_TILES = "android_small_album_tiles"
+        const val KEY_FOLD_CREDITED_ARTISTS = "android_fold_credited_artists"
         // What they were in [old].
         const val OLD_ASKED_FOR_NOTIFICATIONS = "asked_for_notifications"
         const val OLD_DEVICE_NAME = "device_name"

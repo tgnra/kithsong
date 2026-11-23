@@ -331,6 +331,10 @@ fun App(
     // again it stays as it is; on top of what's open on the phone.
     // The phone's main screen's sections, in the order its Customise page left them.
     var sectionOrder by remember { mutableStateOf(orderedSections(settings.sectionOrder)) }
+    // Whether its album grid has smaller tiles, as it was last pinched to.
+    var smallAlbumTiles by remember { mutableStateOf(settings.smallAlbumTiles) }
+    // Whether its Artists fold away those only credited on others' tracks.
+    var foldCredited by remember { mutableStateOf(settings.foldCreditedArtists) }
     // Opens the phone's header search: from the keyboard shortcut, as the main screen's own pull
     // and menu open it there.
     val phoneSearchRequests = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1) }
@@ -441,7 +445,12 @@ fun App(
                     sectionOrder = listOf(Section.Recents) + order
                     settings.sectionOrder = order.map { it.name }
                 },
-                pagePadding,
+                foldCredited = foldCredited,
+                onFoldCredited = { on ->
+                    foldCredited = on
+                    settings.foldCreditedArtists = on
+                },
+                bottomPadding = pagePadding,
                 onBack = dismiss,
             )
             Page.Licenses -> LicensesScreen(pagePadding, onOpen = { nav = nav.push(Page.License(it)) }, onBack = dismiss)
@@ -596,6 +605,12 @@ fun App(
                     onSync = { nav = nav.push(Page.Sync) },
                     onSettings = { nav = nav.push(Page.Settings) },
                     sectionOrder = sectionOrder,
+                    foldCredited = foldCredited,
+                    smallAlbumTiles = smallAlbumTiles,
+                    onSmallAlbumTiles = { small ->
+                        smallAlbumTiles = small
+                        settings.smallAlbumTiles = small
+                    },
                     importPickers = importPickers,
                     importRunning = importProgress?.phase?.isOver == false,
                     banner = banner,

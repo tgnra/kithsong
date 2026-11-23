@@ -1024,7 +1024,7 @@ void mc_playlist_list_free(mc_playlist_list *list) {
   " ORDER BY a.year, a.title COLLATE NOCASE, a.uid LIMIT 1)"
 
 /* Runs sql (uid, name, sort name, album count, ARTIST_COVER_FILE, then a track count if it has
- * six columns) into a list. */
+ * six columns, and credit_only if seven) into a list. */
 static mc_status list_artists(mc_library *lib, const char *sql, mc_artist_list **out) {
   if (!lib || !out) return MC_ERR_INVALID_ARG;
   *out = NULL;
@@ -1053,6 +1053,7 @@ static mc_status list_artists(mc_library *lib, const char *sql, mc_artist_list *
       a->cover_dir = abs;
     }
     if (sqlite3_column_count(stmt) > 5) a->track_count = sqlite3_column_int(stmt, 5);
+    if (sqlite3_column_count(stmt) > 6) a->credit_only = sqlite3_column_int(stmt, 6);
   }
   if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
   sqlite3_finalize(stmt);
@@ -1084,10 +1085,12 @@ mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out) {
 mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out) {
   /* Counted once for every artist rather than per artist, over (artist, album) and (artist,
    * track) pairs as CREDITED_ALBUMS and CREDITED_TRACKS have them: a track with no artist of
-   * its own is its album's, which no index finds. */
+   * its own is its album's, which no index finds. An artist is credit_only with no album here
+   * as an album artist (na.n counts singles too) and no credited track here that's a single:
+   * alone on its album or on none, as mc_library_list_artist_singles() has them. */
   static const char sql[] =
     "SELECT ar.uid, ar.name, coalesce(ar.sort_name, ar.name), coalesce(na.albums, 0), " ARTIST_COVER_FILE
-    ", coalesce(nt.n, 0) FROM artists ar"
+    ", coalesce(nt.n, 0), coalesce(na.n, 0) = 0 AND coalesce(nt.singles, 0) = 0 FROM artists ar"
     " LEFT JOIN (SELECT c.uid, count(*) AS n,"
     "   count(CASE WHEN NOT " ALBUM_IS_SINGLE " THEN 1 END) AS albums"
     "  FROM (SELECT artist_uid AS uid, uid AS album_uid FROM albums WHERE artist_uid IS NOT NULL"
@@ -1095,13 +1098,16 @@ mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out) {
     "  JOIN albums a ON a.uid = c.album_uid"
     "  WHERE EXISTS (SELECT 1 FROM tracks t JOIN files f ON f.track_uid = t.uid WHERE t.album_uid = a.uid)"
     "  GROUP BY c.uid) na ON na.uid = ar.uid"
-    " LEFT JOIN (SELECT c.uid, count(*) AS n"
+    " LEFT JOIN (SELECT c.uid, count(*) AS n,"
+    "   count(CASE WHEN ct.album_uid IS NULL OR EXISTS (SELECT 1 FROM albums a"
+    "    WHERE a.uid = ct.album_uid AND " ALBUM_IS_SINGLE ") THEN 1 END) AS singles"
     "  FROM (SELECT coalesce(t.artist_uid, al.artist_uid) AS uid, t.uid AS track_uid FROM tracks t"
     "    LEFT JOIN albums al ON al.uid = t.album_uid"
     "   UNION SELECT artist_uid, track_uid FROM track_artists WHERE position > 0"
     "   UNION SELECT aa.artist_uid, t.uid FROM tracks t"
     "    JOIN album_artists aa ON aa.album_uid = t.album_uid AND aa.position > 0"
     "    WHERE t.artist_uid IS NULL) c"
+    "  JOIN tracks ct ON ct.uid = c.track_uid"
     "  WHERE EXISTS (SELECT 1 FROM files f WHERE f.track_uid = c.track_uid)"
     "  GROUP BY c.uid) nt ON nt.uid = ar.uid"
     " WHERE na.n > 0 OR nt.n > 0" ARTIST_ORDER;

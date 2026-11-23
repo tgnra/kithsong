@@ -96,6 +96,58 @@ class MainItemsTest {
         }
     }
 
+    // A to Z, every fourth from B only credited on others' tracks: 19 of their own and 7 credited.
+    private fun someCredited() = List(26) { Artist("x$it", "${'A' + it} artist", 1, art, creditOnly = it % 4 == 1) }
+
+    private fun artistsOf(items: List<MainItem>) = items.filterIsInstance<MainItem.ArtistItem>().map { it.artist }
+
+    @Test
+    fun creditedArtistsFoldAwayUnderARowAtTheEnd() {
+        val all = someCredited()
+        val (credited, own) = all.partition { it.creditOnly }
+        val library = Library(emptyList(), emptyList(), emptyList(), all, emptyList())
+        val closed = mainItems(library, 2, false, false, foldCredited = true)
+        assertEquals(own, artistsOf(closed))
+        assertEquals(MainItem.CreditedArtistsRow(7, open = false), closed.last())
+        val open = mainItems(library, 2, false, false, foldCredited = true, creditedOpen = true)
+        assertEquals(own + credited, artistsOf(open))
+        assertEquals(MainItem.CreditedArtistsRow(7, open = true), open[open.size - 8])
+        // Not folded, they're all in order, with no row.
+        val unfolded = mainItems(library, 2, false, false, foldCredited = false, creditedOpen = true)
+        assertEquals(all, artistsOf(unfolded))
+        assertTrue(unfolded.none { it is MainItem.CreditedArtistsRow })
+    }
+
+    @Test
+    fun theStripHasTheFoldedArtistsLettersOnlyWhileOpen() {
+        val library = Library(emptyList(), emptyList(), emptyList(), someCredited(), emptyList())
+        val closed = mainItems(library, 2, false, false, foldCredited = true)
+        val closedLetters = entries(closed).filter { it.section == "Artists" }
+        assertEquals(someCredited().filter { !it.creditOnly }.map { it.name.take(1) }, closedLetters.map { it.label })
+
+        // Open, the folded artists' letters follow, each pointing at its artist under the row.
+        val open = mainItems(library, 2, false, false, foldCredited = true, creditedOpen = true)
+        val row = open.indexOfFirst { it is MainItem.CreditedArtistsRow }
+        val openLetters = entries(open).filter { it.section == "Artists" }
+        assertEquals(closedLetters, openLetters.take(19))
+        val after = openLetters.drop(19)
+        assertEquals(listOf("B", "F", "J", "N", "R", "V", "Z"), after.map { it.label })
+        for (entry in after) {
+            assertTrue(entry.index > row)
+            assertEquals(entry.label, (open[entry.index] as MainItem.ArtistItem).artist.name.take(1))
+        }
+    }
+
+    @Test
+    fun openingTheFoldCanBringTheArtistsUpToHavingLetters() {
+        val artists = List(12) { Artist("x$it", "${'A' + it} artist", 1, art, creditOnly = it >= 5) }
+        val library = Library(emptyList(), emptyList(), emptyList(), artists, emptyList())
+        val closed = mainItems(library, 2, false, false, foldCredited = true)
+        assertTrue(entries(closed).none { it.section == "Artists" })
+        val open = mainItems(library, 2, false, false, foldCredited = true, creditedOpen = true)
+        assertEquals(12, entries(open).count { it.section == "Artists" })
+    }
+
     @Test
     fun `Recents stays first whatever order was saved`() {
         assertEquals(

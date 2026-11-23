@@ -12,6 +12,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -66,14 +68,26 @@ private fun AlbumTile(
     )
 }
 
-/** One row of an album grid; a short last row keeps the tiles the same width. */
+/**
+ * One row of an album grid; a short last row keeps the tiles the same width. Each tile has
+ * [actions]' TalkBack actions for its album, if any.
+ */
 @Composable
-internal fun AlbumGridRow(albums: List<Album>, columns: Int, onOpen: (CollectionRef) -> Unit, onMenu: (Album) -> Unit) {
+internal fun AlbumGridRow(
+    albums: List<Album>,
+    columns: Int,
+    onOpen: (CollectionRef) -> Unit,
+    onMenu: (Album) -> Unit,
+    actions: ((Album) -> List<CustomAccessibilityAction>)? = null,
+) {
     Row(
         Modifier.padding(horizontal = BrowseGutter).padding(bottom = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(TileSpacing),
     ) {
-        for (album in albums) AlbumTile(album, album.artist, onOpen, onMenu, Modifier.weight(1f))
+        for (album in albums) {
+            val tile = Modifier.weight(1f)
+            AlbumTile(album, album.artist, onOpen, onMenu, if (actions == null) tile else tile.semantics { customActions = actions(album) })
+        }
         repeat(columns - albums.size) { Spacer(Modifier.weight(1f)) }
     }
 }

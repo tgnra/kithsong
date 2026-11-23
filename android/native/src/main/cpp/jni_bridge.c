@@ -297,7 +297,8 @@ static jobject new_artist(JNIEnv *env, jclass cls, jmethodID ctor, const void *i
   jstring sort = new_string(env, a->sort_name ? a->sort_name : cname);
   jstring cover = new_string(env, a->cover_dir);
   jobject out =
-    (*env)->NewObject(env, cls, ctor, uid, name, (jint)a->album_count, (jint)a->track_count, sort, cover);
+    (*env)->NewObject(env, cls, ctor, uid, name, (jint)a->album_count, (jint)a->track_count, sort, cover,
+                      (jboolean)(a->credit_only != 0));
   JNI_DELETE(uid, name, sort, cover);
   return out;
 }
@@ -307,7 +308,7 @@ static jobject new_artist(JNIEnv *env, jclass cls, jmethodID ctor, const void *i
 static jobjectArray artist_array(JNIEnv *env, mc_artist_list *list) {
   jclass info;
   jmethodID ctor =
-    jni_ctor(env, JNI_CLASS("ArtistInfo"), "(" J_STRING J_STRING "II" J_STRING J_STRING ")V", &info);
+    jni_ctor(env, JNI_CLASS("ArtistInfo"), "(" J_STRING J_STRING "II" J_STRING J_STRING "Z)V", &info);
   jobjectArray out =
     ctor ? JNI_OBJECT_ARRAY(info, ctor, list ? list->items : NULL, list ? list->count : 0, new_artist) : NULL;
   mc_artist_list_free(list);

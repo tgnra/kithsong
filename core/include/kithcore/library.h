@@ -249,6 +249,11 @@ typedef struct mc_artist_info {
   /* From mc_library_list_artists_here() only (0 elsewhere): the tracks credited to it (see
    * mc_library_list_artist_albums()) that have a file on this device. */
   int track_count;
+  /* From mc_library_list_artists_here() only (0 elsewhere): 1 if the artist is only credited
+   * on tracks of other artists' albums here, such as a featured artist, and not the album
+   * artist of anything here, singles included, nor has a single of their own here (see
+   * mc_library_list_artist_singles()). Lists of artists can fold these away. */
+  int credit_only;
   /* The artist's picture: the folder holding the cover of their first album here that has
    * one (as mc_album_info.folder; see mc_coverart_find()), their own albums (artist_uid
    * theirs) by year then title, singles left out. NULL if none has a cover here, for which
@@ -266,7 +271,7 @@ typedef struct mc_artist_list {
 mc_status mc_library_list_artists(mc_library *lib, mc_artist_list **out);
 /* The artists with something to play on this device, in the same order: album_count is
  * their albums with a file here, track_count their credited tracks with a file here, and
- * one of them is above 0. "A file here" is the test that gives mc_album_info a folder and
+ * one of them is above 0; credit_only says which are only on others' albums. "A file here" is the test that gives mc_album_info a folder and
  * mc_track_info a path. Artists are told apart by uid, so two of the same name are listed
  * and counted apart. Free with mc_artist_list_free(). */
 mc_status mc_library_list_artists_here(mc_library *lib, mc_artist_list **out);

@@ -2,6 +2,7 @@ package ng.kithso.android.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.add
@@ -14,7 +15,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -39,10 +43,18 @@ import ng.kithso.android.R
 /**
  * The phone's Customise page, from the top of Settings: the main screen's sections, to drag into the
  * order it shows them in. [onOrder] has each new order, once a drag is let go or a section is
- * moved by an accessibility action.
+ * moved by an accessibility action. Under Artists is whether those only credited on others'
+ * tracks are folded away ([foldCredited]), which [onFoldCredited] changes.
  */
 @Composable
-fun CustomiseScreen(order: List<Section>, onOrder: (List<Section>) -> Unit, bottomPadding: Dp, onBack: () -> Unit) {
+fun CustomiseScreen(
+    order: List<Section>,
+    onOrder: (List<Section>) -> Unit,
+    foldCredited: Boolean,
+    onFoldCredited: (Boolean) -> Unit,
+    bottomPadding: Dp,
+    onBack: () -> Unit,
+) {
     // The order as dragged, ahead of [order] until the drag's let go.
     var dragging by remember { mutableStateOf<List<Section>?>(null) }
     val sections = dragging ?: order
@@ -89,13 +101,17 @@ fun CustomiseScreen(order: List<Section>, onOrder: (List<Section>) -> Unit, bott
                     handle = with(reorder) { Modifier.dragHandle(section) },
                     lifted = section == reorder.dragged,
                     modifier = if (section == reorder.dragged) with(reorder) { Modifier.dragged(section) } else Modifier.animateItem(),
+                    option = if (section == Section.Artists) ({ FoldCreditedOption(foldCredited, onFoldCredited) }) else null,
                 )
             }
         }
     }
 }
 
-/** A section to drag by its handle, as the queue's rows are; it's lifted while dragged. */
+/**
+ * A section to drag by its handle, as the queue's rows are; it's lifted while dragged. Its
+ * [option], if any, goes under it and moves with it.
+ */
 @Composable
 private fun SectionRow(
     section: Section,
@@ -104,28 +120,54 @@ private fun SectionRow(
     handle: Modifier,
     lifted: Boolean,
     modifier: Modifier,
+    option: (@Composable () -> Unit)? = null,
 ) {
     val moveUp = stringResource(R.string.move_up)
     val moveDown = stringResource(R.string.move_down)
-    Row(
+    Column(
         modifier
             .fillMaxWidth()
-            .heightIn(min = 56.dp)
             .padding(horizontal = 8.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(if (lifted) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent)
-            .semantics(mergeDescendants = true) {
-                customActions = listOfNotNull(
-                    onMoveUp?.let { move -> CustomAccessibilityAction(moveUp) { move(); true } },
-                    onMoveDown?.let { move -> CustomAccessibilityAction(moveDown) { move(); true } },
-                )
-            },
+            .background(if (lifted) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp)
+                .semantics(mergeDescendants = true) {
+                    customActions = listOfNotNull(
+                        onMoveUp?.let { move -> CustomAccessibilityAction(moveUp) { move(); true } },
+                        onMoveDown?.let { move -> CustomAccessibilityAction(moveDown) { move(); true } },
+                    )
+                },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // The row says what can be done with it, so the handle needn't be a stop of its own.
+            Box(handle.size(48.dp), contentAlignment = Alignment.Center) {
+                Icon(Icons.DragHandle, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(stringResource(section.title), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 8.dp))
+        }
+        option?.invoke()
+    }
+}
+
+/** The check under Artists: the whole row toggles it, its box under the section's name. */
+@Composable
+private fun FoldCreditedOption(checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .toggleable(checked, role = Role.Checkbox, onValueChange = onChange)
+            .padding(start = 54.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // The row says what can be done with it, so the handle needn't be a stop of its own.
-        Box(handle.size(48.dp), contentAlignment = Alignment.Center) {
-            Icon(Icons.DragHandle, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Text(stringResource(section.title), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(start = 8.dp))
+        Checkbox(checked, onCheckedChange = null)
+        Text(
+            stringResource(R.string.customise_fold_credited),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(start = 12.dp),
+        )
     }
 }

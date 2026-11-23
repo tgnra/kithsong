@@ -919,7 +919,7 @@ class CoreLibrarySource(
         // The core's artists with an album or track here, each with the picture the core picks
         // for them (one of their albums' covers).
         val artists = artistInfos.map { info ->
-            Artist(info.uid, info.name, info.albumCount, covers.artist(info), info.trackCount, info.sortName)
+            Artist(info.uid, info.name, info.albumCount, covers.artist(info), info.trackCount, info.sortName, info.creditOnly)
         }
 
         // Smart playlists sit among the others, and smart album groups among the manual ones.
