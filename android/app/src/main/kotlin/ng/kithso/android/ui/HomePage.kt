@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +46,7 @@ import ng.kithso.android.data.LibrarySource
 import ng.kithso.android.data.Recent
 import ng.kithso.android.ui.art.PrefetchArt
 import ng.kithso.android.ui.theme.ArtBackdrop
+import ng.kithso.android.ui.theme.ArtColor
 import ng.kithso.android.ui.theme.rememberOnScreenArtColors
 
 // The Home page, for the tablet layout's content pane: titled rows of covers, one under
@@ -66,7 +68,8 @@ import ng.kithso.android.ui.theme.rememberOnScreenArtColors
  *
  * Nothing shows until the rows have first been read. The source only keeps them up to date while
  * this collects them ([LibrarySource.home]); tiles update in place, so each row keeps its scroll
- * position.
+ * position. With [onBackdropColors], the backdrop's colours go there, for whatever shows this
+ * to draw behind more than the page, instead of the page drawing its own.
  */
 @Composable
 fun HomePage(
@@ -76,6 +79,7 @@ fun HomePage(
     importPickers: ImportPickers,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(),
+    onBackdropColors: ((List<ArtColor>) -> Unit)? = null,
 ) {
     val library by source.library.collectAsState()
     val home by source.home.collectAsState()
@@ -88,10 +92,11 @@ fun HomePage(
     BoxWithConstraints(modifier.fillMaxSize()) {
         val tilePx = with(LocalDensity.current) { tileWidth(maxWidth).roundToPx() }
         PrefetchArt(listState, tilePx) { i -> items.getOrNull(i)?.art.orEmpty() }
-        ArtBackdrop(
-            rememberOnScreenArtColors(listState) { i -> items.getOrNull(i)?.art.orEmpty() },
-            Modifier.matchParentSize(),
-        )
+        if (LocalPageChrome.current.backdrop) {
+            val colors = rememberOnScreenArtColors(listState) { i -> items.getOrNull(i)?.art.orEmpty() }
+            if (onBackdropColors != null) LaunchedEffect(colors) { onBackdropColors(colors) }
+            else ArtBackdrop(colors, Modifier.matchParentSize())
+        }
         LazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
             items(items, key = { it.key }, contentType = { it.contentType }) { item ->
                 when (item) {

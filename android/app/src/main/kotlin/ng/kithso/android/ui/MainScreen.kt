@@ -110,7 +110,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.ImeAction
 import ng.kithso.android.data.FoundTrack
 import ng.kithso.android.data.LibrarySource
@@ -501,6 +503,8 @@ fun MainScreen(
             scope.launch { reflow.play() }
         }
         val canPinch = { at: Offset -> onSmallAlbumTiles != null && !searching && slide == 0f && albumRowAt(at.y) != null }
+        val haptics = LocalHapticFeedback.current
+        // Felt as the tiles change size, the fingers still on them.
         val pinchTo = pinch@{ small: Boolean, at: Offset ->
             val first = firstAlbumRow ?: return@pinch
             val info = albumRowAt(at.y) ?: return@pinch
@@ -509,6 +513,7 @@ fun MainScreen(
             val step = cellPx + with(density) { TileSpacing.roundToPx() }
             val fromLeft = ((at.x - sides.getLeft(density, layoutDirection) - with(density) { Gutter.toPx() }) / step).toInt()
             val column = (if (layoutDirection == LayoutDirection.Rtl) columns - 1 - fromLeft else fromLeft).coerceIn(0, row.albums.lastIndex)
+            haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
             switchTiles(small, (info.index - first) * columns + column, at.y.roundToInt())
         }
         val largerTiles = stringResource(R.string.album_tiles_larger)

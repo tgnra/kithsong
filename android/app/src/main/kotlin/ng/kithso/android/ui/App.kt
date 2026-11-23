@@ -660,10 +660,13 @@ fun App(
                     key(layer.id) { if (layer.page == Page.Player) {
                         // Back and dragging down are the queue's while it's open.
                         val queue = rememberQueueSlide()
-                        // Opened by the tablet layout's queue button: on to the queue at once.
+                        // Opened by the tablet layout's queue button: on to the queue at once,
+                        // and leaving the queue leaves the player too, back where it was opened.
+                        var queueOnly by rememberSaveable { mutableStateOf(false) }
                         LaunchedEffect(queue) {
                             if (playerOnQueue) {
                                 playerOnQueue = false
+                                queueOnly = true
                                 queue.show()
                             }
                         }
@@ -672,7 +675,7 @@ fun App(
                             DismissDirection.Down,
                             onLeaving = { nav = nav.leave(layer.id) },
                             onDismissed = { nav = nav.remove(layer.id) },
-                            backEnabled = backHere && !queue.open,
+                            backEnabled = backHere && (!queue.open || queueOnly),
                             draggable = !queue.shown,
                             // Opened from the keyboard, the keys move about in it, not beneath it.
                             modifier = Modifier.focusArea(remember { FocusRequester() }, focusWhenShown = true),
@@ -681,8 +684,9 @@ fun App(
                                 playback,
                                 track,
                                 queue,
-                                queueBackEnabled = backHere,
+                                queueBackEnabled = backHere && !queueOnly,
                                 onCollapse = dismiss,
+                                closesWithQueue = queueOnly,
                                 onAddToPlaylist = if (actions.editor == null) null else {
                                     { actions.addToPlaylist(Addition.Tracks(listOf(track.uid))) }
                                 },

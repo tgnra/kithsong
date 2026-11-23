@@ -26,9 +26,9 @@ class WindowLayoutTest {
     }
 
     @Test
-    fun `the rail is its menu and eight items`() {
-        // 4 + menu 48 + 4 + 8 + 4, 6 items of 60 with 5 gaps of 4, 4 + 60 + 4 + 60 + 4
-        assertEquals(580f, railHeight(1f).value, 0.01f)
+    fun `the rail is ten items`() {
+        // 4, 6 items of 60 with 5 gaps of 4, then 4 items of 60 with 4 gaps of 4 above them, 4
+        assertEquals(644f, railHeight(1f).value, 0.01f)
         assertTrue(railHeight(2f) > railHeight(1f))
     }
 

@@ -47,6 +47,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -118,6 +119,7 @@ internal fun sidebarRecentsShown(height: Dp, fontScale: Float, available: Int): 
  * The picked entry is [page] if the sidebar opened one, else [section]. [binDot] marks Sync
  * while deletes wait for a sync, as the phone's menu does, and so does a lost archive this
  * tablet may replace. The sync pill is pinned below, but on the Sync page, which has its own.
+ * It's clear, over the layout's backdrop, as the top bar is ([TabletLayout]).
  */
 @Composable
 internal fun Sidebar(
@@ -136,7 +138,7 @@ internal fun Sidebar(
 ) {
     val row = sidebarRowHeight(LocalDensity.current.fontScale)
     val status by syncer.status.collectAsState()
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = modifier.fillMaxHeight()) {
+    Surface(color = Color.Transparent, contentColor = MaterialTheme.colorScheme.onSurface, modifier = modifier.fillMaxHeight()) {
         Column(
             Modifier
                 .windowInsetsPadding(

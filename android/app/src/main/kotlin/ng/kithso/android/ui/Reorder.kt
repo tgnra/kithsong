@@ -17,11 +17,37 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
+/** A dragged item's move to [target]'s place in the list, where it'll be laid out at [offset]. */
+internal data class ReorderMove(val target: LazyListItemInfo, val offset: Int)
+
+/**
+ * Where the dragged [item] moves with its middle at [centre], among the list's [visible] items:
+ * past the furthest one that leaves its middle within its new place, or null to stay. An item as
+ * tall as it is passed once its middle's over that. Over a taller one that alone would have it
+ * moved back at once, as its middle would still be over the other, and so on back and forth; it
+ * has to be dragged further over, to where its own new place is.
+ */
+internal fun reorderMove(
+    item: LazyListItemInfo,
+    visible: List<LazyListItemInfo>,
+    centre: Int,
+    isMovable: (Any) -> Boolean,
+): ReorderMove? {
+    // Moved down, it ends where the target does now; moved up, it starts where the target does.
+    visible.lastOrNull {
+        it.index > item.index && isMovable(it.key) && centre >= maxOf(it.offset, it.offset + it.size - item.size)
+    }?.let { return ReorderMove(it, it.offset + it.size - item.size) }
+    return visible.firstOrNull {
+        it.index < item.index && isMovable(it.key) && centre < it.offset + minOf(it.size, item.size)
+    }?.let { ReorderMove(it, it.offset) }
+}
+
 /**
  * Dragging a LazyColumn's items by a handle ([dragHandle]) to reorder them. The list's owner
- * keeps the order: while an item is dragged over another, [onMove] is called with the two
- * items' keys and should move the first to where the second is; [onDrop] is called with the
- * dragged item's key once it's let go. Only items whose key [isMovable] take part, so headers
+ * keeps the order: [onStart] is called with an item's key as its drag starts; while it's dragged
+ * over another, [onMove] is called with the two items' keys and should move the first to where
+ * the second is; [onDrop] is called with the dragged item's key once it's let go. The items
+ * needn't be of one height ([reorderMove]). Only items whose key [isMovable] take part, so headers
  * stay put. Holding the item near the top or bottom scrolls the list.
  */
 @Stable
@@ -37,6 +63,7 @@ class ReorderState(private val listState: LazyListState) {
     private var awaiting: Int? = null
 
     var isMovable: (Any) -> Boolean = { true }
+    var onStart: (Any) -> Unit = {}
     var onMove: (from: Any, to: Any) -> Unit = { _, _ -> }
     var onDrop: (Any) -> Unit = {}
 
@@ -75,6 +102,7 @@ class ReorderState(private val listState: LazyListState) {
         dragged = key
         offset = 0f
         awaiting = null
+        onStart(key)
     }
 
     private fun end() {
@@ -101,14 +129,11 @@ class ReorderState(private val listState: LazyListState) {
         awaiting = null
 
         val centre = (item.offset + offset + item.size / 2).toInt()
-        val target = layout.visibleItemsInfo.firstOrNull {
-            it.key != key && isMovable(it.key) && centre in it.offset until it.offset + it.size
-        }
-        if (target == null) return item
-        onMove(key, target.key)
-        // Its place is now the target's, so it's drawn as far from that.
-        offset += item.offset - target.offset
-        awaiting = target.index
+        val move = reorderMove(item, layout.visibleItemsInfo, centre, isMovable) ?: return item
+        onMove(key, move.target.key)
+        // Its place changes, so it's drawn as far from the new one.
+        offset += item.offset - move.offset
+        awaiting = move.target.index
         return null
     }
 

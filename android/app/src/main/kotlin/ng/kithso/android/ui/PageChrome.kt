@@ -28,6 +28,8 @@ enum class PageBack {
  * [pageTop] and [pageSides], rather than the window's insets, which a [WindowInsets] read as
  * padding values can't be told have been taken care of. [back] is what its back button does,
  * and [inTablet] says it's in the tablet layout, where an album grid keeps clear of a fold.
+ * [backdrop]: whether a page has its art backdrop ([ng.kithso.android.ui.theme.ArtBackdrop]);
+ * the tablet layout's pages don't, as its top bar has the playing track's instead.
  */
 @Immutable
 data class PageChrome(
@@ -35,6 +37,7 @@ data class PageChrome(
     val sides: WindowInsets? = null,
     val back: PageBack = PageBack.Back,
     val inTablet: Boolean = false,
+    val backdrop: Boolean = true,
 )
 
 /** The phone's: the window's insets, and a back button. */

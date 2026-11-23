@@ -37,6 +37,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,6 +71,8 @@ import ng.kithso.android.playback.Playback
 import ng.kithso.android.ui.art.AlbumArt
 import ng.kithso.android.ui.theme.ArtBackdrop
 import ng.kithso.android.ui.theme.rememberArtColors
+import kotlinx.coroutines.flow.dropWhile
+import kotlinx.coroutines.flow.first
 
 /** "Artist - Album", under a track's title; just the artist for a track on no album. */
 @Composable
@@ -184,7 +187,8 @@ private fun PlayPause(playback: Playback) {
  *
  * The chevron at the foot (in the top row on a short window), or dragging up, slides the view
  * to the queue ([QueuePage]); [slide] holds how far, and system back is the queue's while it's
- * open ([queueBackEnabled]). Only the player's own view swipes between tracks.
+ * open ([queueBackEnabled]). Only the player's own view swipes between tracks. With
+ * [closesWithQueue], sliding back from the queue collapses the player too ([onCollapse]).
  *
  * Half open in tabletop it's laid out around the fold instead ([TabletopPlayerLayout]), with
  * the queue beside the controls where there's room, so it's never slid to.
@@ -198,6 +202,7 @@ internal fun FullPlayer(
     onCollapse: () -> Unit,
     onAddToPlaylist: (() -> Unit)? = null,
     onMenu: (() -> Unit)? = null,
+    closesWithQueue: Boolean = false,
 ) {
     val swipe = rememberTrackSwipe(playback)
     val shape = rememberWindowShape()
@@ -212,6 +217,14 @@ internal fun FullPlayer(
             val queueBeside = fold?.queueBeside == true
             // The queue that was slid to is beside the controls now, and stays there.
             LaunchedEffect(queueBeside) { if (queueBeside) slide.hide() }
+            // Not when it's beside the controls, which only puts the slid-to queue there.
+            if (closesWithQueue && !queueBeside) {
+                val collapse by rememberUpdatedState(onCollapse)
+                LaunchedEffect(slide) {
+                    snapshotFlow { slide.open }.dropWhile { !it }.first { !it }
+                    collapse()
+                }
+            }
             BoxWithConstraints(
                 Modifier
                     .fillMaxSize()

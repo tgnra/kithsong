@@ -32,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.SpanStyle
@@ -51,8 +52,9 @@ internal val TopBarHeight = 64.dp
 
 /**
  * The tablet layout's top bar, as the desktops' header bar: the playing controls and the
- * now-playing strip, in the playing track's colours as the mini player is. It takes the mini
- * player's place in this layout.
+ * now-playing strip, in the playing track's colours as the mini player is. It's clear, over
+ * the layout's backdrop from the track's art, as the sidebar is ([TabletLayout]). It takes the
+ * mini player's place in this layout.
  */
 @Composable
 internal fun TopBar(
@@ -77,42 +79,44 @@ private fun TopBarContent(
     modifier: Modifier,
 ) {
     val playing = track != null
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier.fillMaxWidth()) {
-        Row(
-            Modifier
-                .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)))
-                .height(TopBarHeight)
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Each has a ring for the keyboard's focus, which Material only tints.
-            IconButton(onClick = playback::previous, enabled = playing, modifier = Modifier.focusRing(CircleShape)) {
-                Icon(Icons.SkipPrevious, contentDescription = stringResource(R.string.previous_track))
-            }
-            FilledIconButton(onClick = playback::toggle, enabled = playing, modifier = Modifier.focusRing(CircleShape)) {
-                if (playback.isPlaying) Icon(Icons.Pause, contentDescription = stringResource(R.string.pause))
-                else Icon(Icons.Play, contentDescription = stringResource(R.string.play))
-            }
-            IconButton(onClick = playback::next, enabled = playback.hasNext, modifier = Modifier.focusRing(CircleShape)) {
-                Icon(Icons.SkipNext, contentDescription = stringResource(R.string.next_track))
-            }
-            Spacer(Modifier.width(16.dp))
-            NowPlayingStrip(playback, track, onOpenPlayer, onMenu, Modifier.weight(1f).widthIn(max = MaxStripWidth))
-            Spacer(Modifier.width(8.dp))
-            IconToggleButton(
-                checked = playback.shuffle,
-                onCheckedChange = playback::setShuffle,
-                enabled = playing,
-                modifier = Modifier.focusRing(CircleShape),
-                colors = IconButtonDefaults.iconToggleButtonColors(
-                    checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                ),
+    Surface(color = Color.Transparent, contentColor = MaterialTheme.colorScheme.onSurface, modifier = modifier.fillMaxWidth()) {
+        Box {
+            Row(
+                Modifier
+                    .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)))
+                    .height(TopBarHeight)
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Shuffle, contentDescription = stringResource(R.string.shuffle))
-            }
-            IconButton(onClick = onQueue, enabled = playing, modifier = Modifier.focusRing(CircleShape)) {
-                Icon(Icons.QueueMusic, contentDescription = stringResource(R.string.queue))
+                // Each has a ring for the keyboard's focus, which Material only tints.
+                IconButton(onClick = playback::previous, enabled = playing, modifier = Modifier.focusRing(CircleShape)) {
+                    Icon(Icons.SkipPrevious, contentDescription = stringResource(R.string.previous_track))
+                }
+                FilledIconButton(onClick = playback::toggle, enabled = playing, modifier = Modifier.focusRing(CircleShape)) {
+                    if (playback.isPlaying) Icon(Icons.Pause, contentDescription = stringResource(R.string.pause))
+                    else Icon(Icons.Play, contentDescription = stringResource(R.string.play))
+                }
+                IconButton(onClick = playback::next, enabled = playback.hasNext, modifier = Modifier.focusRing(CircleShape)) {
+                    Icon(Icons.SkipNext, contentDescription = stringResource(R.string.next_track))
+                }
+                Spacer(Modifier.width(16.dp))
+                NowPlayingStrip(playback, track, onOpenPlayer, onMenu, Modifier.weight(1f).widthIn(max = MaxStripWidth))
+                Spacer(Modifier.width(8.dp))
+                IconToggleButton(
+                    checked = playback.shuffle,
+                    onCheckedChange = playback::setShuffle,
+                    enabled = playing,
+                    modifier = Modifier.focusRing(CircleShape),
+                    colors = IconButtonDefaults.iconToggleButtonColors(
+                        checkedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        checkedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    ),
+                ) {
+                    Icon(Icons.Shuffle, contentDescription = stringResource(R.string.shuffle))
+                }
+                IconButton(onClick = onQueue, enabled = playing, modifier = Modifier.focusRing(CircleShape)) {
+                    Icon(Icons.QueueMusic, contentDescription = stringResource(R.string.queue))
+                }
             }
         }
     }

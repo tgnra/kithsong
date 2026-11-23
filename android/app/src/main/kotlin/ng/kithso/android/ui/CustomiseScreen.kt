@@ -31,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
@@ -43,7 +45,8 @@ import ng.kithso.android.R
 /**
  * The phone's Customise page, from the top of Settings: the main screen's sections, to drag into the
  * order it shows them in. [onOrder] has each new order, once a drag is let go or a section is
- * moved by an accessibility action. Under Artists is whether those only credited on others'
+ * moved by an accessibility action. A drag is felt as it starts, at each place it passes and as
+ * it's let go. Under Artists is whether those only credited on others'
  * tracks are folded away ([foldCredited]), which [onFoldCredited] changes; only while there are
  * enough of them to fold ([canFoldCredited], see [foldsCreditedArtists]).
  */
@@ -62,14 +65,20 @@ fun CustomiseScreen(
     val sections = dragging ?: order
     val listState = rememberLazyListState()
     val reorder = remember(listState) { ReorderState(listState) }
+    val haptics = LocalHapticFeedback.current
     reorder.isMovable = { it is Section }
+    reorder.onStart = { haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate) }
     reorder.onMove = { from, to ->
         val now = dragging ?: order
         val i = now.indexOf(from)
         val j = now.indexOf(to)
-        if (i >= 0 && j >= 0) dragging = now.toMutableList().apply { add(j, removeAt(i)) }
+        if (i >= 0 && j >= 0) {
+            dragging = now.toMutableList().apply { add(j, removeAt(i)) }
+            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+        }
     }
     reorder.onDrop = {
+        haptics.performHapticFeedback(HapticFeedbackType.GestureEnd)
         dragging?.let { if (it != order) onOrder(it) }
         dragging = null
     }
@@ -158,10 +167,14 @@ private fun SectionRow(
 /** The check under Artists: the whole row toggles it, its box under the section's name. */
 @Composable
 private fun FoldCreditedOption(checked: Boolean, onChange: (Boolean) -> Unit) {
+    val haptics = LocalHapticFeedback.current
     Row(
         Modifier
             .fillMaxWidth()
-            .toggleable(checked, role = Role.Checkbox, onValueChange = onChange)
+            .toggleable(checked, role = Role.Checkbox) {
+                haptics.performHapticFeedback(if (it) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff)
+                onChange(it)
+            }
             .padding(start = 54.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

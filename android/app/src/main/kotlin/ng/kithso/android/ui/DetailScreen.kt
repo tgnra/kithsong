@@ -216,7 +216,9 @@ fun DetailScreen(
     Surface(color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val group = ref.kind == CollectionRef.Kind.AlbumGroup
-            ArtBackdrop(rememberArtColors(picture ?: list?.art), Modifier.matchParentSize())
+            if (LocalPageChrome.current.backdrop) {
+                ArtBackdrop(rememberArtColors(picture ?: list?.art), Modifier.matchParentSize())
+            }
             val density = LocalDensity.current
             val statusBarPx = pageTop().getTop(density)
             val sides = pageSides()

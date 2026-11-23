@@ -1,6 +1,7 @@
 package ng.kithso.android.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -49,6 +50,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -74,6 +76,8 @@ import ng.kithso.android.playback.Playback
 import ng.kithso.android.sync.Syncer
 import ng.kithso.android.ui.art.PrefetchArt
 import ng.kithso.android.ui.theme.ArtBackdrop
+import ng.kithso.android.ui.theme.ArtColor
+import ng.kithso.android.ui.theme.rememberArtColors
 import ng.kithso.android.ui.theme.rememberOnScreenArtColors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -96,6 +100,9 @@ internal val TabletMinWidth = 840.dp
 
 /** The narrowest the album grid gets beside the track list's pane: two columns at their full width with the gutters. */
 private val MinGridWidth = 344.dp
+
+/** The content panel's shape in the tablet layout: rounded where the top bar meets the sidebar. */
+private val ContentShape = RoundedCornerShape(topStart = 24.dp)
 
 /** The track list's pane beside the grid, as wide as the desktops' about. */
 private val PaneWidth = 360.dp
@@ -189,6 +196,10 @@ private fun sidebarFit(fold: Fold?, windowWidthPx: Float, startPx: Float, rtl: B
  * content while there's room beside a two-column grid (starting at a fold if there is one),
  * and over the content otherwise; opening another from the grid or Search replaces it.
  *
+ * The top bar and sidebar are a frame round the content, over one backdrop from the playing
+ * track's art; the content is a panel in it with its top corner at the sidebar rounded, and
+ * its pages have no backdrops of their own ([PageChrome.backdrop]).
+ *
  * Drag and drop onto playlists and album groups ([DragDrop]) is only here; the phone and rail
  * layouts keep their long press. [covered]: the player or an editor is over this, which then has
  * neither back nor TalkBack.
@@ -239,53 +250,64 @@ internal fun TabletLayout(
     // Drag and drop is the tablet layout's, as the phone's long press opens menus.
     val dragDrop = rememberDragDrop(actions.editor, library)
     CompositionLocalProvider(LocalDragDrop provides dragDrop) {
-        Column(modifier.fillMaxSize().focusArea(focus.window, covered = covered)) {
-            TopBar(
-                playback,
-                onOpenPlayer = { onOpenPlayer(false) },
-                onQueue = { onOpenPlayer(true) },
-                onMenu = onTrackMenu,
-                modifier = Modifier.coveredIf(covered).focusArea(focus.topBar),
-            )
-            Row(Modifier.weight(1f).fillMaxWidth()) {
-                CompositionLocalProvider(LocalTabExit provides focus.sidebarExit) {
-                    Sidebar(
-                        section,
-                        root?.page,
-                        library?.recents.orEmpty(),
-                        syncer,
-                        binDot,
-                        importPickers,
-                        importRunning,
-                        onSection = { picked ->
-                            onSection(picked)
-                            updateNav(clear)
-                        },
-                        onPage = { page ->
-                            // Picked again, it stays as it is, with what's typed in Search.
-                            if (root?.page != page || open.size > 1) updateNav { clear(it).push(page) }
-                        },
-                        // On its library page, as the desktops open it.
-                        onRecent = { recent ->
-                            sectionOf(recent.ref.kind)?.let { picked ->
+        Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainer)) {
+            // The frame's: clear with nothing playing, and fading between tracks.
+            ArtBackdrop(rememberArtColors(playback.track?.art), Modifier.matchParentSize())
+            Column(Modifier.fillMaxSize().focusArea(focus.window, covered = covered)) {
+                TopBar(
+                    playback,
+                    onOpenPlayer = { onOpenPlayer(false) },
+                    onQueue = { onOpenPlayer(true) },
+                    onMenu = onTrackMenu,
+                    modifier = Modifier.coveredIf(covered).focusArea(focus.topBar),
+                )
+                Row(Modifier.weight(1f).fillMaxWidth()) {
+                    CompositionLocalProvider(LocalTabExit provides focus.sidebarExit) {
+                        Sidebar(
+                            section,
+                            root?.page,
+                            library?.recents.orEmpty(),
+                            syncer,
+                            binDot,
+                            importPickers,
+                            importRunning,
+                            onSection = { picked ->
                                 onSection(picked)
                                 updateNav(clear)
-                            }
-                            onOpen(recent.ref)
-                        },
-                        onRecentMenu = actions::recentMenu,
-                        modifier = Modifier
-                            .width(fit.width + with(density) { startPx.toDp() })
-                            .coveredIf(covered)
-                            .focusArea(focus.sidebar),
+                            },
+                            onPage = { page ->
+                                // Picked again, it stays as it is, with what's typed in Search.
+                                if (root?.page != page || open.size > 1) updateNav { clear(it).push(page) }
+                            },
+                            // On its library page, as the desktops open it.
+                            onRecent = { recent ->
+                                sectionOf(recent.ref.kind)?.let { picked ->
+                                    onSection(picked)
+                                    updateNav(clear)
+                                }
+                                onOpen(recent.ref)
+                            },
+                            onRecentMenu = actions::recentMenu,
+                            modifier = Modifier
+                                .width(fit.width + with(density) { startPx.toDp() })
+                                .coveredIf(covered)
+                                .focusArea(focus.sidebar),
+                        )
+                    }
+                    if (fit.gap > 0.dp) Spacer(Modifier.width(fit.gap))
+                    TabletContent(
+                        updateNav, open, root, top, section, shape.fold, rtl, bottomPadding, covered, pane = true,
+                        pageContent, openFromBase, onOpen, banner, library, source, actions, importPickers, focus,
+                        Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(ContentShape)
+                            .background(MaterialTheme.colorScheme.surface)
+                            .coveredIf(covered),
+                        // The frame has the playing track's backdrop; the pages in it have none.
+                        backdrops = false,
                     )
                 }
-                if (fit.gap > 0.dp) Spacer(Modifier.width(fit.gap))
-                TabletContent(
-                    updateNav, open, root, top, section, shape.fold, rtl, bottomPadding, covered, pane = true,
-                    pageContent, openFromBase, onOpen, banner, library, source, actions, importPickers, focus,
-                    Modifier.weight(1f).fillMaxHeight().coveredIf(covered),
-                )
             }
         }
     }
@@ -319,6 +341,7 @@ internal fun TabletContent(
     focus: TabletFocus,
     modifier: Modifier,
     pageTop: WindowInsets = NoInsets,
+    backdrops: Boolean = true,
 ) {
     BoxWithConstraints(modifier) {
         val width = maxWidth
@@ -332,7 +355,7 @@ internal fun TabletContent(
         val paneStart = if (atFold) span.end else width - PaneWidth
         val end = WindowInsets.safeDrawing.only(WindowInsetsSides.End)
         // Whatever's at the window's edge keeps clear of what's there; the pane, when it's showing, is.
-        val baseChrome = PageChrome(top = pageTop, sides = if (split) NoInsets else end, back = PageBack.None, inTablet = true)
+        val baseChrome = PageChrome(top = pageTop, sides = if (split) NoInsets else end, back = PageBack.None, inTablet = true, backdrop = backdrops)
         // The top page over the base, and the pane's top page, which the keyboard's focus goes to.
         val overlay = open.lastOrNull { !it.leaving && it != root && !(split && it.page is Page.Collection) }?.id
         val paneTop = if (split) paneLayers.lastOrNull { !it.leaving }?.id else null
@@ -397,7 +420,7 @@ internal fun TabletContent(
                         .onFocusChanged { focus.paneHasFocus = it.hasFocus },
                 ) {
                     CompositionLocalProvider(
-                        LocalPageChrome provides PageChrome(top = NoInsets, sides = end, back = PageBack.Close, inTablet = true),
+                        LocalPageChrome provides PageChrome(top = NoInsets, sides = end, back = PageBack.Close, inTablet = true, backdrop = backdrops),
                         LocalTabExit provides focus.paneExit,
                     ) {
                         for (layer in paneLayers) key(layer.id) {
@@ -554,7 +577,11 @@ private fun LibraryPage(
     // With a banner, it keeps clear of the status bar and the page starts beneath it.
     val listTop = if (banner != null) 0.dp else topInset
     val canMake = actions.editor != null
+    // One backdrop behind the banner and the page, from the art on the page.
+    var backdropColors by remember { mutableStateOf(emptyList<ArtColor>()) }
+    val toBackdrop = { colors: List<ArtColor> -> backdropColors = colors }
     Surface(color = MaterialTheme.colorScheme.surface, modifier = modifier.fillMaxSize()) {
+        if (LocalPageChrome.current.backdrop) ArtBackdrop(backdropColors, Modifier.fillMaxSize())
         Column(Modifier.fillMaxSize()) {
             banner?.invoke(Modifier.windowInsetsPadding(pageTop).windowInsetsPadding(sides).padding(start = BrowseGutter, end = BrowseGutter, top = 12.dp))
             val page = Modifier.weight(1f).fillMaxWidth()
@@ -566,13 +593,14 @@ private fun LibraryPage(
                     importPickers = importPickers,
                     modifier = page.windowInsetsPadding(sides),
                     contentPadding = PaddingValues(top = 8.dp + listTop, bottom = bottomPadding),
+                    onBackdropColors = toBackdrop,
                 )
                 TabletSection.Albums -> GridPage(
                     stringResource(R.string.section_albums),
                     library?.albums,
                     key = { it.uid },
                     art = { it.art },
-                    fold, bottomPadding, listTop,
+                    fold, bottomPadding, listTop, toBackdrop,
                     empty = stringResource(R.string.no_albums),
                     modifier = page,
                 ) { album ->
@@ -591,7 +619,7 @@ private fun LibraryPage(
                     library?.playlists,
                     key = { it.uid },
                     art = { it.art },
-                    fold, bottomPadding, listTop,
+                    fold, bottomPadding, listTop, toBackdrop,
                     empty = stringResource(R.string.no_playlists_title),
                     onNew = if (canMake) ({ actions.newList(false) }) else null,
                     newLabel = stringResource(R.string.new_playlist_menu),
@@ -611,7 +639,7 @@ private fun LibraryPage(
                     library?.albumGroups,
                     key = { it.uid },
                     art = { it.art },
-                    fold, bottomPadding, listTop,
+                    fold, bottomPadding, listTop, toBackdrop,
                     empty = stringResource(R.string.no_album_groups_title),
                     onNew = if (canMake) ({ actions.newList(true) }) else null,
                     newLabel = stringResource(R.string.new_album_group_menu),
@@ -655,7 +683,8 @@ private fun LibraryPage(
  * with [onNew]'s + ([newLabel] for TalkBack) at the heading's end, if given, and [empty] said
  * when there's nothing. Its columns keep clear of the window's [fold] ([gridColumns]), wherever
  * the grid is in the window, and over it the background takes its colours from the art on
- * screen, as the phone's main screen's does.
+ * screen, as the phone's main screen's does, where the page has a backdrop ([PageChrome]):
+ * those colours go to [onBackdropColors], which draws it behind the page's banner too.
  */
 @Composable
 private fun <T> GridPage(
@@ -666,6 +695,7 @@ private fun <T> GridPage(
     fold: Fold?,
     bottomPadding: Dp,
     topPadding: Dp,
+    onBackdropColors: (List<ArtColor>) -> Unit,
     empty: String,
     modifier: Modifier,
     onNew: (() -> Unit)? = null,
@@ -684,7 +714,10 @@ private fun <T> GridPage(
         // The heading's item comes before the rows.
         val artAt = { index: Int -> rows.getOrNull(index - 1)?.map(art).orEmpty() }
         PrefetchArt(listState, with(density) { columns.tileWidth.roundToPx() }, artAt = artAt)
-        ArtBackdrop(rememberOnScreenArtColors(listState, artAt), Modifier.matchParentSize())
+        if (LocalPageChrome.current.backdrop) {
+            val colors = rememberOnScreenArtColors(listState, artAt)
+            LaunchedEffect(colors) { onBackdropColors(colors) }
+        }
         LazyColumn(
             state = listState,
             contentPadding = PaddingValues(top = topPadding, bottom = bottomPadding),

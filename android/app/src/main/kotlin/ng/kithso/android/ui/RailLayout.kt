@@ -25,9 +25,7 @@ import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
@@ -70,12 +68,8 @@ internal val RailWidth = 80.dp
 /** The widest a rail item's label gets: the rail less a gap at each side. */
 private val RailLabelWidth = 68.dp
 
-// Material's rail: the gap between its items, and above and below them, and under its header.
+// Material's rail: the gap between its items, and above and below them.
 private val RailGap = 4.dp
-private val RailHeaderGap = 8.dp
-
-/** The menu button at the rail's top. */
-private val RailMenuHeight = 48.dp
 
 /** The focus ring's shape on a rail item. */
 private val RailItemShape = RoundedCornerShape(16.dp)
@@ -84,19 +78,20 @@ private val RailItemShape = RoundedCornerShape(16.dp)
 private fun railItemHeight(fontScale: Float): Dp = 44.dp + 16.dp * fontScale
 
 /**
- * How tall the rail has to be to show, without scrolling, its menu, the library pages and
- * Search, then Sync and Settings. [windowLayout] wants this much room for the rail layout.
+ * How tall the rail has to be to show, without scrolling, the library pages and Search, then
+ * Library stats, Sync, Import and Settings. [windowLayout] wants this much room for the rail layout.
  */
 internal fun railHeight(fontScale: Float): Dp {
-    val items = TabletSection.entries.size + 3 // the library pages, Search, Sync and Settings
-    // Above the menu, either side of its gap, between the items and below the last.
-    val gaps = RailGap * (items + 3)
-    return RailMenuHeight + RailHeaderGap + railItemHeight(fontScale) * items + gaps
+    val items = TabletSection.entries.size + 5 // the library pages, Search, Library stats, Sync, Import and Settings
+    // Above the first, between the items and below the last.
+    val gaps = RailGap * (items + 1)
+    return railItemHeight(fontScale) * items + gaps
 }
 
 /**
  * The layout for a window between the phone's and the tablet layout's, a 7" tablet in portrait
- * say: a rail down the side for the library pages, Search, Sync and Settings, and beside it the
+ * say: a rail down the side for the library pages, Search, Library stats, Sync, Import and
+ * Settings, and beside it the
  * tablet layout's content ([TabletContent]) without its pane, so a track list opens over the
  * page as on the phone. The rail's too narrow to list the devices: Sync opens the phone's Sync
  * page. It shares the phone's back stack, as [TabletLayout] does, and the players, editors,
@@ -191,9 +186,9 @@ internal fun RailLayout(
 }
 
 /**
- * The rail: the menu, with Import and Library stats, then Home, Search and the library pages,
- * which scroll if the labels need more room than [railHeight] counts, and Sync and Settings at
- * the bottom. The picked item is [page]'s if the rail opened one, Sync's for a device's page,
+ * The rail: Home, Search and the library pages, which scroll if the labels need more room than
+ * [railHeight] counts, and at the bottom what the sidebar has beneath its divider: Library
+ * stats, Sync, Import and Settings. The picked item is [page]'s if the rail opened one, Sync's for a device's page,
  * else [section]'s. [binDot] marks Sync while deletes wait for a sync, as the phone's menu does, and [offerDot]
  * while this tablet may take over a lost archive, as the sidebar's This tablet does.
  */
@@ -212,7 +207,6 @@ private fun Rail(
     NavigationRail(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        header = { RailMenu(importPickers, importRunning, onStats = { onPage(Page.Stats) }) },
         windowInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Vertical + WindowInsetsSides.Start),
     ) {
         Column(
@@ -227,6 +221,7 @@ private fun Rail(
             RailItem(R.string.search, Icons.Search, page == Page.Search) { onPage(Page.Search) }
             for (s in TabletSection.entries) if (s != TabletSection.Home) pick(s)
         }
+        RailItem(R.string.stats_title, Icons.BarChart, page == Page.Stats) { onPage(Page.Stats) }
         RailItem(
             R.string.sync,
             Icons.Sync,
@@ -234,11 +229,16 @@ private fun Rail(
             badge = binDot || offerDot,
             badgeDescription = stringResource(if (binDot) R.string.sync_bin_waiting else R.string.sync_offer_title_tablet),
         ) { onPage(Page.Sync) }
+        RailImport(importPickers, importRunning)
         RailItem(R.string.settings, Icons.Settings, page == Page.Settings) { onPage(Page.Settings) }
     }
 }
 
-/** One of the rail's items, with [badge]'s dot on its icon, which [badgeDescription] says. A list's item to the keyboard ([listItemKeys]). */
+/**
+ * One of the rail's items, with [badge]'s dot on its icon, which [badgeDescription] says. With
+ * [busy], a spinner takes the icon's place, which [busyDescription] says. A list's item to the
+ * keyboard ([listItemKeys]).
+ */
 @Composable
 private fun RailItem(
     @StringRes label: Int,
@@ -246,14 +246,23 @@ private fun RailItem(
     selected: Boolean,
     badge: Boolean = false,
     badgeDescription: String? = null,
+    busy: Boolean = false,
+    busyDescription: String? = null,
     onClick: () -> Unit,
 ) {
     NavigationRailItem(
         selected = selected,
         onClick = onClick,
         icon = {
-            BadgedBox(badge = { if (badge) Badge() }) {
-                Icon(icon, contentDescription = if (badge) badgeDescription else null)
+            if (busy) {
+                CircularProgressIndicator(
+                    Modifier.size(20.dp).semantics { busyDescription?.let { contentDescription = it } },
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                BadgedBox(badge = { if (badge) Badge() }) {
+                    Icon(icon, contentDescription = if (badge) badgeDescription else null)
+                }
             }
         },
         label = {
@@ -271,57 +280,22 @@ private fun RailItem(
 }
 
 /**
- * The rail's menu: what the sidebar has beneath its divider but Settings. Import's choices take
- * the menu's place, with a way back, and while an import runs Import has a spinner, as the
- * phone's + Import does.
+ * Import, which opens its choices in a menu, as the sidebar's Import does, with a spinner in
+ * its icon's place while an import runs, as the phone's + Import has.
  */
 @Composable
-private fun RailMenu(importPickers: ImportPickers, importRunning: Boolean, onStats: () -> Unit) {
+private fun RailImport(importPickers: ImportPickers, importRunning: Boolean) {
     var open by remember { mutableStateOf(false) }
-    var importing by remember { mutableStateOf(false) }
     Box {
-        IconButton(
-            onClick = {
-                importing = false
-                open = true
-            },
-        ) {
-            Icon(Icons.MoreHoriz, contentDescription = stringResource(R.string.main_menu))
-        }
+        RailItem(
+            R.string.import_music,
+            Icons.Import,
+            selected = false,
+            busy = importRunning,
+            busyDescription = stringResource(R.string.import_running_title),
+        ) { open = true }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            if (importing) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.back)) },
-                    leadingIcon = { Icon(Icons.ArrowBack, contentDescription = null) },
-                    onClick = { importing = false },
-                )
-                ImportChoices(importPickers, onDismiss = { open = false })
-            } else {
-                val runningText = stringResource(R.string.import_running_title)
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            stringResource(R.string.import_music),
-                            Modifier.semantics { if (importRunning) contentDescription = runningText },
-                        )
-                    },
-                    leadingIcon = { Icon(Icons.Import, contentDescription = null) },
-                    trailingIcon = if (importRunning) {
-                        { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) }
-                    } else {
-                        null
-                    },
-                    onClick = { importing = true },
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.stats_title)) },
-                    leadingIcon = { Icon(Icons.BarChart, contentDescription = null) },
-                    onClick = {
-                        open = false
-                        onStats()
-                    },
-                )
-            }
+            ImportChoices(importPickers, onDismiss = { open = false })
         }
     }
 }
