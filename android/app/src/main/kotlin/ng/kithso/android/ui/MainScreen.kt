@@ -400,6 +400,9 @@ fun MainScreen(
         // An album tile's width with n columns across.
         val cellWidth = { n: Int -> with(density) { ((width - Gutter * 2 - TileSpacing * (n - 1)) / n).roundToPx() } }
         val cellPx = cellWidth(columns)
+        // The art loads at the larger tiles' size whichever are shown, so one cached cover serves
+        // both and a pinch either way finds it there, rather than flashing while it decodes.
+        val artPx = cellWidth(phoneAlbumColumns(width, small = false))
         val statusBarPx = WindowInsets.statusBars.getTop(density)
 
         val hasBanner = banner != null
@@ -520,7 +523,7 @@ fun MainScreen(
             )
         }
 
-        PrefetchArt(listState, cellPx) { index -> items.getOrNull(index)?.art.orEmpty() }
+        PrefetchArt(listState, artPx) { index -> items.getOrNull(index)?.art.orEmpty() }
         ArtBackdrop(
             rememberOnScreenArtColors(listState) { index -> items.getOrNull(index)?.art.orEmpty() },
             Modifier.matchParentSize(),
@@ -610,7 +613,7 @@ fun MainScreen(
                         },
                         state = albumGroupsRow,
                     )
-                    is MainItem.AlbumRow -> AlbumGridRow(item.albums, item.columns, onOpen, onAlbumMenu, tileActions, reflow)
+                    is MainItem.AlbumRow -> AlbumGridRow(item.albums, item.columns, onOpen, onAlbumMenu, tileActions, reflow, artPx)
                     is MainItem.ArtistItem -> LibraryRow(
                         item.artist.name,
                         item.artist.subtitle(),

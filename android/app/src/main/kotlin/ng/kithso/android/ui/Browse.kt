@@ -56,6 +56,7 @@ private fun AlbumTile(
     onOpen: (CollectionRef) -> Unit,
     onMenu: (Album) -> Unit,
     modifier: Modifier,
+    artPx: Int? = null,
 ) {
     ArtTile(
         album.title,
@@ -65,12 +66,14 @@ private fun AlbumTile(
         onClick = { onOpen(CollectionRef(CollectionRef.Kind.Album, album.uid)) },
         modifier = modifier,
         drag = DragItem.Album(album.uid, album.title, album.artist),
+        artPx = artPx,
     )
 }
 
 /**
  * One row of an album grid; a short last row keeps the tiles the same width. Each tile has
- * [actions]' TalkBack actions for its album, if any, and moves as [reflow] plays.
+ * [actions]' TalkBack actions for its album, if any, and moves as [reflow] plays. With
+ * [artPx], the art loads at that size ([AlbumArt]) rather than the tiles'.
  */
 @Composable
 internal fun AlbumGridRow(
@@ -80,6 +83,7 @@ internal fun AlbumGridRow(
     onMenu: (Album) -> Unit,
     actions: ((Album) -> List<CustomAccessibilityAction>)? = null,
     reflow: AlbumReflow? = null,
+    artPx: Int? = null,
 ) {
     Row(
         Modifier.padding(horizontal = BrowseGutter).padding(bottom = 16.dp),
@@ -87,7 +91,7 @@ internal fun AlbumGridRow(
     ) {
         for (album in albums) {
             val tile = Modifier.weight(1f).let { if (reflow == null) it else it.albumReflow(reflow, album.uid) }
-            AlbumTile(album, album.artist, onOpen, onMenu, if (actions == null) tile else tile.semantics { customActions = actions(album) })
+            AlbumTile(album, album.artist, onOpen, onMenu, if (actions == null) tile else tile.semantics { customActions = actions(album) }, artPx)
         }
         repeat(columns - albums.size) { Spacer(Modifier.weight(1f)) }
     }

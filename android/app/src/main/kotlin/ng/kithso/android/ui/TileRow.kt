@@ -206,6 +206,7 @@ internal fun ArtTile(
     badge: (@Composable () -> Unit)? = null,
     description: String? = null,
     drag: DragItem? = null,
+    artPx: Int? = null,
 ) {
     val said = description ?: if (subtitle.isNullOrEmpty()) title else "$title, $subtitle"
     Column(
@@ -221,6 +222,7 @@ internal fun ArtTile(
                 contentDescription = null,
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                px = artPx,
             )
             if (badge != null) Box(Modifier.align(Alignment.TopEnd).padding(6.dp)) { badge() }
         }

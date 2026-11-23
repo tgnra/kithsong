@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -208,11 +209,20 @@ suspend fun loadArtBitmap(context: Context, art: ArtRef, px: Int): Bitmap? {
     return (SingletonImageLoader.get(context).execute(request) as? SuccessResult)?.image?.toBitmap()
 }
 
-/** [art] cropped to [shape], on a neutral background while it loads. */
+/**
+ * [art] cropped to [shape], on a neutral background while it loads. Given [px], it's loaded
+ * about that size rather than the size it's laid out at: known before layout, a cover already
+ * in the memory cache then shows in the first frame, with no frame of the background first.
+ */
 @Composable
-fun AlbumArt(art: ArtRef, contentDescription: String?, shape: Shape, modifier: Modifier = Modifier) {
+fun AlbumArt(art: ArtRef, contentDescription: String?, shape: Shape, modifier: Modifier = Modifier, px: Int? = null) {
+    val context = LocalContext.current
+    val model = remember(art, px, context) {
+        // Inexact, as PrefetchArt's requests are, so a larger cached image will do.
+        if (px == null) art else ImageRequest.Builder(context).data(art).size(px).precision(Precision.INEXACT).build()
+    }
     AsyncImage(
-        model = art,
+        model = model,
         contentDescription = contentDescription,
         contentScale = ContentScale.Crop,
         modifier = modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceVariant),
