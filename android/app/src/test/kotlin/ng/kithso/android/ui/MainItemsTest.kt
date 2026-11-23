@@ -95,4 +95,13 @@ class MainItemsTest {
             assertEquals(entry.label.first(), artist.artist.sortName.first())
         }
     }
+
+    @Test
+    fun `Recents stays first whatever order was saved`() {
+        assertEquals(
+            listOf(Section.Recents, Section.Artists, Section.Albums, Section.Playlists, Section.AlbumGroups),
+            orderedSections(listOf("Artists", "Recents", "Albums")),
+        )
+        assertEquals(Section.entries, orderedSections(emptyList()))
+    }
 }

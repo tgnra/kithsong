@@ -434,10 +434,11 @@ fun App(
                 onStats = if (layout == WindowLayout.Phone) ({ nav = nav.push(Page.Stats) }) else null,
             )
             Page.Stats -> StatsScreen(source, pagePadding, onBack = dismiss)
+            // Recents stays at the top, so it isn't one to move.
             Page.Customise -> CustomiseScreen(
-                sectionOrder,
+                sectionOrder - Section.Recents,
                 onOrder = { order ->
-                    sectionOrder = order
+                    sectionOrder = listOf(Section.Recents) + order
                     settings.sectionOrder = order.map { it.name }
                 },
                 pagePadding,

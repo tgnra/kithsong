@@ -232,12 +232,13 @@ internal fun mainItems(
 }
 
 /**
- * The sections in a saved order, by name ([AppSettings.sectionOrder]): those it names, then any
- * it doesn't (as a newer version's would be) in the usual order. Unknown names are left out.
+ * The sections in a saved order, by name ([AppSettings.sectionOrder]): Recents first whatever
+ * it says, then those it names, then any it doesn't (as a newer version's would be) in the usual
+ * order. Unknown names are left out.
  */
 internal fun orderedSections(saved: List<String>): List<Section> {
-    val named = saved.mapNotNull { name -> Section.entries.find { it.name == name } }.distinct()
-    return named + Section.entries.filter { it !in named }
+    val named = saved.mapNotNull { name -> Section.entries.find { it.name == name } }.distinct() - Section.Recents
+    return listOf(Section.Recents) + named + Section.entries.filter { it !in named && it != Section.Recents }
 }
 
 /** How many items a section has before the fast scroll strip has its letters as well as its heading. */
