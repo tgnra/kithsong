@@ -60,6 +60,7 @@
 #include "tagger/coverart.h"
 #include "tagger/organize.h"
 #include "util/hex.h"
+#include "util/platform.h"
 
 /* Tracks per HAVE_REQ and PREPARE_REQ, so each message and its answer fit in a frame. */
 #define HAVE_CHUNK 400
@@ -112,6 +113,7 @@ typedef struct mc_transfer {
   char (*archived)[MC_UID_STRLEN];
   int narchived, archived_cap;
   mc_hash_ahead *hashes; /* serving: originals' hashes, from the first HAVE_REQ on */
+  int too_big; /* this turn found tracks too big for this build: the plan is out of date */
 } mc_transfer;
 
 /* --- Small helpers --- */
@@ -258,6 +260,17 @@ static mc_status send_file_err(mc_channel *ch, const char *track, const char *re
   if (!doc) return MC_ERR_NOMEM;
   yyjson_mut_obj_add_strcpy(doc, root, "track", track ? track : "");
   yyjson_mut_obj_add_str(doc, root, "reason", reason);
+  return send_doc(ch, MC_MSG_FILE_ERR, doc);
+}
+
+/* FILE_ERR for a file of size bytes, at or past the max its FILE_REQ said the receiver holds. */
+static mc_status send_too_big(mc_channel *ch, const char *track, int64_t size) {
+  yyjson_mut_val *root;
+  yyjson_mut_doc *doc = new_doc(&root);
+  if (!doc) return MC_ERR_NOMEM;
+  yyjson_mut_obj_add_strcpy(doc, root, "track", track ? track : "");
+  yyjson_mut_obj_add_str(doc, root, "reason", "too_big");
+  yyjson_mut_obj_add_int(doc, root, "size", size);
   return send_doc(ch, MC_MSG_FILE_ERR, doc);
 }
 
@@ -883,12 +896,14 @@ static void keep_unused(void *user, const char *key, const char *path,
  * known. Should the file shrink while it's sent, the rest is zeros: the receiver's hash check
  * then fails, as it should. */
 static mc_status send_file(mc_session *s, const char *track, const held *h, const char *format,
-                           int kbps) {
+                           int kbps, int64_t max) {
   int64_t size = 0, mtime = 0;
   char sha[SHA_STRLEN];
   uint64_t t0 = mc_mono_ms();
   if (mc_file_info(h->path, &size, &mtime) != MC_OK || size > MAX_FILE_BYTES)
     return send_file_err(s->ch, track, "io");
+  if (max > 0 && size >= max && !mc_transfer_test_old_sender)
+    return send_too_big(s->ch, track, size);
   if (h->sha[0] && size == h->size && mtime == h->mtime)
     memcpy(sha, h->sha, SHA_STRLEN);
   else if (hash_file(h->path, sha) != MC_OK)
@@ -1056,6 +1071,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
   int ok = is_uid(t) && format && (opus ? valid_bitrate(kbps) : !strcmp(format, "original"));
   int retry = yyjson_get_bool(yyjson_obj_get(yyjson_doc_get_root(req), "retry"));
   int64_t est = obj_int(req, "est"), before = s->bytes_sent;
+  int64_t max = obj_int(req, "max"); /* the receiver holds no file this big (32-bit Android) */
   yyjson_doc_free(req);
   /* Counted now: progress goes out once it's answered. A retry is the same track. */
   if (!retry) s->sends_done++;
@@ -1072,19 +1088,20 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
   mc_status st;
   if (!opus) {
     if (original) take_hash(s, &h);
-    st = original ? send_file(s, track, &h, "original", 0) : send_file_err(s->ch, track, "missing");
+    st = original ? send_file(s, track, &h, "original", 0, max)
+                  : send_file_err(s->ch, track, "missing");
   } else if (original && mc_plan_keep_lossy(h.format, h.bitrate, h.size, h.duration_ms, kbps)) {
     take_hash(s, &h);
-    st = send_file(s, track, &h, "original", 0);
+    st = send_file(s, track, &h, "original", 0, max);
   } else {
     mc_encode_pool *pool = s->sync->enc;
     mc_encode_pool_hold(pool); /* so the trim leaves the cached file alone till it's sent */
     char *cached = original ? cache_path(s->sync, h.file_uid, kbps) : NULL;
     if (cached && mc_file_exists(cached)) {
       held c = cached_copy(&h, cached);
-      st = send_file(s, track, &c, "opus", kbps);
+      st = send_file(s, track, &c, "opus", kbps, max);
     } else if (find_transcode(lib, track, kbps, &tr)) {
-      st = send_file(s, track, &tr, "opus", kbps);
+      st = send_file(s, track, &tr, "opus", kbps, max);
       held_free(&tr);
     } else if (original && self_transcodes(s)) {
       /* Its encode-ahead job if it has one (queued or running), else a job of its own. */
@@ -1093,7 +1110,7 @@ static mc_status serve_file(mc_session *s, const unsigned char *payload, size_t 
       mc_status enc = encode_original(s->sync, &h, kbps, MC_ENCODE_NOW, s, s->peer_uid, &out);
       if (enc == MC_OK) {
         held c = cached_copy(&h, out);
-        st = send_file(s, track, &c, "opus", kbps);
+        st = send_file(s, track, &c, "opus", kbps, max);
       } else if (enc == MC_ERR_CANCELLED) {
         st = send_file_err(s->ch, track, "no_transcode"); /* withdrawn meanwhile */
       } else {
@@ -1447,6 +1464,7 @@ static mc_status insert_file(mc_library *lib, const char *track, const char *rel
 }
 
 int (*mc_transfer_test_corrupt)(const char *track) = NULL;
+int mc_transfer_test_old_sender = 0;
 
 static mc_status ask_cover(mc_session *s, const char *album, const char *sha256);
 static mc_status recv_cover(mc_session *s, const char *album, const char *dir, const char *sha256);
@@ -1496,8 +1514,50 @@ static mc_status ask_file(mc_session *s, const mc_plan_track *t, int opus, int64
   yyjson_mut_obj_add_str(doc, root, "format", opus ? "opus" : "original");
   yyjson_mut_obj_add_int(doc, root, "kbps", opus ? t->format.bitrate_kbps : 0);
   yyjson_mut_obj_add_int(doc, root, "est", est);
+  /* A build that can't hold big files (32-bit Android) says so: the peer answers FILE_ERR
+   * "too_big" for one, rather than sending it to be dropped. */
+  if (mc_max_file_bytes > 0) yyjson_mut_obj_add_int(doc, root, "max", mc_max_file_bytes);
   if (retry) yyjson_mut_obj_add_bool(doc, root, "retry", true);
   return send_doc(s->ch, MC_MSG_FILE_REQ, doc);
+}
+
+/* --- Files too big for this build --- */
+
+/* The peer offers track in a file of size bytes, too big for this build to hold (32-bit
+ * Android, mc_file_too_big()), at kbps (0 for the original): kept in sync.db's too_big at the
+ * track's file_rev, so this device's plan leaves it out from now on (plan.h) and it isn't
+ * asked for, counted or reported missing again. Not a finding: the track just isn't for this
+ * device, as if its profile didn't select it. */
+static void note_too_big(mc_session *s, const char *track, int kbps, int64_t size) {
+  mc_log("kithcore: sync: %s from %s is %lld bytes, too big to hold here\n", track, s->peer_uid,
+         (long long)size);
+  if (s->xfer) s->xfer->too_big = 1;
+  sqlite3_stmt *rev = NULL, *add = NULL;
+  mc_sync_db *sdb = s->conn->sdb;
+  if (sqlite3_prepare_v2(mc_library_db(s->conn->lib), "SELECT file_rev FROM tracks WHERE uid = ?1",
+                         -1, &rev, NULL) != SQLITE_OK)
+    return;
+  sqlite3_bind_text(rev, 1, track, -1, SQLITE_STATIC);
+  if (sqlite3_step(rev) == SQLITE_ROW && mc_sync_db_begin_write(sdb) == MC_OK) {
+    int ok = sqlite3_prepare_v2(mc_sync_db_handle(sdb),
+                                "INSERT OR REPLACE INTO too_big (track_uid, file_rev, kbps, size)"
+                                " VALUES (?1, ?2, ?3, ?4)", -1, &add, NULL) == SQLITE_OK;
+    if (ok) {
+      sqlite3_bind_text(add, 1, track, -1, SQLITE_STATIC);
+      sqlite3_bind_value(add, 2, sqlite3_column_value(rev, 0));
+      sqlite3_bind_int(add, 3, kbps);
+      sqlite3_bind_int64(add, 4, size);
+      ok = sqlite3_step(add) == SQLITE_DONE;
+    }
+    sqlite3_finalize(add);
+    if (!ok || mc_sync_db_commit(sdb) != MC_OK) mc_sync_db_rollback(sdb);
+  }
+  sqlite3_finalize(rev);
+}
+
+/* The format t is asked for in, as too_big keeps it. */
+static int asked_kbps(const mc_plan_track *t, int opus) {
+  return opus && t->format.format == MC_FORMAT_OPUS ? t->format.bitrate_kbps : 0;
 }
 
 /* --- Findings (issues.h) --- */
@@ -1569,7 +1629,11 @@ static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int 
     return MC_ERR_FORMAT;
   }
   if (type == MC_MSG_FILE_ERR) {
-    note_refused(s, t->track_uid, obj_str(hdr, "reason"));
+    const char *reason = obj_str(hdr, "reason");
+    if (reason && !strcmp(reason, "too_big") && mc_max_file_bytes > 0)
+      note_too_big(s, t->track_uid, asked_kbps(t, opus), obj_int(hdr, "size"));
+    else
+      note_refused(s, t->track_uid, reason);
     yyjson_doc_free(hdr);
     *got = GOT_REFUSED;
     return MC_OK;
@@ -1598,6 +1662,12 @@ static mc_status recv_file(mc_session *s, const mc_plan_track *t, int opus, int 
   /* An original stands in for Opus when it is lossy and small enough; nothing else does. */
   int accept = file_uid[0] && sha[0] && audio_ext(ext) &&
                (sent_original || (opus && sent_opus && kbps == t->format.bitrate_kbps));
+  /* Too big for this build, from a peer that didn't heed FILE_REQ's max (an older version):
+   * drained and dropped, and not asked for again. */
+  if (accept && mc_file_too_big(size)) {
+    note_too_big(s, t->track_uid, asked_kbps(t, opus), size);
+    accept = 0;
+  }
 
   char *rel = accept ? dest_path(lib, t->track_uid, ext) : NULL;
   char *abs = rel ? mc_library_abspath(lib, rel) : NULL;
@@ -1953,6 +2023,11 @@ static mc_status fetch_missing(mc_session *s, mc_transfer *x) {
       int k = assignee(tc, ntc, w[i].uid);
       mc_track_group *g = k > 0 ? mc_track_groups_get(&s->findings->away, tc[k].uid) : NULL;
       if (g) mc_uid_list_add(&g->tracks, w[i].uid);
+    }
+    /* The original the peer would send is too big for this build: not for this device. */
+    if (how[i] && how[i] != FETCH_RESCUE && w[i].size > 0 && mc_file_too_big(w[i].size)) {
+      note_too_big(s, w[i].uid, asked_kbps(w[i].t, how[i] == FETCH_OPUS), w[i].size);
+      how[i] = FETCH_SKIP;
     }
     s->files_total += how[i] != 0;
     if (how[i]) s->files_bytes += want_bytes(&w[i]);
@@ -2943,6 +3018,19 @@ void mc_transfer_end(mc_session *s, int ok) {
   uint64_t t0 = mc_mono_ms();
   drop_deleted_tracks(s);
   sqlite3_exec(mc_library_db(lib), k_unwatch_sql, NULL, NULL, NULL);
+  if (ok && x->fetched && x->too_big) {
+    /* Without what it found too big, so that isn't counted missing (plan.h). Not if that
+     * changed the format a budget picks: reconcile would drop copies the turn didn't replace. */
+    mc_plan *plan = NULL;
+    if (mc_plan_compute(s->conn->sdb, lib, mc_sync_db_device_uid(s->conn->sdb),
+                        mc_sync_free_space(lib), &plan) == MC_OK && plan->status == MC_PLAN_OK &&
+        plan->kbps == x->plan->kbps) {
+      mc_plan_free(x->plan);
+      x->plan = plan;
+    } else {
+      mc_plan_free(plan);
+    }
+  }
   if (ok && x->fetched) {
     replace_failed(s, x);
     if (!x->plan->archive) reconcile_files(s, x);

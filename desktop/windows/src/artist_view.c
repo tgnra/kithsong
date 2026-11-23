@@ -1096,11 +1096,10 @@ static void paint(HDC dc, const RECT *dirty) {
 
 /* --- Menu --- */
 
-/* A single's menu is the track list's track menu, Play Next and Play Last stubs included. */
+/* A single's menu is the track list's track menu, Queue included. */
 enum {
   CMD_NEW_PLAYLIST = 1,
-  CMD_PLAY_NEXT,
-  CMD_PLAY_LAST,
+  CMD_QUEUE,
   CMD_DELETE_TRACK,
   CMD_GO_TO_ARTIST,
   CMD_EDIT,
@@ -1120,7 +1119,7 @@ static void request_add(const char *track_uid, BOOL here, const char *playlist_u
   notify(ARN_ADD_TO_PLAYLIST, FALSE);
 }
 
-/* Single i's menu, at pt (screen coordinates): Add to Playlist, Play Next, Play Last, Edit... and Delete from
+/* Single i's menu, at pt (screen coordinates): Add to Playlist, Queue, Edit... and Delete from
  * Library, as a track's in the track list, and Go to Artist when it's credited to someone else. A single has
  * no album page to go to. */
 static void single_menu(int i, POINT pt) {
@@ -1135,8 +1134,7 @@ static void single_menu(int i, POINT pt) {
   if (add) AppendMenuW(menu, MF_POPUP, (UINT_PTR)add, mc_wstr_mnemonic(MC_STR_ADD_TO_PLAYLIST));
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   UINT queue = here ? 0 : MF_GRAYED;
-  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_PLAY_LAST));
+  AppendMenuW(menu, MF_STRING | queue, CMD_QUEUE, mc_wstr_mnemonic(MC_STR_ENQUEUE));
   if (artist[0] && strcmp(artist, v.open_uid)) {
     AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(menu, MF_STRING, CMD_GO_TO_ARTIST, mc_wstr_mnemonic(MC_STR_GO_TO_ARTIST));
@@ -1152,8 +1150,8 @@ static void single_menu(int i, POINT pt) {
   mc_playlist_list_free(lists);
   if (cmd == CMD_NEW_PLAYLIST) {
     request_add(uid, here, NULL);
-  } else if (cmd == CMD_PLAY_NEXT || cmd == CMD_PLAY_LAST) {
-    playback_add(MC_UP_NEXT_TRACK, uid, NULL, cmd == CMD_PLAY_NEXT);
+  } else if (cmd == CMD_QUEUE) {
+    playback_add(MC_UP_NEXT_TRACK, uid, NULL);
   } else if (cmd == CMD_DELETE_TRACK) {
     memset(&v.req, 0, sizeof v.req);
     memcpy(v.req.track_uid, uid, sizeof uid);
@@ -1175,7 +1173,7 @@ static void album_menu(int i, POINT pt) {
   if (item_menu_album(&o) == ITEM_MENU_CHANGED) notify(ARN_LIBRARY_CHANGED, TRUE);
 }
 
-/* WM_CONTEXTMENU: Play Next, Play Last, Edit..., then Remove from This PC... or Sync to This PC where they
+/* WM_CONTEXTMENU: Queue, Edit..., then Remove from This PC... or Sync to This PC where they
  * apply (an artist can't be deleted from the library), for the row under the pointer (from the
  * keyboard, lp -1, the focused row), or anywhere on an artist's page for that artist; but on an
  * album, the album's menu, and on a single, the single's. */

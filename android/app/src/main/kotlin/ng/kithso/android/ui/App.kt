@@ -335,6 +335,9 @@ fun App(
     var smallAlbumTiles by remember { mutableStateOf(settings.smallAlbumTiles) }
     // Whether its Artists fold away those only credited on others' tracks.
     var foldCredited by remember { mutableStateOf(settings.foldCreditedArtists) }
+    // Whether there are enough of those to fold, as each import or sync leaves the library;
+    // below that they're all shown and Customise doesn't offer it, keeping the choice for later.
+    val canFoldCredited = remember(library) { library?.let { foldsCreditedArtists(it.artists) } == true }
     // Opens the phone's header search: from the keyboard shortcut, as the main screen's own pull
     // and menu open it there.
     val phoneSearchRequests = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1) }
@@ -445,6 +448,7 @@ fun App(
                     sectionOrder = listOf(Section.Recents) + order
                     settings.sectionOrder = order.map { it.name }
                 },
+                canFoldCredited = canFoldCredited,
                 foldCredited = foldCredited,
                 onFoldCredited = { on ->
                     foldCredited = on
@@ -605,7 +609,7 @@ fun App(
                     onSync = { nav = nav.push(Page.Sync) },
                     onSettings = { nav = nav.push(Page.Settings) },
                     sectionOrder = sectionOrder,
-                    foldCredited = foldCredited,
+                    foldCredited = foldCredited && canFoldCredited,
                     smallAlbumTiles = smallAlbumTiles,
                     onSmallAlbumTiles = { small ->
                         smallAlbumTiles = small

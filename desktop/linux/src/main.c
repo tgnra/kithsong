@@ -80,6 +80,12 @@ static const char css[] =
   ".queue-list > row.queue-dragged { opacity: 0.6; }"
   ".queue-list > row.drop-above { box-shadow: inset 0 2px @accent_bg_color; }"
   ".queue-list > row.drop-below { box-shadow: inset 0 -2px @accent_bg_color; }"
+  /* ...and what's playing, above the rows, is set apart from them. */
+  ".queue-now { padding: 6px 8px; border-radius: 8px; background: alpha(@accent_bg_color, 0.12); }"
+  ".queue-now .queue-now-title { font-weight: bold; }"
+  ".queue-now .queue-now-icon, .queue-now .queue-now-heading { color: @accent_color; }"
+  /* ...as is the row for the rest of the album, which moves like the others. */
+  ".queue-list > row.queue-rest > box > box > label:first-child { color: @accent_color; font-weight: bold; }"
   ".pair-code { font-size: 20pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
   ".pair-code-shown { font-size: 32pt; font-weight: 600; letter-spacing: 4px; font-feature-settings: 'tnum'; }"
   ".sync-picker { background: none; }"
@@ -1166,13 +1172,14 @@ static void on_group_navigated(void *user) {
   show_album(user);
 }
 
-/* Play next and Play last on anything the library holds (track_menu_append_queue()). */
+/* Queue on anything the library holds (track_menu_append_queue()). */
 static void on_queue_add(GSimpleAction *action, GVariant *param, gpointer user) {
+  (void)action;
   (void)user;
   int kind;
   const char *uid, *name;
   g_variant_get(param, "(i&s&s)", &kind, &uid, &name);
-  playback_add((mc_up_next_kind)kind, uid, name, !strcmp(g_action_get_name(G_ACTION(action)), "play-next"));
+  playback_add((mc_up_next_kind)kind, uid, name);
 }
 
 /* Right-clicking an album in the album grid: Add to album group. */
@@ -2093,8 +2100,7 @@ static void on_activate(GtkApplication *gapp, gpointer user) {
     {"previous", on_previous, NULL, NULL, NULL, {0}},
     {"play-pause", on_play_pause, NULL, NULL, NULL, {0}},
     {"next", on_next, NULL, NULL, NULL, {0}},
-    {"play-next", on_queue_add, "(iss)", NULL, NULL, {0}},
-    {"play-last", on_queue_add, "(iss)", NULL, NULL, {0}},
+    {"queue", on_queue_add, "(iss)", NULL, NULL, {0}},
   };
   g_action_map_add_action_entries(G_ACTION_MAP(gapp), actions, G_N_ELEMENTS(actions), a);
 

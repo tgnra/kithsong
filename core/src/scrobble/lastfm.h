@@ -80,9 +80,10 @@ mc_status mc_lastfm_get_session(const mc_lastfm_service *svc, const char *token,
 /* track.updateNowPlaying. */
 mc_status mc_lastfm_now_playing(const mc_lastfm_service *svc, const mc_scrobble *s,
                                 int *api_error);
-/* track.scrobble of count plays (at most MC_LASTFM_BATCH). On MC_OK, done[i] is 1 once play
- * i needn't be sent again: accepted, or ignored for good (say, too old); 0 if it was ignored
- * for now (over the daily limit). */
+/* track.scrobble of count plays (at most MC_LASTFM_BATCH). On MC_OK, done[i] says whether
+ * play i needs sending again: 1 if it was accepted, 2 if it was ignored for good (the
+ * service's filters, or a timestamp too old or too new; logged), 0 if it was ignored for now
+ * (over the daily limit). */
 mc_status mc_lastfm_scrobble(const mc_lastfm_service *svc, const mc_scrobble *plays, int count,
                              int *done, int *api_error);
 

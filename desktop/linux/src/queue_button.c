@@ -19,11 +19,12 @@ enum {
 /* An entry of the queue as it shows, on its row. */
 typedef struct queue_row {
   uint32_t id;
-  GtkWidget *row, *title, *byline, *duration;
+  GtkWidget *row, *title, *byline, *duration, *remove;
 } queue_row;
 
 static struct {
   GtkWidget *button, *popover, *clear, *scroller, *list, *empty;
+  GtkWidget *now, *now_title, *now_byline, *now_duration; /* what's playing, above the rows */
   GtkAdjustment *scroll;
   GHashTable *rows; /* id -> queue_row, owned by their rows */
 
@@ -119,38 +120,96 @@ static queue_row *new_row(uint32_t id) {
   gtk_accessible_update_property(GTK_ACCESSIBLE(remove), GTK_ACCESSIBLE_PROPERTY_LABEL, mc_str(MC_STR_QUEUE_REMOVE), -1);
   g_signal_connect(remove, "clicked", G_CALLBACK(on_remove_clicked), r);
   gtk_box_append(GTK_BOX(box), remove);
+  r->remove = remove;
 
   gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(r->row), box);
   return r;
 }
 
-/* What e shows, on its row and to screen readers. */
+/* What e shows, on its row and to screen readers. The rest of the album's row says so in the
+ * accent colour, and has no x: it can be moved, but not removed. */
 static void fill_row(queue_row *r, const mc_up_next_entry *e) {
-  char *tracks = NULL;
+  char *tracks = NULL, *rest = NULL;
+  int64_t duration_ms = e->duration_ms;
+  if (e->rest) rest = playback_rest_title(e, &duration_ms);
   if (!e->artist && e->block) tracks = mc_format_alloc(mc_str_plural(MC_STR_TRACKS, e->tracks), MC_D(e->tracks));
   const char *byline = e->artist ? e->artist : tracks ? tracks : "";
   char duration[16];
-  format_duration(e->duration_ms, duration, sizeof duration);
-  const char *title = e->title ? e->title : "";
+  format_duration(duration_ms, duration, sizeof duration);
+  const char *title = rest ? rest : e->title ? e->title : "";
+  gtk_widget_set_visible(r->remove, !e->rest);
+  if (e->rest) gtk_widget_add_css_class(r->row, "queue-rest");
   gtk_label_set_text(GTK_LABEL(r->title), title);
   gtk_label_set_text(GTK_LABEL(r->byline), byline);
   gtk_widget_set_visible(r->byline, byline[0] != '\0');
   gtk_label_set_text(GTK_LABEL(r->duration), duration);
   char *name = g_strjoin(", ", title, byline, duration, NULL);
   gtk_accessible_update_property(GTK_ACCESSIBLE(r->row), GTK_ACCESSIBLE_PROPERTY_LABEL, name,
-                                 GTK_ACCESSIBLE_PROPERTY_DESCRIPTION, mc_str(MC_STR_QUEUE_ROW_HELP), -1);
+                                 GTK_ACCESSIBLE_PROPERTY_DESCRIPTION,
+                                 mc_str(e->rest ? MC_STR_QUEUE_REST_HELP : MC_STR_QUEUE_ROW_HELP), -1);
   g_free(name);
+  g_free(rest);
   mc_free(tracks);
 }
 
 static void end_drag(void);
 static void show_drop(int at);
 
+/* What's playing, if anything: it isn't a row of the list, as it can't be moved or removed. */
+static void fill_now(void) {
+  const char *title = NULL, *artist = NULL;
+  int duration_ms = 0;
+  gboolean shown = playback_now_playing(&title, &artist, &duration_ms);
+  gtk_widget_set_visible(s.now, shown);
+  if (!shown) return;
+  char duration[16];
+  format_duration(duration_ms, duration, sizeof duration);
+  gtk_label_set_text(GTK_LABEL(s.now_title), title ? title : "");
+  gtk_label_set_text(GTK_LABEL(s.now_byline), artist ? artist : "");
+  gtk_widget_set_visible(s.now_byline, artist != NULL);
+  gtk_label_set_text(GTK_LABEL(s.now_duration), duration);
+  char *name = g_strjoin(", ", mc_str(MC_STR_QUEUE_NOW_PLAYING), title ? title : "", artist ? artist : "", duration, NULL);
+  gtk_accessible_update_property(GTK_ACCESSIBLE(s.now), GTK_ACCESSIBLE_PROPERTY_LABEL, name, -1);
+  g_free(name);
+}
+
+static GtkWidget *now_box(void) {
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+  gtk_widget_add_css_class(box, "queue-now");
+  gtk_accessible_update_property(GTK_ACCESSIBLE(box), GTK_ACCESSIBLE_PROPERTY_LABEL, mc_str(MC_STR_QUEUE_NOW_PLAYING), -1);
+  GtkWidget *heading = row_label(NULL);
+  gtk_label_set_text(GTK_LABEL(heading), mc_str(MC_STR_QUEUE_NOW_PLAYING));
+  gtk_widget_add_css_class(heading, "caption-heading");
+  gtk_widget_add_css_class(heading, "queue-now-heading");
+  gtk_box_append(GTK_BOX(box), heading);
+
+  GtkWidget *line = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+  GtkWidget *icon = gtk_image_new_from_icon_name("media-playback-start-symbolic");
+  gtk_widget_add_css_class(icon, "queue-now-icon");
+  gtk_box_append(GTK_BOX(line), icon);
+  GtkWidget *text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_set_hexpand(text, TRUE);
+  s.now_title = row_label(NULL);
+  gtk_widget_add_css_class(s.now_title, "queue-now-title");
+  gtk_box_append(GTK_BOX(text), s.now_title);
+  s.now_byline = row_label("caption");
+  gtk_box_append(GTK_BOX(text), s.now_byline);
+  gtk_box_append(GTK_BOX(line), text);
+  s.now_duration = gtk_label_new(NULL);
+  gtk_widget_add_css_class(s.now_duration, "caption");
+  gtk_widget_add_css_class(s.now_duration, "numeric");
+  gtk_widget_add_css_class(s.now_duration, "dim-label");
+  gtk_box_append(GTK_BOX(line), s.now_duration);
+  gtk_box_append(GTK_BOX(box), line);
+  return box;
+}
+
 /* Reads the queue again, moving the rows there are rather than making them afresh, so the scrolling
  * stays. The focus goes with its entry, wherever that has moved to: if it has gone, the focus stays
  * where it was. */
 static void reload(void) {
   int drop = s.drop_at;
+  fill_now();
   show_drop(-1); /* its row may be about to go */
   GtkListBoxRow *had_focus = focused_row();
   uint32_t focus = had_focus ? row_data(had_focus)->id : 0;
@@ -423,6 +482,8 @@ GtkWidget *queue_button_new(void) {
   gtk_box_append(GTK_BOX(header), s.clear);
   gtk_box_append(GTK_BOX(box), header);
   gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+  s.now = now_box();
+  gtk_box_append(GTK_BOX(box), s.now);
 
   s.list = gtk_list_box_new();
   gtk_list_box_set_selection_mode(GTK_LIST_BOX(s.list), GTK_SELECTION_SINGLE);

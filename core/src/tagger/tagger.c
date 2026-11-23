@@ -287,6 +287,13 @@ static int scan_file(void *user, const char *path) {
     imp->files = grown;
     imp->file_cap = cap;
   }
+  /* Too big for this build (32-bit Android, platform.h): a failed item saying so, before
+   * TagLib, which can't read past 2 GiB there, is let near it. */
+  int64_t size = 0, mtime_ms = 0;
+  if (mc_file_info(path, &size, &mtime_ms) == MC_OK && mc_file_too_big(size)) {
+    add_zip_failure(imp, path, mc_str(MC_STR_IMPORT_ERROR_TOO_BIG));
+    return 0;
+  }
   file_entry *f = &imp->files[imp->file_count];
   memset(f, 0, sizeof *f);
   if (mc_tags_read(path, &f->tags) != MC_OK) {
@@ -3035,6 +3042,16 @@ static char *stage_zip(mc_import *imp, const char *path) {
 
   mc_unzip_stats stats;
   mc_unzip_result r = mc_unzip(path, dest, MC_UNZIP_MAX_BYTES, &imp->zip_budget, cancel_check, imp, &stats);
+  /* Files too big for this build stay in the zip. Audio is a failed item under the zip's path,
+   * as scan_file() makes of one outside a zip; anything else, which isn't imported, goes
+   * unremarked. */
+  for (int i = 0; r == MC_UNZIP_OK && i < stats.too_big_count; i++) {
+    if (!audio_format(stats.too_big[i])) continue;
+    char *where = mc_format_alloc("{0}/{1}", MC_S(path), MC_S(stats.too_big[i]));
+    add_zip_failure(imp, where ? where : path, mc_str(MC_STR_IMPORT_ERROR_TOO_BIG));
+    mc_free(where);
+  }
+  mc_unzip_stats_free(&stats);
   if (r == MC_UNZIP_OK) return dest;
   mc_remove_tree(dest);
   free(dest);

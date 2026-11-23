@@ -25,7 +25,7 @@ static struct {
   track_list_callbacks cb;
   GSimpleAction *go_to_album, *go_to_artist;
   char menu_uid[MC_UID_STRLEN];    /* the track it was opened on */
-  GSimpleAction *queue[2];         /* the track menu's Play next and Play last */
+  GSimpleAction *queue;            /* the track menu's Queue */
   char menu_album[MC_UID_STRLEN];  /* and its album, or "" */
   char menu_artist[MC_UID_STRLEN]; /* and its artist, or "" */
   gboolean menu_here;              /* and whether it has a file here */
@@ -468,7 +468,7 @@ GtkWidget *search_view_new(app *a, const track_list_callbacks *cb) {
   add_track_action(actions, "add-to-playlist");
   add_track_action(actions, "edit");
   add_track_action(actions, "delete");
-  track_menu_add_queue_actions(actions, v.menu_uid, v.queue);
+  v.queue = track_menu_add_queue_action(actions, v.menu_uid);
   v.go_to_album = add_track_action(actions, "go-to-album");
   v.go_to_artist = add_track_action(actions, "go-to-artist");
   gtk_widget_insert_action_group(box, "track", G_ACTION_GROUP(actions));

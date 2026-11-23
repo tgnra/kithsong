@@ -5,8 +5,8 @@
  * The player's callbacks come on its own thread and are passed to the UI thread with
  * g_idle_add(); while playing, a timer moves the seekbar on. The player is created on first
  * play. Plays are counted in the library and scrobbled when the player says they count.
- * The queue the app shows, Play next and Play last, is the core's up next: its tracks are items
- * like the rest, and queue_button.c shows the list. It goes with the library, as its tracks do.
+ * The queue the app shows, what Queue adds to, is the core's up next: its tracks are items like
+ * the rest, and queue_button.c shows the list, under what's playing. It goes with the library, as its tracks do.
  * Call everything here on the UI thread.
  */
 #ifndef KITHSONG_PLAYBACK_H
@@ -82,10 +82,11 @@ int playback_volume(void);
 void playback_set_muted(gboolean muted);
 gboolean playback_muted(void);
 
-/* Adds it to the front of the queue (Play next) or the end (Play last), and the now-playing strip
- * says so, or that it has nothing with a file on this device. Nothing starts playing. Anything but
- * a track goes in as one block, named name, unless playback_set_queue_tracks() says otherwise. */
-void playback_add(mc_up_next_kind what, const char *uid, const char *name, gboolean next);
+/* Adds it to the end of the queue (Queue; an album while an album plays in order goes after that
+ * album, see mc_player_up_next_add()), and the now-playing strip says so, or that it has nothing
+ * with a file on this device. Nothing starts playing. Anything but a track goes in as one block,
+ * named name, unless playback_set_queue_tracks() says otherwise. */
+void playback_add(mc_up_next_kind what, const char *uid, const char *name);
 /* Whether things go in the queue as a track each (mc_settings_queue_tracks()). Off to begin
  * with; main.c reads it and settings_view.c changes it. */
 void playback_set_queue_tracks(gboolean on);
@@ -105,6 +106,12 @@ gboolean playback_has_current(void);
 gboolean playback_has_next(void);
 /* The current track's uid, or "" with none or for one without. Valid until the queue changes. */
 const char *playback_current_uid(void);
+/* What's playing or paused, for the top of the queue: its title, artist (may be NULL) and length
+ * (0 if unknown). FALSE when stopped or with nothing. Valid until the queue changes. */
+gboolean playback_now_playing(const char **title, const char **artist, int *duration_ms);
+/* The queue's row for the rest of the album (e->rest): its title, "Rest of" the album (g_free() it),
+ * and how long those tracks are, into duration_ms. */
+char *playback_rest_title(const mc_up_next_entry *e, int64_t *duration_ms);
 /* What's queued so far: how many tracks, and track i's uid ("" past the end). */
 int playback_queue_count(void);
 const char *playback_queue_uid(int i);

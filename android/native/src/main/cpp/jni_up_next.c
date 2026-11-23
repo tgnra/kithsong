@@ -7,17 +7,17 @@
 
 #include "jni_bridge.h"
 
-/* mc_up_next_add_load(), then mc_player_play_next() or with front false mc_player_play_last(), so
- * what's loaded needn't cross over. False if it has no track with a file here. */
+/* mc_up_next_add_load(), then mc_player_up_next_add(), so what's loaded needn't cross over. False
+ * if it has no track with a file here. */
 JNI_FN(jboolean, CorePlayer, nativeUpNextAdd, jlong handle, jlong library, jint kind, jstring uid, jstring name,
-       jboolean as_tracks, jboolean front) {
+       jboolean as_tracks) {
   JNI_STR(cuid, uid, JNI_FALSE);
   JNI_STR(cname, name, JNI_FALSE);
   mc_player *player = jni_player_of(handle);
   mc_up_next_add *add = NULL;
   mc_status st = mc_up_next_add_load(jni_lib_of(library), (mc_up_next_kind)kind, cuid, cname, as_tracks ? 1 : 0, &add);
   if (st == MC_OK) {
-    st = front ? mc_player_play_next(player, add) : mc_player_play_last(player, add);
+    st = mc_player_up_next_add(player, add);
     mc_up_next_add_free(add);
   }
   if (st == MC_ERR_NOT_FOUND) return JNI_FALSE;
@@ -29,7 +29,8 @@ static jobject new_entry(JNIEnv *env, jclass cls, jmethodID ctor, const void *it
   jstring title = new_string(env, e->title ? e->title : "");
   jstring artist = new_string(env, e->artist);
   jobject out = (*env)->NewObject(env, cls, ctor, (jint)e->id, title, artist, JNI_BOOL(e->block), (jint)e->tracks,
-                                  (jlong)e->duration_ms, (jint)e->first_item, (jint)e->context);
+                                  (jlong)e->duration_ms, (jint)e->first_item, (jint)e->context, JNI_BOOL(e->after_list),
+                                  JNI_BOOL(e->rest));
   JNI_DELETE(title, artist);
   return out;
 }
@@ -39,7 +40,7 @@ JNI_FN(jobjectArray, CorePlayer, nativeUpNext, jlong handle) {
   mc_up_next_list *list = NULL;
   JNI_CHECK(mc_player_up_next(jni_player_of(handle), &list), NULL);
   jclass info;
-  jmethodID ctor = jni_ctor(env, JNI_CLASS("UpNextEntry"), "(I" J_STRING J_STRING "ZIJII)V", &info);
+  jmethodID ctor = jni_ctor(env, JNI_CLASS("UpNextEntry"), "(I" J_STRING J_STRING "ZIJIIZZ)V", &info);
   jobjectArray out = ctor ? JNI_OBJECT_ARRAY(info, ctor, list->items, list->count, new_entry) : NULL;
   mc_up_next_list_free(list);
   return out;

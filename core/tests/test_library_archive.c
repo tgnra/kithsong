@@ -133,7 +133,7 @@ int main(int argc, char **argv) {
   char b_node_before[MC_UID_STRLEN];
   snprintf(b_node_before, sizeof b_node_before, "%s", mc_library_node_uid(b));
   last_done = 0;
-  CHECK(mc_library_restore(b, zip, temp, on_progress, NULL, &problem) == MC_OK && problem == MC_ARCHIVE_OK);
+  CHECK(mc_library_restore(b, zip, temp, on_progress, NULL, &problem, NULL) == MC_OK && problem == MC_ARCHIVE_OK);
   CHECK(tracks(b) == 34);
   CHECK_TEXT(mc_library_uid(b), mc_library_uid(a));
   CHECK(strcmp(mc_library_node_uid(b), mc_library_node_uid(a)) != 0);
@@ -157,7 +157,7 @@ int main(int argc, char **argv) {
   CHECK(tracks(b) == 34);
 
   /* Not into a library that has music already. */
-  CHECK(mc_library_restore(b, zip, temp, NULL, NULL, &problem) == MC_ERR_LIBRARY_MISMATCH);
+  CHECK(mc_library_restore(b, zip, temp, NULL, NULL, &problem, NULL) == MC_ERR_LIBRARY_MISMATCH);
   CHECK(problem == MC_ARCHIVE_NOT_EMPTY);
   mc_library_close(b);
 
@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
   CHECK(mc_library_open(c_dir, &c) == MC_OK);
   stop_at_half = 1;
   last_done = 0;
-  CHECK(mc_library_restore(c, zip, temp, on_progress, NULL, &problem) == MC_ERR_CANCELLED);
+  CHECK(mc_library_restore(c, zip, temp, on_progress, NULL, &problem, NULL) == MC_ERR_CANCELLED);
   stop_at_half = 0;
   CHECK(tracks(c) == 0);
   mc_library_close(c);

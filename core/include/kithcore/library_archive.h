@@ -77,9 +77,16 @@ mc_status mc_library_archive_info(const char *zip_path, mc_archive_info *out);
  * restored library; other connections to it (sync's) should be opened again. temp_dir as for
  * export. On failure the library is left empty, as it was, and the files that came out of the
  * zip are removed. Not for a library in a sync group, whose library id it would change: the
- * frontend checks. */
+ * frontend checks.
+ *
+ * On 32-bit Android, files of 2 GiB (2^31 bytes) or more can't be played or tagged (a 32-bit
+ * off_t), so they're left in the zip rather than failing the restore: their tracks are
+ * restored with no file on this device, as a track only another device holds, keeping their
+ * plays and places in playlists. too_big, if given, says how many of the library's files were
+ * left out (always 0 elsewhere). Anything else in the zip that big is left out unremarked. */
 mc_status mc_library_restore(mc_library *lib, const char *zip_path, const char *temp_dir,
-                             mc_archive_progress_fn progress, void *user, mc_archive_problem *problem);
+                             mc_archive_progress_fn progress, void *user, mc_archive_problem *problem,
+                             int *too_big);
 
 #ifdef __cplusplus
 }

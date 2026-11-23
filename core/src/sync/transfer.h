@@ -51,6 +51,9 @@ extern mc_status (*mc_transfer_trash)(const char *path);
 /* Tests only: when set, called for each file received whole, before its hash is checked;
  * non-zero fails the check. NULL by default. */
 extern int (*mc_transfer_test_corrupt)(const char *track);
+/* Tests only: when set, a sender ignores FILE_REQ's max, as versions before it did, so the
+ * receiver has to refuse a file too big for it at FILE_HDR. 0 by default. */
+extern int mc_transfer_test_old_sender;
 
 /* Whether some file of t's track here is in the format t wants, and not stale (made from an
  * older file of the track): the track isn't missing. *cache keeps the query for the next

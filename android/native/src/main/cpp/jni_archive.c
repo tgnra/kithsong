@@ -49,10 +49,10 @@ static int begin(JNIEnv *env, jobject listener, archive_call *a) {
   return a->progress != NULL; /* else with an exception pending */
 }
 
-/* { status, problem } */
-static jintArray outcome(JNIEnv *env, mc_status st, mc_archive_problem problem) {
-  jint values[2] = {(jint)st, (jint)problem};
-  return jni_ints(env, values, 2);
+/* { status, problem, too_big } */
+static jintArray outcome(JNIEnv *env, mc_status st, mc_archive_problem problem, int too_big) {
+  jint values[3] = {(jint)st, (jint)problem, (jint)too_big};
+  return jni_ints(env, values, 3);
 }
 
 /* Writes to fd, which stays the caller's to close. */
@@ -63,7 +63,7 @@ JNI_FN(jintArray, LibraryArchive, nativeExport, jlong handle, jstring temp_dir, 
   a.fd = fd;
   mc_archive_problem problem = MC_ARCHIVE_OK;
   mc_status st = mc_library_export(jni_lib_of(handle), temp, write_fd, report, &a, &problem);
-  return outcome(env, st, problem);
+  return outcome(env, st, problem, 0);
 }
 
 JNI_FN(jintArray, LibraryArchive, nativeRestore, jlong handle, jstring zip_path, jstring temp_dir, jobject listener) {
@@ -72,8 +72,9 @@ JNI_FN(jintArray, LibraryArchive, nativeRestore, jlong handle, jstring zip_path,
   archive_call a = {0};
   if (!begin(env, listener, &a)) return NULL;
   mc_archive_problem problem = MC_ARCHIVE_OK;
-  mc_status st = mc_library_restore(jni_lib_of(handle), zip, temp, report, &a, &problem);
-  return outcome(env, st, problem);
+  int too_big = 0;
+  mc_status st = mc_library_restore(jni_lib_of(handle), zip, temp, report, &a, &problem, &too_big);
+  return outcome(env, st, problem, too_big);
 }
 
 /* { files, bytes } for an export, null for any other file. */

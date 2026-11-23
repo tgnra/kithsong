@@ -159,12 +159,14 @@ class KithsongApp : Application(), SingletonImageLoader.Factory {
             },
             // Started again, so nothing is left holding the empty library open. Out of sight,
             // the process just goes, and the app opens with the library next time.
-            onRestored = {
-                if (isVisible) {
+            // What it left out (files a 32-bit phone can't play) is told in the notification
+            // either way, as the restart takes the app's own line with it.
+            onRestored = { job ->
+                if (isVisible && job.tooBig == 0) {
                     restart()
                 } else {
-                    ArchiveService.showOutcome(this, ArchiveJob(restoring = true, result = ArchiveJob.Result.Done))
-                    Runtime.getRuntime().exit(0)
+                    ArchiveService.showOutcome(this, job)
+                    if (isVisible) restart() else Runtime.getRuntime().exit(0)
                 }
             },
             MainScope(),

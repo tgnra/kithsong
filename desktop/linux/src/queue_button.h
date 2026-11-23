@@ -1,6 +1,6 @@
 /* The play queue's button in the now-playing strip, and its popover listing what the player has
- * up next (playback.h): a row per entry, a track or a block (an album or the like) with what's
- * left of it. Rows drag into another order as whole blocks. Dragging is a gesture within the
+ * up next (playback.h): what's playing at the top, set apart, then a row per entry, a track or a
+ * block (an album or the like) with what's left of it. Rows drag into another order as whole blocks. Dragging is a gesture within the
  * popover rather than GTK's drag and drop, which would take the pointer from it and close it.
  * Only one exists at a time.
  */

@@ -176,13 +176,13 @@ class SessionPlayback(private val context: Context, private val scope: Coroutine
         }
     }
 
-    override suspend fun addUpNext(what: QueueAddition, next: Boolean): Boolean {
+    override suspend fun addUpNext(what: QueueAddition): Boolean {
         val source = app.library as? CoreLibrarySource ?: return false
         // The player is there once the controller has connected.
         val connected = CompletableDeferred<CoreMediaPlayer?>()
         withController { connected.complete(player) }
         val player = connected.await() ?: return false
-        return source.addUpNext(player, what, next, app.settings.queueTracks)
+        return source.addUpNext(player, what, app.settings.queueTracks)
     }
 
     override fun moveUpNext(id: Int, to: Int) {

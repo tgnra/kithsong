@@ -3,6 +3,15 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// A bundle (AAB, for the store) carries 32-bit ARM as well as the 64-bit ABIs; an APK only the
+// 64-bit ones, so 32-bit phones get the app from the store. :native builds armeabi-v7a only for
+// a bundle, so the two are built in separate runs (scripts/release-android.*).
+val requestedTasks = gradle.startParameter.taskNames.map { it.substringAfterLast(":") }
+val bundleRun = requestedTasks.any { it.startsWith("bundle") }
+if (bundleRun && requestedTasks.any { it.startsWith("assemble") || it.startsWith("install") || it == "build" }) {
+    throw GradleException("Build the AAB (with armeabi-v7a) and the APKs (without) in separate Gradle runs")
+}
+
 android {
     namespace = "ng.kithso.android"
     compileSdk = 37
@@ -18,7 +27,7 @@ android {
         versionName = rootProject.extra["kithsongVersionName"] as String
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("arm64-v8a", "x86_64") + if (bundleRun) listOf("armeabi-v7a") else emptyList()
         }
     }
 

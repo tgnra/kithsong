@@ -25,12 +25,15 @@ if (-not ($env:KITHSONG_LASTFM_KEY -and $env:KITHSONG_LASTFM_SECRET)) { Write-Wa
 # android.ps1 changes directory; keep the caller's.
 Push-Location
 try {
-    & "$root\android\scripts\android.ps1" gradle --no-daemon `
-        :app:assembleRelease :app:bundleRelease `
-        "-PkithsongContact=$env:KITHSONG_CONTACT" `
-        "-PkithsongLastfmKey=$env:KITHSONG_LASTFM_KEY" "-PkithsongLastfmSecret=$env:KITHSONG_LASTFM_SECRET"
+    # Two runs: the AAB carries armeabi-v7a as well, for the store; the APK doesn't (see
+    # android\app\build.gradle.kts).
+    foreach ($task in ':app:bundleRelease', ':app:assembleRelease') {
+        & "$root\android\scripts\android.ps1" gradle --no-daemon $task `
+            "-PkithsongContact=$env:KITHSONG_CONTACT" `
+            "-PkithsongLastfmKey=$env:KITHSONG_LASTFM_KEY" "-PkithsongLastfmSecret=$env:KITHSONG_LASTFM_SECRET"
 
-    if ($LASTEXITCODE) { Write-Error "Gradle failed (exit $LASTEXITCODE)" }
+        if ($LASTEXITCODE) { Write-Error "Gradle failed (exit $LASTEXITCODE)" }
+    }
 } finally {
     Pop-Location
 }

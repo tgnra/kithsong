@@ -1841,7 +1841,7 @@ static LRESULT CALLBACK wnd_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_GETMINMAXINFO: {
       MINMAXINFO *mmi = (MINMAXINFO *)lp;
       mmi->ptMinTrackSize.x = scale(1152);
-      mmi->ptMinTrackSize.y = scale(864);
+      mmi->ptMinTrackSize.y = scale(540); /* fits a 1366×768 laptop, or 1080p at 150% */
       if (g_window_w) { /* --window-size: as asked, whatever the screen (a CI runner's is small) */
         if (g_window_w < mmi->ptMinTrackSize.x) mmi->ptMinTrackSize.x = g_window_w;
         if (g_window_h < mmi->ptMinTrackSize.y) mmi->ptMinTrackSize.y = g_window_h;

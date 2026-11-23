@@ -236,7 +236,7 @@ static void append_for(GMenu *menu, enum mc_str_id label, const char *action, co
   g_object_unref(item);
 }
 
-/* Play next, Play last, then Rename... and Delete album group... for group uid, called name; for a
+/* Queue, then Rename... and Delete album group... for group uid, called name; for a
  * smart one, Edit rules... before those. */
 static GMenuModel *group_menu(const char *uid, const char *name, gboolean smart) {
   GMenu *menu = g_menu_new(), *section = g_menu_new();

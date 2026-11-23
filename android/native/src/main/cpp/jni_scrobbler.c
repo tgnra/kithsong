@@ -74,12 +74,12 @@ JNI_FN(void, CoreScrobbler, nativeSetService, jlong handle, jint kind, jstring a
 }
 
 /* {user name (null when signed out), service name, API address, sign-in page}; out gets
- * pending, has_key, last_error and service (an mc_scrobbler_service). */
+ * pending, has_key, last_error, service (an mc_scrobbler_service) and ignored. */
 JNI_FN(jobjectArray, CoreScrobbler, nativeStatus, jlong handle, jlongArray out) {
   mc_scrobbler_status status;
   JNI_CHECK(mc_scrobbler_status_get(scrobbler_of(handle), &status), NULL);
-  jlong v[4] = {status.pending, status.has_key, status.last_error, status.service};
-  (*env)->SetLongArrayRegion(env, out, 0, 4, v);
+  jlong v[5] = {status.pending, status.has_key, status.last_error, status.service, status.ignored};
+  (*env)->SetLongArrayRegion(env, out, 0, 5, v);
   const char *texts[] = {status.username, status.service_name, status.api_url, status.auth_url};
   jclass string = (*env)->FindClass(env, "java/lang/String");
   jobjectArray strings = string ? (*env)->NewObjectArray(env, 4, string, NULL) : NULL;

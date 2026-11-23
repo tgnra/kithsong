@@ -84,15 +84,15 @@ BOOL playback_muted(void);
 BOOL playback_is_playing(void);
 
 
-/* Adds it to the front of the queue, the core's up next (Play Next), or the end (Play Last), and
- * the now-playing strip says so, or that it has nothing with a file on this device. Nothing starts
- * playing. Anything but a track goes in as one block, named name, unless
- * playback_set_queue_tracks() says otherwise. */
-void playback_add(mc_up_next_kind what, const char *uid, const wchar_t *name, BOOL next);
+/* Adds it to the end of the queue, the core's up next (Queue; an album while an album plays in
+ * order goes after that album, see mc_player_up_next_add()), and the now-playing strip says so, or
+ * that it has nothing with a file on this device. Nothing starts playing. Anything but a track goes
+ * in as one block, named name, unless playback_set_queue_tracks() says otherwise. */
+void playback_add(mc_up_next_kind what, const char *uid, const wchar_t *name);
 /* Whether things go in the queue as a track each (mc_settings_queue_tracks()). Off to begin
  * with; settings_view.c keeps it. */
 void playback_set_queue_tracks(BOOL on);
-/* changed is called when the queue changes, whatever changed it. */
+/* changed is called when the queue changes, whatever changed it, or what's playing does. */
 void playback_on_up_next_changed(void (*changed)(void));
 int playback_up_next_count(void);
 /* The queue as it is, NULL if there's no player yet. Free with mc_up_next_list_free(). */
@@ -113,6 +113,12 @@ void playback_tracks_changed(void);
 
 /* The current track's uid, or "" with none or for one without. Valid until the queue changes. */
 const char *playback_current_uid(void);
+/* What's playing or paused, for the top of the queue: its title, artist (may be NULL) and length
+ * (0 if unknown). FALSE when stopped or with nothing. Valid until the queue changes. */
+BOOL playback_now_playing(const wchar_t **title, const wchar_t **artist, int *duration_ms);
+/* The queue's row for the rest of the album (e->rest): its title, "Rest of" the album (free() it),
+ * and how long those tracks are, into duration_ms. */
+wchar_t *playback_rest_title(const mc_up_next_entry *e, int64_t *duration_ms);
 BOOL playback_has_next(void);
 
 /* --demo-playing (main.c), for screenshots: shows track uid of the library in the

@@ -168,7 +168,7 @@ static struct {
   char menu_track_album[MC_UID_STRLEN];  /* and its album, or "" */
   char menu_track_artist[MC_UID_STRLEN]; /* and its artist, or "" */
   GSimpleAction *go_to_album, *go_to_artist;
-  GSimpleAction *queue_track[2]; /* the track menu's Play next and Play last */
+  GSimpleAction *queue_track; /* the track menu's Queue */
   GPtrArray *rows;              /* bound track rows, to mark the playing one */
   char playing_uid[MC_UID_STRLEN];
 } v;
@@ -237,7 +237,7 @@ static void on_edit_artist(GSimpleAction *action, GVariant *param, gpointer user
   if (v.menu_artist[0]) edit_dialog_present(v.a, EDIT_ARTIST, v.menu_artist);
 }
 
-/* The menu for the artist with uid, made each time it opens: Play next, Play last, Edit..., then Remove
+/* The menu for the artist with uid, made each time it opens: Queue, Edit..., then Remove
  * from this computer... or Sync to this computer where they apply. An artist can't be deleted
  * from the library, only their albums and tracks. */
 static GMenuModel *artist_menu(const char *uid) {
@@ -1085,8 +1085,7 @@ static GtkWidget *build_page(void) {
    * stack, artist_view_new()) resolve. */
   GMenu *model = g_menu_new();
   GMenu *section = g_menu_new();
-  g_menu_append(section, mc_str_mnemonic(MC_STR_PLAY_NEXT), "artist.play-next");
-  g_menu_append(section, mc_str_mnemonic(MC_STR_PLAY_LAST), "artist.play-last");
+  g_menu_append(section, mc_str_mnemonic(MC_STR_ENQUEUE), "artist.queue");
   g_menu_append(section, mc_str_mnemonic(MC_STR_ADD_TO_PLAYLIST_MENU), "artist.add-to-playlist");
   g_menu_append_section(model, NULL, G_MENU_MODEL(section));
   g_object_unref(section);
@@ -1225,7 +1224,7 @@ GtkWidget *artist_view_new(app *a, const artist_view_callbacks *cb) {
   g_signal_connect(v.go_to_artist, "activate", G_CALLBACK(on_go_to_artist), NULL);
   g_action_map_add_action(G_ACTION_MAP(actions), G_ACTION(v.go_to_artist));
   g_object_unref(v.go_to_artist);
-  track_menu_add_queue_actions(actions, v.menu_uid, v.queue_track);
+  v.queue_track = track_menu_add_queue_action(actions, v.menu_uid);
   gtk_widget_insert_action_group(v.stack, "artist", G_ACTION_GROUP(actions));
   v.menu_actions = G_ACTION_GROUP(actions); /* the stack keeps it */
   g_object_unref(actions);

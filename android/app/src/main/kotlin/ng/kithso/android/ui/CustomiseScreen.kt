@@ -44,12 +44,14 @@ import ng.kithso.android.R
  * The phone's Customise page, from the top of Settings: the main screen's sections, to drag into the
  * order it shows them in. [onOrder] has each new order, once a drag is let go or a section is
  * moved by an accessibility action. Under Artists is whether those only credited on others'
- * tracks are folded away ([foldCredited]), which [onFoldCredited] changes.
+ * tracks are folded away ([foldCredited]), which [onFoldCredited] changes; only while there are
+ * enough of them to fold ([canFoldCredited], see [foldsCreditedArtists]).
  */
 @Composable
 fun CustomiseScreen(
     order: List<Section>,
     onOrder: (List<Section>) -> Unit,
+    canFoldCredited: Boolean,
     foldCredited: Boolean,
     onFoldCredited: (Boolean) -> Unit,
     bottomPadding: Dp,
@@ -101,7 +103,7 @@ fun CustomiseScreen(
                     handle = with(reorder) { Modifier.dragHandle(section) },
                     lifted = section == reorder.dragged,
                     modifier = if (section == reorder.dragged) with(reorder) { Modifier.dragged(section) } else Modifier.animateItem(),
-                    option = if (section == Section.Artists) ({ FoldCreditedOption(foldCredited, onFoldCredited) }) else null,
+                    option = if (section == Section.Artists && canFoldCredited) ({ FoldCreditedOption(foldCredited, onFoldCredited) }) else null,
                 )
             }
         }

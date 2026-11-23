@@ -44,6 +44,10 @@ typedef enum mc_status {
 
 /* Library version as "major.minor.patch". Never fails, safe to call before mc_init(). */
 const char *mc_version(void);
+/* The size in bytes from which this build won't hold a track file, 0 for no limit: 2^31 (2 GiB)
+ * on 32-bit Android, whose 32-bit off_t TagLib and the decoder can't seek past, so such files
+ * are never imported, restored or synced there. For frontends that check before copying. */
+int64_t mc_file_size_limit(void);
 /* A short reason for status, in the UI language and lower case, to go inside a message:
  * "out of memory". */
 const char *mc_status_str(mc_status status);

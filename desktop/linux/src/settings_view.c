@@ -482,6 +482,10 @@ static void update_scrobble(settings_view *s) {
     else if (st.last_error == MC_ERR_NET) mc_format(line, sizeof line, mc_str(MC_STR_SCROBBLE_OFFLINE), MC_S(service));
     else if (st.pending > 0) mc_format(line, sizeof line, mc_str_plural(MC_STR_SCROBBLE_PENDING, st.pending), MC_D(st.pending));
     if (line[0]) g_string_append_printf(text, "\n%s", line);
+    if (st.ignored > 0) {
+      mc_format(line, sizeof line, mc_str_plural(MC_STR_SCROBBLE_IGNORED, st.ignored), MC_D(st.ignored), MC_S(service));
+      g_string_append_printf(text, "\n%s", line);
+    }
   } else if (have && !st.has_key) {
     g_string_append(text, mc_str(MC_STR_SCROBBLE_NO_KEY));
     enabled = FALSE;

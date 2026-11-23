@@ -60,7 +60,14 @@ typedef struct mc_plan {
  * that term is 0. Originals' sizes come from this device's files too (an original is the
  * same file everywhere), and are estimated at MC_PLAN_ORIGINAL_KBPS where this device has
  * none. The device is an archive if sync/archive.h says so. Free with mc_plan_free().
- * Selections naming uids the library doesn't have are skipped. */
+ * Selections naming uids the library doesn't have are skipped.
+ *
+ * On a build with a file size limit (32-bit Android, mc_file_too_big() in util/platform.h),
+ * this device's own plan leaves out each track a peer offered it in a file too big to hold,
+ * while the track's file_rev and the format it would come in are the same (sync.db's too_big,
+ * written by transfer.c): it isn't fetched, counted in the totals or reported missing, as if
+ * the profile didn't select it (wanted counts it out too). An original it already holds stays.
+ * Plans for other devices know nothing of it: a 64-bit phone in the group still takes them. */
 mc_status mc_plan_compute(mc_sync_db *sdb, mc_library *lib, const char *device_uid,
                           int64_t free_bytes, mc_plan **out);
 

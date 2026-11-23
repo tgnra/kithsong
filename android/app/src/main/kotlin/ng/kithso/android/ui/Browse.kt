@@ -70,7 +70,7 @@ private fun AlbumTile(
 
 /**
  * One row of an album grid; a short last row keeps the tiles the same width. Each tile has
- * [actions]' TalkBack actions for its album, if any.
+ * [actions]' TalkBack actions for its album, if any, and moves as [reflow] plays.
  */
 @Composable
 internal fun AlbumGridRow(
@@ -79,13 +79,14 @@ internal fun AlbumGridRow(
     onOpen: (CollectionRef) -> Unit,
     onMenu: (Album) -> Unit,
     actions: ((Album) -> List<CustomAccessibilityAction>)? = null,
+    reflow: AlbumReflow? = null,
 ) {
     Row(
         Modifier.padding(horizontal = BrowseGutter).padding(bottom = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(TileSpacing),
     ) {
         for (album in albums) {
-            val tile = Modifier.weight(1f)
+            val tile = Modifier.weight(1f).let { if (reflow == null) it else it.albumReflow(reflow, album.uid) }
             AlbumTile(album, album.artist, onOpen, onMenu, if (actions == null) tile else tile.semantics { customActions = actions(album) })
         }
         repeat(columns - albums.size) { Spacer(Modifier.weight(1f)) }

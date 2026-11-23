@@ -1,6 +1,6 @@
-/* The play queue's drop-down, under the toolbar's queue button: what the player has up next
- * (playback.h), a row per entry, a track or a block (an album or the like) with what's left of
- * it. Rows drag into another order as whole blocks. A popup window as volume_popup.c is: a
+/* The play queue's drop-down, under the toolbar's queue button: what's playing at the top, set
+ * apart, then what the player has up next (playback.h), a row per entry, a track or a block (an
+ * album or the like) with what's left of it. Rows drag into another order as whole blocks. A popup window as volume_popup.c is: a
  * click elsewhere, Escape or another window taking over closes it, and the main window keeps
  * looking active meanwhile. Only one exists at a time.
  */

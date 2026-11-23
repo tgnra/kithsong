@@ -31,7 +31,15 @@ typedef struct mc_unzip_stats {
   int files;    /* files extracted */
   int unsafe;   /* entries left out: absolute, or with ".." in the path (zip slip) */
   int64_t bytes; /* bytes written */
+  /* Entries left out as too big for this build (mc_file_too_big(), platform.h: 32-bit
+   * Android), by their safe path in the zip, '/' between parts; malloc'd, for
+   * mc_unzip_stats_free(). */
+  char **too_big;
+  int too_big_count;
 } mc_unzip_stats;
+
+/* Frees stats->too_big. */
+void mc_unzip_stats_free(mc_unzip_stats *stats);
 
 /* What the zips of one import session may hold together. mc_unzip adds what it wrote to used. */
 typedef struct mc_unzip_budget {
@@ -48,8 +56,9 @@ int mc_unzip_is_zip(const char *path);
  * that are absolute or climb out with ".." are left out and counted in stats->unsafe;
  * __MACOSX/ folders and .DS_Store files are left out silently. On Windows, characters a file
  * name can't hold become '_'. An entry whose path is already taken (a repeated name) is left
- * out. Nothing is written if the zip holds more than max_bytes uncompressed or more than the
- * free space at dest; the sizes are checked again while writing, so a zip whose headers lie
+ * out, and so is one too big for this build (stats->too_big). Nothing is written if the zip
+ * holds more than max_bytes uncompressed (not counting those) or more than the free space at
+ * dest; the sizes are checked again while writing, so a zip whose headers lie
  * stops there. With a budget, nothing is written either if the zip would take the session past
  * budget->max (MC_UNZIP_SESSION_FULL), or if the free space wouldn't also cover what earlier
  * zips extracted (budget->used): those files are still to be copied into the library.

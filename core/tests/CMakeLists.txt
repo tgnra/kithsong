@@ -54,6 +54,7 @@ kithsong_test(test_sync_files)
 target_link_libraries(test_sync_files PRIVATE mbedcrypto mc_stb)  # hashes the files it compares, makes covers
 set_tests_properties(test_sync_files PROPERTIES TIMEOUT 300)
 kithsong_test(test_sync_lossy)
+kithsong_test(test_sync_too_big)
 target_link_libraries(test_sync_lossy PRIVATE mbedcrypto)  # hashes the files it compares
 set_tests_properties(test_sync_lossy PROPERTIES TIMEOUT 300)
 kithsong_test(test_sync_power)
@@ -93,6 +94,8 @@ target_link_libraries(test_import_cover PRIVATE mc_stb)  # makes a cover the use
 kithsong_test(test_import_zip)
 target_link_libraries(test_import_zip PRIVATE mc_miniz)  # builds the zips it imports
 kithsong_test(test_long_paths)
+kithsong_test(test_too_big)
+target_link_libraries(test_too_big PRIVATE mc_miniz)  # builds the zip it imports
 kithsong_test(test_dupes)
 kithsong_test(test_import_dupes)
 kithsong_test(test_delete)

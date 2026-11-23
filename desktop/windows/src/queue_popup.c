@@ -23,6 +23,9 @@ enum {
   WIDTH = 360,
   PAD = 8,
   HEADER_H = 44,
+  NOW_H = 72,   /* what's playing, under the header, when there's something */
+  NOW_PAD = 8,  /* inside it */
+  NOW_GAP = 4,  /* above and below it */
   CLEAR_H = 28,
   CLEAR_TEXT_PAD = 12, /* each side of its label */
   ROW_H = 48,
@@ -47,6 +50,7 @@ typedef struct queue_row {
   wchar_t *byline; /* its artist, what it is, or how many tracks are left; may be NULL */
   wchar_t duration[16];
   int duration_w; /* in device pixels */
+  BOOL rest;      /* the rest of the album: it moves, but has no x */
 } queue_row;
 
 static struct {
@@ -61,6 +65,10 @@ static struct {
 
   queue_row *rows; /* the queue, in order */
   int count;
+  BOOL now_shown;     /* what's playing, above the rows: */
+  wchar_t *now_title; /* ...its title, */
+  wchar_t *now_byline; /* its artist, or NULL, */
+  wchar_t now_duration[16]; /* and its length */
 
   int focus;           /* the row with the keyboard focus, or -1 with none */
   BOOL focus_clear;    /* Clear has it instead */
@@ -131,15 +139,20 @@ static int row_at(int x, int y) {
 }
 
 static BOOL on_remove(int i, POINT pt) {
-  if (i < 0 || i >= s.count) return FALSE;
+  if (i < 0 || i >= s.count || s.rows[i].rest) return FALSE;
   RECT r = remove_rect(i);
   return PtInRect(&r, pt);
+}
+
+/* The height of what's playing, under the header: nothing with nothing playing. */
+static int now_h(void) {
+  return s.now_shown ? scale(NOW_H) : 0;
 }
 
 static void relayout(void) {
   RECT rc;
   GetClientRect(s.wnd, &rc);
-  RECT view = {0, scale(HEADER_H), rc.right, rc.bottom - scale(PAD)};
+  RECT view = {0, scale(HEADER_H) + now_h(), rc.right, rc.bottom - scale(PAD)};
   scroller_resize(&s.scroll, &view, s.count * scale(ROW_H));
 
   const wchar_t *label = mc_wstr(MC_STR_QUEUE_CLEAR);
@@ -168,7 +181,7 @@ static void update_hover(void) {
   s.hot_remove = hot_remove;
   s.hot_clear = hot_clear;
   RECT tip = {0};
-  if (hot >= 0) tip = remove_rect(hot);
+  if (hot >= 0 && !s.rows[hot].rest) tip = remove_rect(hot);
   TTTOOLINFOW ti = {.cbSize = sizeof ti, .hwnd = s.wnd, .uId = 1, .rect = tip};
   SendMessageW(s.tooltip, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
   InvalidateRect(s.wnd, NULL, FALSE);
@@ -190,6 +203,20 @@ static void free_rows(void) {
   s.count = 0;
 }
 
+/* What's playing, as playback has it now. */
+static void read_now(void) {
+  free(s.now_title);
+  free(s.now_byline);
+  s.now_title = s.now_byline = NULL;
+  const wchar_t *title = NULL, *artist = NULL;
+  int duration_ms = 0;
+  s.now_shown = playback_now_playing(&title, &artist, &duration_ms);
+  if (!s.now_shown) return;
+  s.now_title = _wcsdup(title ? title : L"");
+  s.now_byline = artist ? _wcsdup(artist) : NULL;
+  format_duration(duration_ms, s.now_duration, 16);
+}
+
 static uint32_t id_of(int i) {
   return i >= 0 && i < s.count ? s.rows[i].id : 0;
 }
@@ -208,6 +235,7 @@ static void ui_changed(void);
 static void reload(void) {
   uint32_t focus = id_of(s.focus), drag = id_of(s.drag_row), remove = id_of(s.press_remove);
   int was = s.focus;
+  read_now();
   mc_up_next_list *list = playback_up_next();
   free_rows();
   int n = list ? list->count : 0;
@@ -219,7 +247,9 @@ static void reload(void) {
     const mc_up_next_entry *e = &list->items[i];
     queue_row *r = &s.rows[i];
     r->id = e->id;
-    r->title = wstr_dup_from_utf8(e->title ? e->title : "");
+    r->rest = e->rest;
+    int64_t duration_ms = e->duration_ms;
+    r->title = e->rest ? playback_rest_title(e, &duration_ms) : wstr_dup_from_utf8(e->title ? e->title : "");
     if (e->artist) {
       r->byline = wstr_dup_from_utf8(e->artist);
     } else if (e->block) {
@@ -227,7 +257,7 @@ static void reload(void) {
       mc_wformat(tracks, 64, mc_str_plural(MC_STR_TRACKS, e->tracks), MC_D(e->tracks));
       r->byline = _wcsdup(tracks);
     }
-    format_duration(e->duration_ms, r->duration, 16);
+    format_duration(duration_ms, r->duration, 16);
     SIZE text = {0};
     GetTextExtentPoint32W(dc, r->duration, lstrlenW(r->duration), &text);
     r->duration_w = max(scale(DUR_W), text.cx);
@@ -257,7 +287,7 @@ void queue_popup_update(void) {
 }
 
 static void remove_row(int i) {
-  playback_up_next_remove(id_of(i));
+  if (i >= 0 && i < s.count && !s.rows[i].rest) playback_up_next_remove(id_of(i));
 }
 
 /* to is a place between rows: 0 before the first, count after the last. */
@@ -340,7 +370,7 @@ static void paint_row(canvas *c, int i) {
     canvas_text(c, L"\xE76F", 1, &grip, one_line | DT_CENTER, s.icon_font, dim); /* GripperBarHorizontal */
 
   RECT x = remove_rect(i);
-  if (i == s.hot || focused) {
+  if ((i == s.hot || focused) && !s.rows[i].rest) {
     control_state remove = s.press_remove == i ? STATE_PRESSED : i == s.hot && s.hot_remove ? STATE_HOT : STATE_NORMAL;
     COLORREF color = remove == STATE_NORMAL ? dim : theme_draw_state(c, &x, scale(RADIUS), remove);
     canvas_text(c, L"\xE711", 1, &x, one_line | DT_CENTER, s.icon_font, color); /* Cancel */
@@ -353,8 +383,34 @@ static void paint_row(canvas *c, int i) {
   int top = r.top + (r.bottom - r.top - s.line_h - s.sub_line_h) / 2;
   RECT title = {grip.right, top, dur.left - scale(DUR_GAP), top + s.line_h};
   RECT byline = {grip.right, title.bottom, title.right, title.bottom + s.sub_line_h};
-  canvas_text(c, rw->title ? rw->title : L"", -1, &title, one_line | DT_END_ELLIPSIS, s.font, text);
+  COLORREF title_color = rw->rest && !theme.high_contrast && state == STATE_NORMAL ? theme.accent : text;
+  canvas_text(c, rw->title ? rw->title : L"", -1, &title, one_line | DT_END_ELLIPSIS, s.font, title_color);
   if (rw->byline) canvas_text(c, rw->byline, -1, &byline, one_line | DT_END_ELLIPSIS, s.sub_font, dim);
+}
+
+/* What's playing, set apart from the rows under it: a tinted panel, headed Now playing in the accent
+ * colour, with a play mark by its title. Not a row: it can't be moved, removed or focused. */
+static void paint_now(canvas *c, const RECT *client) {
+  if (!s.now_shown) return;
+  RECT r = {scale(PAD), scale(HEADER_H) + scale(NOW_GAP), client->right - scale(PAD),
+            scale(HEADER_H) + scale(NOW_H) - scale(NOW_GAP)};
+  int radius = scale(RADIUS);
+  if (theme.high_contrast) canvas_frame(c, &r, radius, 1, theme.text, 255);
+  else canvas_fill(c, &r, radius, theme.accent, theme.dark ? 40 : 28);
+  COLORREF heading = theme.high_contrast ? theme.text : theme.accent, dim = theme.high_contrast ? theme.text : theme.text2;
+  UINT one_line = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX;
+  int left = r.left + scale(NOW_PAD), right = r.right - scale(NOW_PAD);
+  int top = r.top + (r.bottom - r.top - s.sub_line_h - s.line_h - s.sub_line_h) / 2;
+  RECT label = {left, top, right, top + s.sub_line_h};
+  canvas_text(c, mc_wstr(MC_STR_QUEUE_NOW_PLAYING), -1, &label, one_line | DT_END_ELLIPSIS, s.sub_font, heading);
+  RECT mark = {left, label.bottom, left + scale(GRIP_W) - scale(NOW_PAD), label.bottom + s.line_h + s.sub_line_h};
+  canvas_text(c, L"\xE768", 1, &mark, one_line | DT_CENTER, s.icon_font, heading); /* Play */
+  RECT dur = {right - scale(DUR_W), mark.top, right, mark.bottom};
+  canvas_text(c, s.now_duration, -1, &dur, one_line | DT_RIGHT, s.sub_font, dim);
+  RECT title = {mark.right, mark.top, dur.left - scale(DUR_GAP), mark.top + s.line_h};
+  RECT byline = {mark.right, title.bottom, title.right, title.bottom + s.sub_line_h};
+  canvas_text(c, s.now_title ? s.now_title : L"", -1, &title, one_line | DT_END_ELLIPSIS, s.font, theme.text);
+  if (s.now_byline) canvas_text(c, s.now_byline, -1, &byline, one_line | DT_END_ELLIPSIS, s.sub_font, dim);
 }
 
 /* A standard button, as the track list's Shuffle is. */
@@ -393,12 +449,13 @@ static void paint(HDC dc, const RECT *dirty) {
   RECT header = {0, 0, client.right, s.scroll.view.top}, foot = {0, s.scroll.view.bottom, client.right, client.bottom};
   canvas_clear(c, &header, theme.bg, 255);
   canvas_clear(c, &foot, theme.bg, 255);
-  RECT title = {scale(PAD) + scale(REMOVE_PAD), 0, s.clear.left - scale(PAD), header.bottom};
+  RECT title = {scale(PAD) + scale(REMOVE_PAD), 0, s.clear.left - scale(PAD), scale(HEADER_H)};
   canvas_text(c, mc_wstr(MC_STR_QUEUE), -1, &title, DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
               s.title_font, theme.text);
   paint_clear(c);
-  RECT rule = {0, header.bottom - 1, client.right, header.bottom};
+  RECT rule = {0, scale(HEADER_H) - 1, client.right, scale(HEADER_H)};
   canvas_clear(c, &rule, theme.line, 255);
+  paint_now(c, &client);
 
   scroller_paint(&s.scroll, c);
   if (!s.rounded) canvas_frame(c, &client, 0, 1, theme.high_contrast ? theme.text : theme.line, 255);
@@ -430,9 +487,10 @@ void queue_popup_close(void) {
 
 /* --- UI Automation (uia.h) ---
  *
- * The nodes: Clear, then the list, whose rows come next, then each row's x, its only child. */
+ * The nodes: what's playing while there's something, Clear, then the list, whose rows come next,
+ * then each row's x, its only child. */
 
-enum { UI_CLEAR, UI_LIST, UI_ROWS };
+enum { UI_NOW, UI_CLEAR, UI_LIST, UI_ROWS };
 
 static int ui_row(int i) {
   return UI_ROWS + i;
@@ -447,8 +505,19 @@ static BOOL ui_node(int i, uia_node *n) {
   if (i == UIA_ROOT) {
     n->type = UIA_PaneControlTypeId;
     lstrcpynW(n->name, mc_wstr(MC_STR_QUEUE), 512);
-    n->first = UI_CLEAR;
-    n->count = 2;
+    n->first = s.now_shown ? UI_NOW : UI_CLEAR;
+    n->count = s.now_shown ? 3 : 2;
+    return TRUE;
+  }
+  if (i == UI_NOW) {
+    if (!s.now_shown) return FALSE;
+    RECT client;
+    GetClientRect(s.wnd, &client);
+    n->type = UIA_TextControlTypeId;
+    SetRect(&n->rect, scale(PAD), scale(HEADER_H), client.right - scale(PAD), scale(HEADER_H) + scale(NOW_H));
+    n->automation_id = L"NowPlaying";
+    uia_name(n, mc_wstr(MC_STR_QUEUE_NOW_PLAYING), s.now_title ? s.now_title : L"", s.now_byline ? s.now_byline : L"",
+             s.now_duration, NULL);
     return TRUE;
   }
   if (i == UI_CLEAR) {
@@ -474,6 +543,7 @@ static BOOL ui_node(int i, uia_node *n) {
   if (r < 0 || r >= 2 * s.count) return FALSE;
   if (r >= s.count) { /* an x */
     r -= s.count;
+    if (s.rows[r].rest) return FALSE;
     RECT x = remove_rect(r);
     n->parent = ui_row(r);
     n->type = UIA_ButtonControlTypeId;
@@ -489,10 +559,10 @@ static BOOL ui_node(int i, uia_node *n) {
   n->type = UIA_ListItemControlTypeId;
   n->flags = UIA_FOCUSABLE | UIA_SELECTABLE | (r == s.focus ? UIA_SELECTED : 0);
   n->first = ui_remove(r);
-  n->count = 1;
+  n->count = rw->rest ? 0 : 1;
   IntersectRect(&n->rect, &fill, &s.scroll.view);
   uia_name(n, rw->title ? rw->title : L"", rw->byline ? rw->byline : L"", rw->duration, NULL);
-  lstrcpynW(n->help, mc_wstr(MC_STR_QUEUE_ROW_HELP), 256);
+  lstrcpynW(n->help, mc_wstr(rw->rest ? MC_STR_QUEUE_REST_HELP : MC_STR_QUEUE_ROW_HELP), 256);
   return TRUE;
 }
 
@@ -562,6 +632,7 @@ static const uia_ops ui_ops = {.node = ui_node, .focus = ui_focus, .at = ui_at, 
 /* After the rows changed: what the nodes are, so clients only start over when they did. */
 static void ui_changed(void) {
   unsigned long sig = uia_hash(0, &s.count, sizeof s.count);
+  sig = uia_hash(sig, &s.now_shown, sizeof s.now_shown);
   for (int i = 0; i < s.count; i++) sig = uia_hash(sig, &s.rows[i].id, sizeof s.rows[i].id);
   uia_changed(&ui, sig);
 }
@@ -727,6 +798,8 @@ static LRESULT CALLBACK popup_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       uia_destroy(&ui);
       canvas_free(&s.buf);
       free_rows();
+      free(s.now_title);
+      free(s.now_byline);
       HFONT fonts[] = {s.title_font, s.font, s.sub_font, s.icon_font};
       for (int i = 0; i < 4; i++)
         if (fonts[i]) DeleteObject(fonts[i]);
@@ -817,7 +890,7 @@ void queue_popup_toggle(HWND anchor, UINT dpi) {
   RECT a;
   GetWindowRect(anchor, &a);
   int rows = max(MIN_ROWS, min(s.count, MAX_ROWS));
-  int w = scale(WIDTH), h = scale(HEADER_H + rows * ROW_H + PAD);
+  int w = scale(WIDTH), h = scale(HEADER_H + rows * ROW_H + PAD) + now_h();
   int x = a.right - w, y = a.bottom + scale(DROP);
   MONITORINFO mi = {.cbSize = sizeof mi};
   if (GetMonitorInfoW(MonitorFromWindow(anchor, MONITOR_DEFAULTTONEAREST), &mi)) {

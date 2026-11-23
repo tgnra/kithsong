@@ -7,9 +7,10 @@ fun interface ArchiveProgress {
 
 /**
  * How an export or restore ended: [status] is an mc_status (0 for done, [CANCELLED] if
- * stopped), [problem] an mc_archive_problem saying why it failed.
+ * stopped), [problem] an mc_archive_problem saying why it failed. [tooBig]: the files a restore
+ * left out as 2 GiB or more, which a 32-bit phone can't play; their tracks have no file here.
  */
-data class ArchiveOutcome(val status: Int, val problem: Int) {
+data class ArchiveOutcome(val status: Int, val problem: Int, val tooBig: Int = 0) {
     val ok: Boolean get() = status == 0
     val cancelled: Boolean get() = status == CANCELLED
 
@@ -54,7 +55,7 @@ object LibraryArchive {
     fun exportBytes(zipPath: String): Long? = nativeInfo(zipPath)?.get(1)
 
     private fun outcome(values: IntArray?): ArchiveOutcome =
-        values?.let { ArchiveOutcome(it[0], it[1]) } ?: throw OutOfMemoryError()
+        values?.let { ArchiveOutcome(it[0], it[1], it[2]) } ?: throw OutOfMemoryError()
 
     @JvmStatic private external fun nativeExport(handle: Long, tempDir: String, fd: Int, listener: ArchiveProgress): IntArray?
     @JvmStatic private external fun nativeRestore(handle: Long, zipPath: String, tempDir: String, listener: ArchiveProgress): IntArray?

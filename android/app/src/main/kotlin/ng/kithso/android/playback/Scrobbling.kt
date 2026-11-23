@@ -35,6 +35,8 @@ class Scrobbling(
         val username: String? = null,
         val hasKey: Boolean = true,
         val pending: Int = 0,
+        /** Plays the service ignored since the app started (only shown, never kept). */
+        val ignored: Int = 0,
         val lastError: Int = CoreScrobbler.STATUS_OK,
         /** A sign-in is waiting for the user to approve it in the browser. */
         val signingIn: Boolean = false,
@@ -109,6 +111,7 @@ class Scrobbling(
             username = status.username,
             hasKey = status.hasKey,
             pending = status.pending,
+            ignored = status.ignored,
             lastError = status.lastError,
             service = status.service,
             serviceName = status.serviceName,

@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "library/library_internal.h"
+#include "util/platform.h"
 #include "sync/archive.h"
 #include "sync/merge.h"
 
@@ -27,6 +28,8 @@ typedef struct cand {
   int64_t held;      /* bytes of every file of it here */
   int selected;      /* what the selection says, before any exclusion */
   int wanted;
+  int too_big;       /* a peer offered it in a file too big for this device: */
+  int too_big_kbps;  /* in this format (0 the original) */
 } cand;
 
 static int is_uid(const char *s) {
@@ -281,6 +284,41 @@ static mc_status apply_exclusions(mc_sync_db *sdb, mc_library *lib, const char *
   return st;
 }
 
+/* This device's tracks a peer offered in a file too big for it (sync_db.c's too_big), while
+ * the track's file_rev is still the one it was offered at. */
+static mc_status read_too_big(mc_sync_db *sdb, mc_library *lib, cand *cands, int n) {
+  sqlite3_stmt *stmt, *rev;
+  if (sqlite3_prepare_v2(mc_sync_db_handle(sdb), "SELECT track_uid, file_rev, kbps FROM too_big",
+                         -1, &stmt, NULL) != SQLITE_OK)
+    return MC_ERR_DB;
+  if (sqlite3_prepare_v2(mc_library_db(lib), "SELECT 1 FROM tracks WHERE uid = ?1 AND file_rev IS ?2",
+                         -1, &rev, NULL) != SQLITE_OK) {
+    sqlite3_finalize(stmt);
+    return MC_ERR_DB;
+  }
+  mc_status st = MC_OK;
+  int rc;
+  while (st == MC_OK && (rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    const char *uid = (const char *)sqlite3_column_text(stmt, 0);
+    cand *c = uid ? bsearch(uid, cands, (size_t)n, sizeof *cands, cand_cmp) : NULL;
+    if (!c) continue;
+    sqlite3_bind_text(rev, 1, uid, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_value(rev, 2, sqlite3_column_value(stmt, 1));
+    int same = sqlite3_step(rev);
+    if (same == SQLITE_ROW) {
+      c->too_big = 1;
+      c->too_big_kbps = sqlite3_column_int(stmt, 2);
+    } else if (same != SQLITE_DONE) {
+      st = MC_ERR_DB;
+    }
+    sqlite3_reset(rev);
+  }
+  if (st == MC_OK && rc != SQLITE_DONE) st = MC_ERR_DB;
+  sqlite3_finalize(rev);
+  sqlite3_finalize(stmt);
+  return st;
+}
+
 /* --- Sizing --- */
 
 /* What the device should hold of c at kbps (0 for originals), and its size. */
@@ -305,10 +343,22 @@ static void size_at(const cand *c, int kbps, mc_transcode_opts *format, int64_t 
     *bytes = 0;
 }
 
+/* Whether c is left out at kbps as too big for this device: a peer offered it in that format
+ * in a file this build can't hold (sync_db.c's too_big). Estimates don't count, as an original's
+ * is only a guess. An original already here, from before the limit, stays. */
+static int too_big_at(const cand *c, int kbps) {
+  if (!c->too_big) return 0;
+  mc_transcode_opts f;
+  int64_t b;
+  size_at(c, kbps, &f, &b);
+  if (f.format == MC_FORMAT_ORIGINAL) return c->too_big_kbps == 0 && !c->has_orig;
+  return c->too_big_kbps == f.bitrate_kbps;
+}
+
 static int64_t total_at(const cand *cands, int n, int kbps) {
   int64_t total = 0;
   for (int i = 0; i < n; i++) {
-    if (!cands[i].wanted) continue;
+    if (!cands[i].wanted || too_big_at(&cands[i], kbps)) continue;
     mc_transcode_opts f;
     int64_t b;
     size_at(&cands[i], kbps, &f, &b);
@@ -427,6 +477,10 @@ mc_status mc_plan_compute_profile(mc_sync_db *sdb, mc_library *lib, const char *
     /* An archive keeps everything; anyone else, everything but what was removed from it. */
     if (st == MC_OK && !plan->archive)
       st = apply_exclusions(sdb, lib, device_uid, all, profile, cands, n);
+    /* Files too big for this build (32-bit Android): only this device knows what it was
+     * offered, so only its own plan leaves them out. */
+    if (st == MC_OK && mc_max_file_bytes > 0 && !strcmp(device_uid, mc_sync_db_device_uid(sdb)))
+      st = read_too_big(sdb, lib, cands, n);
   }
   for (int i = 0; st == MC_OK && i < n; i++) plan->wanted += cands[i].wanted;
   if (st == MC_OK && (flags & MC_PLAN_SIZES))
@@ -466,6 +520,10 @@ mc_status mc_plan_compute_profile(mc_sync_db *sdb, mc_library *lib, const char *
     if (wanted && !plan->tracks) st = MC_ERR_NOMEM;
     for (int i = 0; st == MC_OK && i < n; i++) {
       if (!cands[i].wanted) continue;
+      if (too_big_at(&cands[i], plan->kbps)) {
+        plan->wanted--;
+        continue;
+      }
       mc_plan_track *t = &plan->tracks[plan->count++];
       memcpy(t->track_uid, cands[i].uid, MC_UID_STRLEN);
       t->duration_ms = cands[i].duration_ms;

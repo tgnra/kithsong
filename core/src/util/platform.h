@@ -145,6 +145,15 @@ FILE *mc_fopen_shared(const char *path);
 /* Creates a directory and any missing parents. Succeeds if it already exists. */
 mc_status mc_mkdirs(const char *path);
 mc_status mc_file_info(const char *path, int64_t *size, int64_t *mtime_ms);
+/* The largest track file a 32-bit Android build holds: 2 GiB. Its off_t is 32 bits, so TagLib
+ * and the decoder's fseeko()/ftello() can't reach past 2^31 - 1 bytes: a file of 2^31 bytes or
+ * more is never imported, restored or synced there. 64-bit builds, phones too, have no limit. */
+#define MC_32BIT_MAX_FILE_BYTES ((int64_t)1 << 31)
+/* This build's limit, 0 for none: MC_32BIT_MAX_FILE_BYTES on 32-bit Android. A variable so
+ * tests can set it. */
+extern int64_t mc_max_file_bytes;
+/* Whether a track file of size bytes is too big for this build. */
+int mc_file_too_big(int64_t size);
 mc_status mc_touch(const char *path);
 int mc_file_exists(const char *path);
 /* Whether path is a symbolic link, or on Windows a junction (mount point): one that may

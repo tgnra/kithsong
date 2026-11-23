@@ -42,7 +42,7 @@ item_menu_result item_menu_playlist(const item_menu_options *o, BOOL smart);
 item_menu_result item_menu_group(const item_menu_options *o, BOOL smart);
 
 /* A playlist's items, for a menu with commands of its own: the track list's [...] button. */
-void item_menu_append_playlist(HMENU menu, BOOL smart, BOOL rename_key, UINT play_next, UINT play_last, UINT edit_rules,
-                               UINT rename, UINT del);
+void item_menu_append_playlist(HMENU menu, BOOL smart, BOOL rename_key, UINT queue, UINT edit_rules, UINT rename,
+                               UINT del);
 
 #endif

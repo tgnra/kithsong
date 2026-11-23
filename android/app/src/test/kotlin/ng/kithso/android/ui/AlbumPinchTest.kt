@@ -1,5 +1,7 @@
 package ng.kithso.android.ui
 
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.unit.dp
 import ng.kithso.android.data.Album
 import ng.kithso.android.data.ArtRef
@@ -57,5 +59,21 @@ class AlbumPinchTest {
                 assertEquals(true, row.albums.any { it.title.first() == entry.label.first() })
             }
         }
+    }
+
+    @Test
+    fun `a reflowing tile starts where it was, at its old size, and ends where it is`() {
+        // A 200px tile at (16, 500) becomes a 130px one at (160, 300).
+        val from = Rect(16f, 500f, 216f, 760f)
+        val start = tileShift(from, Offset(160f, 300f), 130f, 0f)
+        assertEquals(TileShift(-144f, 200f, 200f / 130f), start)
+        val end = tileShift(from, Offset(160f, 300f), 130f, 1f)
+        assertEquals(0f, end.dx, 0.001f)
+        assertEquals(0f, end.dy, 0.001f)
+        assertEquals(1f, end.scale, 0.001f)
+        val half = tileShift(from, Offset(160f, 300f), 130f, 0.5f)
+        assertEquals(-72f, half.dx, 0.001f)
+        assertEquals(100f, half.dy, 0.001f)
+        assertEquals((200f / 130f + 1) / 2, half.scale, 0.001f)
     }
 }

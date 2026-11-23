@@ -98,6 +98,9 @@ fun ScrobblingSettings(scrobbling: Scrobbling) {
             Column(Modifier.semantics { liveRegion = LiveRegionMode.Polite }) {
                 Text(account)
                 detail?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                if (state.username != null && state.ignored > 0) {
+                    Text(pluralStringResource(R.plurals.scrobble_ignored, state.ignored, state.ignored, service))
+                }
             }
         },
         trailingContent = {

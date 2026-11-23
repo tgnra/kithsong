@@ -138,6 +138,32 @@ class MainItemsTest {
         }
     }
 
+    // [own] artists with a release of their own, then [credited] only credited on others' tracks.
+    private fun withCredited(own: Int, credited: Int) =
+        List(own + credited) { Artist("x$it", "${'A' + it % 26} artist", 1, art, creditOnly = it >= own) }
+
+    @Test
+    fun creditedArtistsFoldOnlyWhenMoreThanAThirdOfTheOthers() {
+        // Exactly a third as many isn't enough; one more is.
+        assertTrue(!foldsCreditedArtists(withCredited(9, 3)))
+        assertTrue(foldsCreditedArtists(withCredited(9, 4)))
+        assertTrue(!foldsCreditedArtists(withCredited(30, 10)))
+        assertTrue(foldsCreditedArtists(withCredited(29, 10)))
+        // A third of 10 is 3.33...: 3 isn't more, 4 is.
+        assertTrue(!foldsCreditedArtists(withCredited(10, 3)))
+        assertTrue(foldsCreditedArtists(withCredited(10, 4)))
+        // None to fold never folds; any with no one else to fold them from does.
+        assertTrue(!foldsCreditedArtists(emptyList()))
+        assertTrue(!foldsCreditedArtists(withCredited(5, 0)))
+        assertTrue(foldsCreditedArtists(withCredited(0, 1)))
+
+        // At exactly a third the main screen shows them all, with no row, as App passes it on.
+        val library = Library(emptyList(), emptyList(), emptyList(), withCredited(9, 3), emptyList())
+        val items = mainItems(library, 2, false, false, foldCredited = foldsCreditedArtists(library.artists))
+        assertEquals(library.artists, artistsOf(items))
+        assertTrue(items.none { it is MainItem.CreditedArtistsRow })
+    }
+
     @Test
     fun openingTheFoldCanBringTheArtistsUpToHavingLetters() {
         val artists = List(12) { Artist("x$it", "${'A' + it} artist", 1, art, creditOnly = it >= 5) }

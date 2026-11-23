@@ -4,6 +4,10 @@ package ng.kithso.core
  * What's left of an entry of up next (mc_up_next_entry). [id] stays while it's up next. [block]
  * if it was added as a whole, an album say; [artist] is null if there's none, and a block's row
  * then says how many [tracks] are left. [firstItem] is the first of those as a queue item.
+ * [afterList] if it waits for the rest of the album that's playing (see [CorePlayer.addUpNext]).
+ * With [rest] it isn't an entry but that rest of the album, as a row where it plays among them:
+ * [id] is [REST_ID], [tracks] are left of it from [firstItem] on, and its title is for the app to
+ * make (mc_player_up_next). It moves like an entry, but can't be removed.
  * Made in jni_up_next.c.
  */
 data class UpNextEntry(
@@ -16,7 +20,14 @@ data class UpNextEntry(
     val firstItem: Int,
     /** A [CorePlayer.PlayContext]'s ordinal. */
     val context: Int,
-)
+    val afterList: Boolean,
+    val rest: Boolean,
+) {
+    companion object {
+        /** The rest of the album's [id] (MC_UP_NEXT_REST). */
+        const val REST_ID = -1
+    }
+}
 
 /**
  * kithcore's gapless player (mc_player). It may be used from any thread. [onEvent] is called
@@ -130,14 +141,15 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
     fun order(from: Int, count: Int): IntArray = nativeOrder(handle, from, count)
 
     /**
-     * What Play Next ([front]) or Play Last adds for [uid] of [library]: its tracks with a file
+     * What Queue adds for [uid] of [library], at the end of up next: its tracks with a file
      * here, as one block called [name] unless [asTracks] or [name] is null (mc_up_next_add_load).
-     * False if it has none. Tracks of up next are items like any other, at the end of the
-     * queue: [Event.Queue] says so, and can lag by seconds behind [Status.count];
-     * [queueUid] says what the new items are. Call on [library]'s thread.
+     * An album or album group added while an album plays in order goes after the rest of that
+     * album instead (mc_player_up_next_add). False if it has none. Tracks of up next are items
+     * like any other, at the end of the queue: [Event.Queue] says so, and can lag by seconds
+     * behind [Status.count]; [queueUid] says what the new items are. Call on [library]'s thread.
      */
-    fun addUpNext(library: CoreLibrary, kind: UpNextKind, uid: String, name: String?, asTracks: Boolean, front: Boolean): Boolean =
-        nativeUpNextAdd(handle, library.handle, kind.ordinal, uid, name, asTracks, front)
+    fun addUpNext(library: CoreLibrary, kind: UpNextKind, uid: String, name: String?, asTracks: Boolean): Boolean =
+        nativeUpNextAdd(handle, library.handle, kind.ordinal, uid, name, asTracks)
 
     /** Up next now, in the order it plays. */
     val upNext: List<UpNextEntry> get() = nativeUpNext(handle).asList()
@@ -240,7 +252,7 @@ class CorePlayer(private val listener: (Event) -> Unit) : AutoCloseable {
         @JvmStatic external fun nativeSetShuffle(handle: Long, on: Boolean)
         @JvmStatic external fun nativeOrder(handle: Long, from: Int, count: Int): IntArray
         @JvmStatic external fun nativeUpNextAdd(
-            handle: Long, library: Long, kind: Int, uid: String, name: String?, asTracks: Boolean, front: Boolean,
+            handle: Long, library: Long, kind: Int, uid: String, name: String?, asTracks: Boolean,
         ): Boolean
         @JvmStatic external fun nativeUpNext(handle: Long): Array<UpNextEntry>
         @JvmStatic external fun nativeUpNextMove(handle: Long, id: Int, to: Int)

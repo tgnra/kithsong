@@ -14,6 +14,12 @@ object NativeCore {
     @JvmStatic external fun init(): Int
 
     /**
+     * mc_file_size_limit(): the size in bytes from which this build won't hold a track file,
+     * 0 for none. 2 GiB on 32-bit phones, whose TagLib and decoder can't seek past it.
+     */
+    @JvmStatic external fun fileSizeLimit(): Long
+
+    /**
      * mc_strings_set_locale(): the language of the text the core writes itself, such as
      * import errors and status reasons, from a BCP 47 tag. English until called.
      */

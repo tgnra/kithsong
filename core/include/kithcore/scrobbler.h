@@ -92,6 +92,9 @@ typedef struct mc_scrobbler_status {
   char *service_name; /* "Last.fm", "Libre.fm", or another's host name (from api_url) */
   mc_scrobbler_service service;
   int pending;        /* plays queued here and not yet sent */
+  int ignored;        /* plays the service ignored (its filters, or a bad timestamp) or
+                       * wouldn't take, since this scrobbler started; they're dropped, and
+                       * each is logged. Not kept anywhere */
   int has_key;        /* 0 when the service has no API key: Last.fm in a build without one,
                        * where signing in fails with MC_ERR_AUTH; say so instead */
   mc_status last_error; /* of the last call to the service: MC_ERR_AUTH when it refused the

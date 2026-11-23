@@ -180,5 +180,9 @@ const mc_changelog_table *mc_library_tracked(size_t *count);
 mc_status mc_library_meta_get(mc_library *lib, const char *key, char *out, size_t cap);
 mc_status mc_library_meta_set(mc_library *lib, const char *key, const char *value);
 
+/* Tests only: when set, mc_library_restore() calls it with the restored database's staged
+ * copy just before that replaces the library's; non-zero fails the restore there
+ * (MC_ARCHIVE_WRITE). NULL by default. */
+extern int (*mc_library_restore_test_swap)(const char *db_path);
 
 #endif

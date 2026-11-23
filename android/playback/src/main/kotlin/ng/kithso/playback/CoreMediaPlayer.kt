@@ -131,8 +131,19 @@ class CoreMediaPlayer(
     private var growing = false
     private var queueVersion = 0
 
-    /** Up next now, in the order it plays. */
-    val upNext: List<UpNextEntry> get() = core.upNext
+    /**
+     * Up next now, in the order it plays. The rest of the album's row ([UpNextEntry.rest]) has the
+     * album's name as its title, and its tracks' length.
+     */
+    val upNext: List<UpNextEntry>
+        get() = core.upNext.map { entry ->
+            if (!entry.rest) return@map entry
+            val rest = (entry.firstItem until entry.firstItem + entry.tracks).mapNotNull { items.getOrNull(it)?.mediaMetadata }
+            entry.copy(
+                title = rest.firstOrNull()?.albumTitle?.toString().orEmpty(),
+                durationMs = rest.sumOf { it.durationMs ?: 0L },
+            )
+        }
 
     /** Another device the sound goes to, whose volume is its own; see [remoteOutput]. */
     interface RemoteOutput {
@@ -209,8 +220,8 @@ class CoreMediaPlayer(
     }
 
     /** See [CorePlayer.addUpNext]. Off the main thread, on [library]'s. */
-    fun addUpNext(library: CoreLibrary, kind: CorePlayer.UpNextKind, uid: String, name: String?, asTracks: Boolean, front: Boolean) =
-        core.addUpNext(library, kind, uid, name, asTracks, front)
+    fun addUpNext(library: CoreLibrary, kind: CorePlayer.UpNextKind, uid: String, name: String?, asTracks: Boolean) =
+        core.addUpNext(library, kind, uid, name, asTracks)
 
     fun moveUpNext(id: Int, to: Int) = core.moveUpNext(id, to)
     fun removeUpNext(id: Int) = core.removeUpNext(id)
@@ -237,11 +248,12 @@ class CoreMediaPlayer(
 
     /**
      * Where in [listItems] to go on from, after the core is on item [current]: that item, or on a
-     * track of up next, the list's next, or with none, the one it followed.
+     * track of up next, the list's next, or with none, the one it followed. Entries that wait for
+     * the list come after its next, so they don't count.
      */
     fun listPlace(current: Int): Int {
         if (current < listSize) return current
-        val left = core.upNext.sumOf { it.tracks }
+        val left = core.upNext.filterNot { it.afterList || it.rest }.sumOf { it.tracks }
         return listPlaceOf(current, listSize, next = core.order(left + 1, 1)[0], before = core.order(-1, 1)[0])
     }
 
@@ -488,6 +500,7 @@ class CoreMediaPlayer(
     // playlist or group goes by what it was called when it was added.
     private fun renameUpNext() {
         for (entry in core.upNext) {
+            if (entry.rest) continue
             val metadata = items.getOrNull(entry.firstItem)?.mediaMetadata ?: continue
             val album = entry.context == CorePlayer.PlayContext.Album.ordinal
             val title = if (entry.block) metadata.albumTitle.takeIf { album } else metadata.title

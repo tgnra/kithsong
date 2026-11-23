@@ -24,8 +24,7 @@ enum {
   CMD_EDIT_RULES,
   CMD_REMOVE_HERE, /* Remove from this PC... */
   CMD_SYNC_HERE,   /* Sync to this PC */
-  CMD_PLAY_NEXT,
-  CMD_PLAY_LAST,
+  CMD_QUEUE,
   CMD_REMOVE_RECENT,
   CMD_CLEAR_RECENTS,
   CMD_GROUP_FIRST = 100, /* Add to Album Group's groups, in order */
@@ -64,15 +63,14 @@ static item_menu_result result(int cmd, BOOL changed) {
                                     : ITEM_MENU_NOTHING;
 }
 
-/* Play Next and Play Last, first on everything. */
+/* Queue, first on everything. */
 static void append_queue(HMENU menu) {
-  AppendMenuW(menu, MF_STRING, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_PLAY_LAST));
+  AppendMenuW(menu, MF_STRING, CMD_QUEUE, mc_wstr_mnemonic(MC_STR_ENQUEUE));
 }
 
 /* If that's what was picked, adds it to the queue. */
 static void queue_pick(int cmd, mc_up_next_kind what, const held *h) {
-  if (cmd == CMD_PLAY_NEXT || cmd == CMD_PLAY_LAST) playback_add(what, h->uid, h->name, cmd == CMD_PLAY_NEXT);
+  if (cmd == CMD_QUEUE) playback_add(what, h->uid, h->name);
 }
 
 item_menu_result item_menu_album(const item_menu_options *o) {
@@ -147,11 +145,10 @@ item_menu_result item_menu_artist(const item_menu_options *o) {
   return result(cmd, changed);
 }
 
-void item_menu_append_playlist(HMENU menu, BOOL smart, BOOL rename_key, UINT play_next, UINT play_last, UINT edit_rules,
-                               UINT rename, UINT del) {
+void item_menu_append_playlist(HMENU menu, BOOL smart, BOOL rename_key, UINT queue, UINT edit_rules, UINT rename,
+                               UINT del) {
   wchar_t item[128];
-  AppendMenuW(menu, MF_STRING, play_next, mc_wstr_mnemonic(MC_STR_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING, play_last, mc_wstr_mnemonic(MC_STR_PLAY_LAST));
+  AppendMenuW(menu, MF_STRING, queue, mc_wstr_mnemonic(MC_STR_ENQUEUE));
   AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   if (smart) AppendMenuW(menu, MF_STRING, edit_rules, mc_wstr_mnemonic(MC_STR_SMART_EDIT_MENU));
   AppendMenuW(menu, MF_STRING, rename,
@@ -166,7 +163,7 @@ item_menu_result item_menu_playlist(const item_menu_options *o, BOOL smart) {
   mc_library *lib = o->lib;
   HWND owner = GetAncestor(o->wnd, GA_ROOT);
   HMENU menu = CreatePopupMenu();
-  item_menu_append_playlist(menu, smart, o->rename_key, CMD_PLAY_NEXT, CMD_PLAY_LAST, CMD_EDIT_RULES, CMD_RENAME, CMD_DELETE);
+  item_menu_append_playlist(menu, smart, o->rename_key, CMD_QUEUE, CMD_EDIT_RULES, CMD_RENAME, CMD_DELETE);
   int cmd = show(menu, o);
 
   BOOL changed = FALSE;

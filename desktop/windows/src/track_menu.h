@@ -1,6 +1,6 @@
 /* A track's right-click menu, wherever the track shows: the track list's rows and the
  * now-playing strip's title and cover. It only asks: the caller acts on what was picked, except
- * Play Next and Play Last, which it carries out as they're the same everywhere. The menu's
+ * Queue, which it carries out as it's the same everywhere. The menu's
  * message loop runs other messages, so what the caller shows may have changed by the time this
  * returns.
  */

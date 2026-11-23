@@ -19,7 +19,7 @@ static struct {
   char menu_uid[MC_UID_STRLEN];     /* the recent the menu is for */
   mc_recent_kind menu_kind;         /* and what it is */
   GSimpleAction *edit;              /* enabled for an album or artist, and hidden otherwise */
-  GMenu *queue;                     /* Play next and Play last */
+  GMenu *queue;                     /* Queue */
 } r;
 
 /* The icon of the sidebar page it opens on. */
@@ -181,7 +181,7 @@ static void on_clear(GSimpleAction *action, GVariant *param, gpointer user) {
   recents_clear(r.a);
 }
 
-/* Play next and Play last for row. */
+/* Queue for row. */
 static void update_queue(GtkListBoxRow *row) {
   g_menu_remove_all(r.queue);
   gboolean smart = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "smart"));

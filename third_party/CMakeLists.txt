@@ -116,8 +116,11 @@ target_include_directories(mc_miniz SYSTEM PUBLIC "${miniz_SOURCE_DIR}")
 target_compile_definitions(mc_miniz PUBLIC
   MINIZ_NO_ZLIB_COMPATIBLE_NAMES MINIZ_NO_ARCHIVE_WRITING_APIS MINIZ_NO_TIME)
 if(NOT WIN32)
-  # 64-bit file offsets, for zips over 2 GB on 32-bit systems.
+  # 64-bit file offsets, for zips over 2 GB on 32-bit systems. With strict C (the project's
+  # CMAKE_C_EXTENSIONS OFF), miniz falls back to fseek/ftell's long offsets on Bionic, which has
+  # no __USE_LARGEFILE64: extensions on gets it fseeko/ftello, 64-bit there from API 24.
   target_compile_definitions(mc_miniz PRIVATE _LARGEFILE64_SOURCE=1 _FILE_OFFSET_BITS=64)
+  set_target_properties(mc_miniz PROPERTIES C_EXTENSIONS ON)
 endif()
 
 # mDNS/DNS-SD for core/src/discovery. Header-only: every function is static inline. On

@@ -84,10 +84,11 @@ interface Playback {
     val upNext: List<UpNextEntry> get() = emptyList()
 
     /**
-     * Play next or, if not [next], Play last: adds [what], those of its tracks with a file here,
-     * as a row each or as one row by the setting. False if it has none.
+     * Queue: adds [what], those of its tracks with a file here, to the end of the queue, as a row
+     * each or as one row by the setting; an album while an album plays in order goes after the rest
+     * of that album (see [ng.kithso.core.CorePlayer.addUpNext]). False if it has none.
      */
-    suspend fun addUpNext(what: QueueAddition, next: Boolean): Boolean = false
+    suspend fun addUpNext(what: QueueAddition): Boolean = false
 
     /** Entry [id] goes to place [to] (0 first). */
     fun moveUpNext(id: Int, to: Int) {}
@@ -148,7 +149,7 @@ object NoCast : CastControl {
     override fun setVolume(volume: Float) {}
 }
 
-/** What Play next and Play last add: track [uid] with no [kind], or else what [uid] is, called [name]. */
+/** What Queue adds: track [uid] with no [kind], or else what [uid] is, called [name]. */
 data class QueueAddition(val kind: CollectionRef.Kind?, val uid: String, val name: String? = null)
 
 /** Pretends to play: the position advances while playing and the queue moves on. */

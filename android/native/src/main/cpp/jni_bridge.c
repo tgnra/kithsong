@@ -76,6 +76,10 @@ JNI_FN_BARE(jint, NativeCore, init) {
   return mc_init();
 }
 
+JNI_FN_BARE(jlong, NativeCore, fileSizeLimit) {
+  return (jlong)mc_file_size_limit();
+}
+
 /* The core's language for its own text, from a BCP 47 tag such as "fr-CA". */
 JNI_FN(void, NativeCore, setLocale, jstring tag) {
   JNI_STR(ctag, tag);

@@ -21,9 +21,10 @@
  * it on (mc_player_take_ended()), so an app that dies without closing loses the play under
  * way, and only that one.
  *
- * Up next is what people add to (mc_player_play_next(); apps call it the queue, where this file's
+ * Up next is what people add to (mc_player_up_next_add(); apps call it the queue, where this file's
  * queue is the list being played): it plays before the rest of that list, which then carries on,
- * shuffled or not. Starting something new clears it.
+ * shuffled or not, except for albums added while an album plays in order, which wait for it to
+ * finish. Starting something new clears it.
  *
  * Unlike most handles, a player may be used from any thread.
  */
@@ -52,7 +53,7 @@ typedef enum mc_player_event {
   MC_PLAYER_EVENT_ERROR, /* an item couldn't be played and was skipped, or there's no audio device */
   MC_PLAYER_EVENT_PLAYED, /* a play counts: take it with mc_player_take_played() */
   MC_PLAYER_EVENT_ENDED,  /* a play ended, counted or not: take it with mc_player_take_ended() */
-  MC_PLAYER_EVENT_QUEUE,  /* the queue got new items: see mc_player_play_next() */
+  MC_PLAYER_EVENT_QUEUE,  /* the queue got new items: see mc_player_up_next_add() */
   MC_PLAYER_EVENT_UP_NEXT /* up next changed, by a call or by a track of it starting */
 } mc_player_event;
 
@@ -164,8 +165,8 @@ typedef enum mc_up_next_kind {
   MC_UP_NEXT_SMART_ALBUM_GROUP,
 } mc_up_next_kind;
 
-/* What Play Next and Play Last add for something in the library: its tracks with a file on this
- * device, as *out, for mc_player_play_next() or mc_player_play_last(). Anything but a track is one
+/* What Queue adds for something in the library: its tracks with a file on this device, as *out,
+ * for mc_player_up_next_add(). Anything but a track is one
  * block called name, unless name is NULL or as_tracks (mc_settings_queue_tracks()) says a track
  * each. A block's artist is an album's credit, what a playlist or album group is (that string,
  * in the language set now), and NULL for an artist's, whose row says how many tracks are left.
@@ -175,9 +176,19 @@ mc_status mc_up_next_add_load(mc_library *lib, mc_up_next_kind kind, const char 
                               mc_up_next_add **out);
 void mc_up_next_add_free(mc_up_next_add *add);
 
-/* Adds to the front of up next, the tracks in the order given, or to the end. Nothing starts:
+/* Adds to the end of up next, the tracks in the order given: what apps call Queue. Nothing starts:
  * what's playing plays on, and with nothing playing, mc_player_resume() or mc_player_next() starts
  * up next. MC_ERR_INVALID_ARG for no tracks.
+ *
+ * The end, that is, of what plays before the list goes on, but for an album or album group (add's
+ * context MC_PLAY_CONTEXT_ALBUM or MC_PLAY_CONTEXT_ALBUM_GROUP) added while the list is an album
+ * (its origin's context MC_PLAY_CONTEXT_ALBUM, however it started) playing in order. That goes
+ * after the rest of the album, behind any added the same way before it: such entries have
+ * after_list, and come last in up next. So albums queued while an album plays wait their turn
+ * after it, one after the other, while tracks and the like still go ahead of the album's next
+ * track. Once one of them starts (the album over), or shuffle comes on (a shuffled list never
+ * ends), it's an entry like any other, as one added after it would be; but mc_player_previous()
+ * from its first track back into the album has it wait again.
  *
  * Tracks of up next are queue items like any other: each gets an index when added (so
  * mc_player_status.count goes up), and on MC_PLAYER_EVENT_QUEUE a frontend looks the new ones
@@ -186,15 +197,20 @@ void mc_up_next_add_free(mc_up_next_add *add);
  * next isn't saved. mc_player_set_queue() and mc_player_load_queue() clear it (reported by
  * MC_PLAYER_EVENT_UP_NEXT). It's a list of this library's files, so frontends clear it when
  * the library changes. */
-mc_status mc_player_play_next(mc_player *player, const mc_up_next_add *add);
-mc_status mc_player_play_last(mc_player *player, const mc_up_next_add *add);
+mc_status mc_player_up_next_add(mc_player *player, const mc_up_next_add *add);
 
-/* An entry as up next has it now: what's left of it. */
+/* The id of the row for the rest of the album (mc_up_next_entry.rest). */
+#define MC_UP_NEXT_REST UINT32_MAX
+
+/* An entry as up next has it now: what's left of it. Or, with rest, not an entry but the rest of
+ * the album that's playing, as a row among them: see mc_player_up_next(). */
 typedef struct mc_up_next_entry {
   uint32_t id;         /* stays while it's up next, and isn't used again */
   char *title;
   char *artist;        /* NULL if there's none */
   int block;           /* added as a whole */
+  int after_list;      /* waits for the list to finish: see mc_player_up_next_add() */
+  int rest;            /* the rest of the album's row: id MC_UP_NEXT_REST */
   int tracks;          /* tracks left */
   int64_t duration_ms; /* of those, as far as they're known */
   int first_item;      /* the first of them, as a queue item */
@@ -207,14 +223,30 @@ typedef struct mc_up_next_list {
   int count;
 } mc_up_next_list;
 
-/* Up next now, in the order it plays. Free with mc_up_next_list_free(). */
+/* Up next now, in the order it plays. Free with mc_up_next_list_free().
+ *
+ * While the list is an album playing in order (as for after_list in mc_player_up_next_add()) with
+ * tracks still to come, and something's queued, the rest of the album has a row too, where it
+ * plays: after the entries that go ahead of it and before those that wait for it (after_list).
+ * Its id is MC_UP_NEXT_REST and it has rest; tracks says how many are left, first_item is the next
+ * of them, the album's tracks in order from there (so first_item + 1 and so on), and context and
+ * context_uid are the list's. Its title is "" and duration_ms 0, for the frontend to make (say
+ * "Rest of" the album's name, and the length of those items). Wherever it's moved to, the album
+ * goes on from that same track when its turn comes. With shuffle on, on the album's last track, or
+ * with nothing queued, there's no such row: up next simply plays first. */
 mc_status mc_player_up_next(mc_player *player, mc_up_next_list **out);
 void mc_up_next_list_free(mc_up_next_list *list);
 /* Entry id goes to place to (0 first, out of range is clamped), all of it as one. What's playing
- * isn't touched by this or the next two: only what comes after it. MC_ERR_NOT_FOUND if it's
- * gone. */
+ * isn't touched by this or the next two: only what comes after it. Places are rows as
+ * mc_player_up_next() has them, the rest of the album's included: an entry put below that row
+ * waits for the album (after_list), and one put above it doesn't. The rest of the album moves the
+ * same way, by MC_UP_NEXT_REST: what ends up above it plays first, and what's below waits. With no
+ * such row, an entry put after one with after_list has it too, before one without hasn't it, and
+ * between keeps what it had. MC_ERR_NOT_FOUND if it's gone (or for the rest of the album's row
+ * once there's none). */
 mc_status mc_player_up_next_move(mc_player *player, uint32_t id, int to);
-/* Entry id leaves up next, all that's left of it. MC_ERR_NOT_FOUND if it's gone. */
+/* Entry id leaves up next, all that's left of it. MC_ERR_NOT_FOUND if it's gone; the rest of the
+ * album's row can't be removed, and is MC_ERR_NOT_FOUND too. */
 mc_status mc_player_up_next_remove(mc_player *player, uint32_t id);
 /* Empties up next. Playback goes on. */
 mc_status mc_player_up_next_clear(mc_player *player);

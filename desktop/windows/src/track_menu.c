@@ -8,8 +8,7 @@
 
 enum {
   CMD_NEW_PLAYLIST = 1,
-  CMD_PLAY_NEXT,
-  CMD_PLAY_LAST,
+  CMD_QUEUE,
   CMD_MOVE_UP,
   CMD_MOVE_DOWN,
   CMD_REMOVE,
@@ -30,8 +29,7 @@ track_menu_pick track_menu_show(HWND owner, POINT pt, const track_menu_options *
   mc_track_list *track = NULL;
   UINT queue = o->lib && mc_library_get_track(o->lib, o->track_uid, &track) == MC_OK && track->items[0].path ? 0 : MF_GRAYED;
   mc_track_list_free(track);
-  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_NEXT, mc_wstr_mnemonic(MC_STR_PLAY_NEXT));
-  AppendMenuW(menu, MF_STRING | queue, CMD_PLAY_LAST, mc_wstr_mnemonic(MC_STR_PLAY_LAST));
+  AppendMenuW(menu, MF_STRING | queue, CMD_QUEUE, mc_wstr_mnemonic(MC_STR_ENQUEUE));
   if (o->go_to_album || o->go_to_artist) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
   if (o->go_to_album) AppendMenuW(menu, MF_STRING, CMD_GO_TO_ALBUM, mc_wstr_mnemonic(MC_STR_GO_TO_ALBUM));
   if (o->go_to_artist) AppendMenuW(menu, MF_STRING, CMD_GO_TO_ARTIST, mc_wstr_mnemonic(MC_STR_GO_TO_ARTIST));
@@ -61,9 +59,8 @@ track_menu_pick track_menu_show(HWND owner, POINT pt, const track_menu_options *
   }
   mc_playlist_list_free(lists);
   switch (cmd) {
-    case CMD_PLAY_NEXT:
-    case CMD_PLAY_LAST:
-      playback_add(MC_UP_NEXT_TRACK, o->track_uid, NULL, cmd == CMD_PLAY_NEXT);
+    case CMD_QUEUE:
+      playback_add(MC_UP_NEXT_TRACK, o->track_uid, NULL);
       return TRACK_MENU_NOTHING;
     case CMD_NEW_PLAYLIST: return TRACK_MENU_NEW_PLAYLIST;
     case CMD_MOVE_UP: return TRACK_MENU_MOVE_UP;

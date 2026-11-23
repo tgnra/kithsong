@@ -282,22 +282,19 @@ fun PlaylistSheets(
             HereState.NotIncluded -> SheetAction(stringResource(R.string.add_to_this_phone), Icons.Sync, bringHere)
         }
     }
-    // Play next and Play last. Whether it went in shows as a toast,
+    // Queue. Whether it went in shows as a toast,
     // as the desktops show it in the now-playing bar.
     @Composable
     fun queueActions(what: QueueAddition): List<SheetAction> {
         val playback = actions.playback ?: return emptyList()
-        val add = { next: Boolean ->
-            scope.launch {
-                val added = playback.addUpNext(what, next)
-                val text = if (added) R.string.queue_added else R.string.queue_nothing_here
-                Toast.makeText(context, text, if (added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
-            }
-            Unit
-        }
         return listOf(
-            SheetAction(stringResource(R.string.play_next), Icons.QueuePlayNext) { add(true) },
-            SheetAction(stringResource(R.string.play_last), Icons.PlaylistPlay) { add(false) },
+            SheetAction(stringResource(R.string.enqueue), Icons.AddToQueue) {
+                scope.launch {
+                    val added = playback.addUpNext(what)
+                    val text = if (added) R.string.queue_added else R.string.queue_nothing_here
+                    Toast.makeText(context, text, if (added) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+                }
+            },
         )
     }
     when (val sheet = actions.sheet) {

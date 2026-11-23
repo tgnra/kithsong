@@ -20,6 +20,7 @@
 #include "miniz.h"
 #include "tagger/unzip.h"
 #include "util/changelog.h"
+#include "util/log.h"
 #include "util/platform.h"
 
 #define MANIFEST_FORMAT 1
@@ -551,11 +552,47 @@ static mc_status replace_db(mc_library *lib, const char *path) {
   return MC_OK;
 }
 
+/* The files rows, in the restored database at path before it replaces the library's, of what
+ * the zip held but this build can't (mc_unzip_stats.too_big): their tracks stay, with no file
+ * here, as a track only another device holds. *count: how many rows went. Other files left
+ * out (not the library's, so not music) go unremarked. Before the swap, so that failing here
+ * leaves the library as it was. */
+static mc_status drop_too_big(const char *path, const mc_unzip_stats *stats, int *count) {
+  *count = 0;
+  if (!stats->too_big_count) return MC_OK;
+  sqlite3 *db = NULL;
+  sqlite3_stmt *stmt = NULL;
+  mc_status st = MC_ERR_DB;
+  if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, NULL) == SQLITE_OK &&
+      sqlite3_exec(db, "BEGIN", NULL, NULL, NULL) == SQLITE_OK &&
+      sqlite3_prepare_v2(db, "DELETE FROM files WHERE path = ?1", -1, &stmt, NULL) == SQLITE_OK) {
+    st = MC_OK;
+    for (int i = 0; st == MC_OK && i < stats->too_big_count; i++) {
+      sqlite3_bind_text(stmt, 1, stats->too_big[i], -1, SQLITE_STATIC);
+      if (sqlite3_step(stmt) != SQLITE_DONE) st = MC_ERR_DB;
+      else if (sqlite3_changes(db) > 0) {
+        mc_log("kithcore: restore: left out %s, too big for this build\n", stats->too_big[i]);
+        (*count)++;
+      }
+      sqlite3_reset(stmt);
+    }
+    sqlite3_finalize(stmt);
+    if (st == MC_OK && sqlite3_exec(db, "COMMIT", NULL, NULL, NULL) != SQLITE_OK) st = MC_ERR_DB;
+  }
+  if (st != MC_OK) *count = 0;
+  sqlite3_close(db); /* an open transaction is rolled back */
+  return st;
+}
+
+int (*mc_library_restore_test_swap)(const char *db_path) = NULL;
+
 mc_status mc_library_restore(mc_library *lib, const char *zip_path, const char *temp_dir,
-                             mc_archive_progress_fn progress, void *user, mc_archive_problem *problem) {
+                             mc_archive_progress_fn progress, void *user,
+                             mc_archive_problem *problem, int *too_big) {
   mc_archive_problem local;
   if (!problem) problem = &local;
   *problem = MC_ARCHIVE_OK;
+  if (too_big) *too_big = 0;
   if (!lib || !zip_path || !temp_dir) return MC_ERR_INVALID_ARG;
   int64_t tracks = 0;
   mc_status st = mc_library_count(lib, MC_ENTITY_TRACKS, &tracks);
@@ -612,7 +649,16 @@ mc_status mc_library_restore(mc_library *lib, const char *zip_path, const char *
     if (manifest && !has_name(&before, MC_LIBRARY_ARCHIVE_MANIFEST)) mc_remove(manifest);
     free(manifest);
   }
+  int dropped = 0;
+  if (st == MC_OK && (st = drop_too_big(db, &r.stats, &dropped)) != MC_OK)
+    *problem = MC_ARCHIVE_WRITE;
+  if (st == MC_OK && mc_library_restore_test_swap && mc_library_restore_test_swap(db)) {
+    st = MC_ERR_IO;
+    *problem = MC_ARCHIVE_WRITE;
+  }
   if (st == MC_OK && (st = replace_db(lib, db)) != MC_OK) *problem = MC_ARCHIVE_WRITE;
+  if (st == MC_OK && too_big) *too_big = dropped;
+  mc_unzip_stats_free(&r.stats);
   if (st != MC_OK) {
     sweep s = {lib->dir, &before};
     mc_list_dir(lib->dir, remove_new, &s);

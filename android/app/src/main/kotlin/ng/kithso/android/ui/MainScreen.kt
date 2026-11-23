@@ -259,6 +259,18 @@ internal fun mainItems(
 }
 
 /**
+ * Whether [artists] have enough only credited on others' tracks ([Artist.creditOnly]) for folding
+ * them away to be worth it: more than a third as many as those with an album or single of their
+ * own here, compilations' album artists included. Below that, folding is neither offered on the
+ * Customise page nor done, whatever [AppSettings.foldCreditedArtists] says, and that's kept for
+ * when there are more. One look at each artist, which the library already has in memory.
+ */
+internal fun foldsCreditedArtists(artists: List<Artist>): Boolean {
+    val credited = artists.count { it.creditOnly }
+    return credited * 3 > artists.size - credited
+}
+
+/**
  * The sections in a saved order, by name ([AppSettings.sectionOrder]): Recents first whatever
  * it says, then those it names, then any it doesn't (as a newer version's would be) in the usual
  * order. Unknown names are left out.
@@ -460,6 +472,8 @@ fun MainScreen(
         val pull = rememberPullToSearch(openSearch)
         // Pinching the album grid ([albumPinch]) makes its tiles larger or smaller, keeping the
         // album under the fingers where it was; TalkBack's action on a tile does, for that tile's.
+        // The tiles on screen then move to their new places ([AlbumReflow]).
+        val reflow = remember { AlbumReflow() }
         val firstAlbumRow = sections.find { it.section == Section.Albums }?.let { it.index + 1 }
         val albumRowAt = { y: Float ->
             listState.layoutInfo.visibleItemsInfo
@@ -470,12 +484,18 @@ fun MainScreen(
             val change = onSmallAlbumTiles ?: return
             val first = firstAlbumRow ?: return
             val newColumns = phoneAlbumColumns(width, small)
+            reflow.capture(
+                listState.layoutInfo.visibleItemsInfo.flatMapTo(HashSet()) { info ->
+                    (items.getOrNull(info.index) as? MainItem.AlbumRow)?.albums.orEmpty().map { it.uid }
+                },
+            )
             listState.layoutInfo.visibleItemsInfo.find { it.index == first + album / columns }?.let { row ->
                 val newRowHeight = cellWidth(newColumns) + with(density) { AlbumLabelsHeight.roundToPx() }
                 val place = keptAlbumPlace(album, first, newColumns, y ?: row.offset, row.offset, row.size, newRowHeight)
                 listState.requestScrollToItem(place.index, place.offset)
             }
             change(small)
+            scope.launch { reflow.play() }
         }
         val canPinch = { at: Offset -> onSmallAlbumTiles != null && !searching && slide == 0f && albumRowAt(at.y) != null }
         val pinchTo = pinch@{ small: Boolean, at: Offset ->
@@ -590,7 +610,7 @@ fun MainScreen(
                         },
                         state = albumGroupsRow,
                     )
-                    is MainItem.AlbumRow -> AlbumGridRow(item.albums, item.columns, onOpen, onAlbumMenu, tileActions)
+                    is MainItem.AlbumRow -> AlbumGridRow(item.albums, item.columns, onOpen, onAlbumMenu, tileActions, reflow)
                     is MainItem.ArtistItem -> LibraryRow(
                         item.artist.name,
                         item.artist.subtitle(),

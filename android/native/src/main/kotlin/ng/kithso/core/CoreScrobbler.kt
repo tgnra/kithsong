@@ -23,6 +23,8 @@ class CoreScrobbler(library: CoreLibrary, configDir: String) : AutoCloseable {
         val apiUrl: String,
         /** Where its users approve a sign-in. */
         val authUrl: String,
+        /** Plays the service ignored or wouldn't take since this started: dropped, and logged. */
+        val ignored: Int = 0,
     )
 
     private var handle = nativeNew(library.handle, configDir)
@@ -69,9 +71,9 @@ class CoreScrobbler(library: CoreLibrary, configDir: String) : AutoCloseable {
 
     val status: Status
         get() {
-            val v = LongArray(4)
+            val v = LongArray(5)
             val s = nativeStatus(handle, v)
-            return Status(s[0], v[0].toInt(), v[1] != 0L, v[2].toInt(), v[3].toInt(), s[1] ?: "", s[2] ?: "", s[3] ?: "")
+            return Status(s[0], v[0].toInt(), v[1] != 0L, v[2].toInt(), v[3].toInt(), s[1] ?: "", s[2] ?: "", s[3] ?: "", v[4].toInt())
         }
 
     override fun close() {

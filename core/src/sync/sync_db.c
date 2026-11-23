@@ -145,6 +145,16 @@ static const char *const k_migrations[] = {
   "ALTER TABLE local ADD COLUMN activity_received INTEGER NOT NULL DEFAULT 0;"
   "ALTER TABLE local ADD COLUMN activity_sent INTEGER NOT NULL DEFAULT 0;"
   "ALTER TABLE local ADD COLUMN activity_deleted INTEGER NOT NULL DEFAULT 0;",
+  /* v15: tracks a peer offered this device in a file too big for it to hold (2 GiB or more on
+   * 32-bit Android, mc_file_too_big()): the track's file_rev then, and the size and format
+   * (kbps, 0 for the original) it came in. This device's alone and never synced: its plan
+   * leaves such a track out while its file_rev and format are the same (sync/plan.h). */
+  "CREATE TABLE too_big ("
+  "  track_uid TEXT PRIMARY KEY,"
+  "  file_rev  TEXT,"
+  "  kbps      INTEGER NOT NULL,"
+  "  size      INTEGER NOT NULL"
+  ") WITHOUT ROWID;",
 };
 #define MC_SYNC_SCHEMA_VERSION ((int)(sizeof k_migrations / sizeof k_migrations[0]))
 
@@ -448,6 +458,7 @@ mc_status mc_sync_db_clear_group(mc_sync_db *sdb) {
   }
   if (st == MC_OK) st = exec(sdb, "DELETE FROM peer_contact");
   if (st == MC_OK) st = exec(sdb, "DELETE FROM peer_lacks");
+  if (st == MC_OK) st = exec(sdb, "DELETE FROM too_big");
   if (st == MC_OK) st = exec(sdb, "UPDATE local SET group_uid = NULL, profile_chosen = 0, takeover_uid = NULL,"
                                   " activity_ms = NULL WHERE id = 1");
   sdb->applying_remote = 0;

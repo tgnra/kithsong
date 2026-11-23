@@ -10,9 +10,14 @@
 #include "net/http.h"
 #include "tagger/coverart.h"
 #include "tagger/musicbrainz.h"
+#include "util/platform.h"
 
 const char *mc_version(void) {
   return MC_VERSION_STRING;
+}
+
+int64_t mc_file_size_limit(void) {
+  return mc_max_file_bytes;
 }
 
 const char *mc_status_str(mc_status status) {

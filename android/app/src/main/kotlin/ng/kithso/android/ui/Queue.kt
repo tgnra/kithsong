@@ -62,6 +62,7 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -70,6 +71,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import ng.kithso.android.R
+import ng.kithso.android.data.Track
 import ng.kithso.android.playback.Playback
 import ng.kithso.core.UpNextEntry
 import kotlin.math.abs
@@ -246,9 +248,11 @@ private class QueueListScroll(private val slide: QueueSlide) : NestedScrollConne
 }
 
 /**
- * The queue, under the full player: as Windows' popup has it, the heading and Clear, then a row
- * for each entry of up next, in the order it plays, with its title, its artist or how many tracks
- * are left of it, how long it is, a handle to drag it by and an x to take it out. Accessibility
+ * The queue, under the full player: as Windows' popup has it, the heading and Clear, what's
+ * playing, set apart, then a row for each entry of up next, in the order it plays, with its title,
+ * its artist or how many tracks are left of it, how long it is, a handle to drag it by and an x to
+ * take it out. Among them, while something's queued around it, is the rest of the album that's
+ * playing, which drags like the others but has no x. Accessibility
  * services get moving and removing as actions on the row, which is what Windows' keys are there.
  *
  * With no [slide] it's beside the player rather than under it, as in tabletop: there's nothing to
@@ -300,6 +304,7 @@ internal fun QueuePage(playback: Playback, slide: QueueSlide?, modifier: Modifie
                 Text(stringResource(R.string.queue_clear))
             }
         }
+        playback.track?.let { NowPlayingRow(it, Modifier.widthIn(max = MaxQueueWidth).fillMaxWidth()) }
         if (rows.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(
@@ -330,6 +335,57 @@ internal fun QueuePage(playback: Playback, slide: QueueSlide?, modifier: Modifie
     }
 }
 
+/**
+ * What's playing, at the top of the queue: not a row of it, as it can't be moved or removed, so
+ * it's set apart on a tinted card, headed Now playing, with a play mark where a row has its handle.
+ */
+@Composable
+private fun NowPlayingRow(track: Track, modifier: Modifier) {
+    val heading = stringResource(R.string.queue_now_playing)
+    val onCard = MaterialTheme.colorScheme.onSecondaryContainer
+    Column(
+        modifier
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(vertical = 8.dp)
+            .semantics(mergeDescendants = true) {},
+    ) {
+        Text(
+            heading,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 48.dp, end = 16.dp),
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                Icon(Icons.Play, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    track.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = onCard,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (track.artist.isNotEmpty()) {
+                    Text(track.artist, style = MaterialTheme.typography.bodyMedium, color = onCard, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (track.durationMs > 0) {
+                Text(
+                    formatTime(track.durationMs),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = onCard,
+                    modifier = Modifier.padding(start = 8.dp, end = 16.dp),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun QueueRow(
     entry: UpNextEntry,
@@ -345,6 +401,13 @@ private fun QueueRow(
     val remove = stringResource(R.string.queue_remove)
     val byline = entry.artist ?: if (entry.block) pluralStringResource(R.plurals.tracks, entry.tracks, entry.tracks) else null
     val secondary = MaterialTheme.colorScheme.onSurfaceVariant
+    // The rest of the album that's playing: it says so in the accent colour, and moves like the
+    // other rows but can't be removed.
+    val title = when {
+        !entry.rest -> entry.title
+        entry.title.isEmpty() -> stringResource(R.string.queue_rest_untitled)
+        else -> stringResource(R.string.queue_rest, entry.title)
+    }
     Row(
         modifier
             .fillMaxWidth()
@@ -356,7 +419,7 @@ private fun QueueRow(
                 customActions = listOfNotNull(
                     onMoveUp?.let { move -> CustomAccessibilityAction(moveUp) { move(); true } },
                     onMoveDown?.let { move -> CustomAccessibilityAction(moveDown) { move(); true } },
-                    CustomAccessibilityAction(remove) { onRemove(); true },
+                    CustomAccessibilityAction(remove) { onRemove(); true }.takeUnless { entry.rest },
                 )
             },
         verticalAlignment = Alignment.CenterVertically,
@@ -366,7 +429,14 @@ private fun QueueRow(
             Icon(Icons.DragHandle, contentDescription = null, tint = secondary)
         }
         Column(Modifier.weight(1f).padding(vertical = 8.dp), verticalArrangement = Arrangement.Center) {
-            Text(entry.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = if (entry.rest) FontWeight.SemiBold else null,
+                color = if (entry.rest) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             if (byline != null) {
                 Text(byline, style = MaterialTheme.typography.bodyMedium, color = secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -379,8 +449,12 @@ private fun QueueRow(
                 modifier = Modifier.padding(start = 8.dp),
             )
         }
-        IconButton(onClick = onRemove) {
-            Icon(Icons.Clear, contentDescription = remove, tint = secondary)
+        if (entry.rest) {
+            Box(Modifier.size(48.dp)) // where the x would be, so the times line up
+        } else {
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Clear, contentDescription = remove, tint = secondary)
+            }
         }
     }
 }

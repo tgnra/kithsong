@@ -26,7 +26,7 @@
 
 /* --- The fake service --- */
 
-enum { ANSWER_OK, ANSWER_RATE_LIMIT, ANSWER_BAD_SESSION };
+enum { ANSWER_OK, ANSWER_RATE_LIMIT, ANSWER_BAD_SESSION, ANSWER_IGNORED };
 
 static mc_mutex lock;
 static int answer = ANSWER_OK, approved;
@@ -79,6 +79,13 @@ static mc_status fake_post(const char *url, const char *form, mc_buffer *body, l
       st = reply(body, "{\"error\":29,\"message\":\"Rate Limit Exceeded\"}");
     } else if (answer == ANSWER_BAD_SESSION && !strstr(form, "sk=sk2")) {
       st = reply(body, "{\"error\":9,\"message\":\"Invalid session key\"}");
+    } else if (answer == ANSWER_IGNORED) { /* taken, but its filters ignore them */
+      char json[8192] = "{\"scrobbles\":{\"scrobble\":[";
+      for (int i = 0; i < n; i++)
+        strcat(json, i ? ",{\"ignoredMessage\":{\"code\":\"1\",\"#text\":\"Artist was ignored\"}}"
+                       : "{\"ignoredMessage\":{\"code\":\"1\",\"#text\":\"Artist was ignored\"}}");
+      strcat(json, "]}}");
+      st = reply(body, json);
     } else if (strstr(form, "track%5B") && strstr(form, "=Bad&")) {
       st = reply(body, "{\"error\":6,\"message\":\"Invalid parameters\"}");
     } else {
@@ -122,6 +129,14 @@ static int wait_status(mc_scrobbler *sc, int pending, mc_status last_error, unsi
     if (mc_mono_ms() > end) return 0;
     mc_sleep_ms(10);
   }
+}
+
+static int ignored_count(mc_scrobbler *sc) {
+  mc_scrobbler_status st;
+  if (mc_scrobbler_status_get(sc, &st) != MC_OK) return -1;
+  int n = st.ignored;
+  mc_scrobbler_status_clear(&st);
+  return n;
 }
 
 static int wait_count(int *v, int n, unsigned ms) {
@@ -461,6 +476,19 @@ int main(int argc, char **argv) {
                                  "https://scrobble.invalid/auth/", "key", "secret") == MC_OK);
   CHECK(wait_status(sc, 0, MC_OK, 3000));
   CHECK(get(&scrobbled) == 64);
+  CHECK(ignored_count(sc) == 1); /* the bad play, since the restart */
+
+  /* Plays the service takes but ignores are dropped, and counted (not kept). */
+  set(&answer, ANSWER_IGNORED);
+  CHECK(mc_scrobbler_scrobble(sc, T_OK, now) == MC_OK);
+  CHECK(mc_scrobbler_scrobble(sc, T_SINGLE, now) == MC_OK);
+  uint64_t until = mc_mono_ms() + 3000;
+  while (ignored_count(sc) < 3 && mc_mono_ms() < until) mc_sleep_ms(10);
+  CHECK(ignored_count(sc) == 3);
+  CHECK(wait_status(sc, 0, MC_OK, 3000));
+  CHECK(queue_rows(config) == 0);
+  CHECK(get(&scrobbled) == 64);
+  set(&answer, ANSWER_OK);
 
   /* A session revoked on the service signs out by itself and says why. What waited is
    * kept, and goes after the next sign-in. */

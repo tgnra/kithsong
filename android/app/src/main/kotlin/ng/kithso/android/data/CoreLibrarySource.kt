@@ -380,10 +380,10 @@ class CoreLibrarySource(
     }
 
     /**
-     * Adds [what] to [player]'s up next, at the front if [next], as a row per track if [asTracks].
-     * False if it has no track with a file here.
+     * Adds [what] to the end of [player]'s up next (see [CorePlayer.addUpNext]), as a row per track
+     * if [asTracks]. False if it has no track with a file here.
      */
-    suspend fun addUpNext(player: CoreMediaPlayer, what: QueueAddition, next: Boolean, asTracks: Boolean): Boolean = withContext(core) {
+    suspend fun addUpNext(player: CoreMediaPlayer, what: QueueAddition, asTracks: Boolean): Boolean = withContext(core) {
         val lib = open() ?: return@withContext false
         val smart = what.uid in contents.smart
         val kind = when (what.kind) {
@@ -394,7 +394,7 @@ class CoreLibrarySource(
             CollectionRef.Kind.AlbumGroup -> if (smart) CorePlayer.UpNextKind.SmartAlbumGroup else CorePlayer.UpNextKind.AlbumGroup
         }
         try {
-            player.addUpNext(lib, kind, what.uid, what.name, asTracks, next)
+            player.addUpNext(lib, kind, what.uid, what.name, asTracks)
         } catch (e: KithCoreException) {
             Log.e(TAG, "Couldn't add ${what.uid} to the queue", e)
             false

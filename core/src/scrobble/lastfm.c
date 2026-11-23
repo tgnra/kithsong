@@ -8,6 +8,7 @@
 #include <yyjson.h>
 
 #include "util/hex.h"
+#include "util/log.h"
 #include "util/platform.h"
 
 mc_lastfm_post_fn mc_lastfm_post = mc_http_post_form;
@@ -289,8 +290,15 @@ mc_status mc_lastfm_scrobble(const mc_lastfm_service *svc, const mc_scrobble *pl
   }
   for (int i = 0; i < count; i++) {
     yyjson_val *item = yyjson_is_arr(list) ? yyjson_arr_get(list, (size_t)i) : list;
-    int code = int_of(yyjson_obj_get(yyjson_obj_get(item, "ignoredMessage"), "code"));
-    done[i] = code != 5; /* 5: over the daily limit; the rest (1-4) won't change */
+    yyjson_val *ignored = yyjson_obj_get(item, "ignoredMessage");
+    int code = int_of(yyjson_obj_get(ignored, "code"));
+    done[i] = code == 5 ? 0 : code ? 2 : 1; /* 5: over the daily limit; the rest (1-4) won't change */
+    if (code) {
+      const char *why = yyjson_get_str(yyjson_obj_get(ignored, "#text"));
+      mc_log("kithcore: the service ignored a scrobble (code %d%s%s): %s - %s at %lld\n", code,
+             why && *why ? ", " : "", why && *why ? why : "", plays[i].artist ? plays[i].artist : "?",
+             plays[i].track ? plays[i].track : "?", (long long)plays[i].played_at_s);
+    }
   }
   yyjson_doc_free(doc);
   return MC_OK;

@@ -282,6 +282,26 @@ static char *join(const char *dir, const char *rel) {
   return out;
 }
 
+void mc_unzip_stats_free(mc_unzip_stats *stats) {
+  if (!stats) return;
+  for (int i = 0; i < stats->too_big_count; i++) free(stats->too_big[i]);
+  free(stats->too_big);
+  stats->too_big = NULL;
+  stats->too_big_count = 0;
+}
+
+/* Keeps rel, a path under dest with native separators, as the zip names it. */
+static void note_too_big(mc_unzip_stats *stats, const char *rel) {
+  char **grown = realloc(stats->too_big, (size_t)(stats->too_big_count + 1) * sizeof *grown);
+  if (!grown) return;
+  stats->too_big = grown;
+  char *name = mc_strdup(rel);
+  if (!name) return;
+  for (char *c = name; *c; c++)
+    if (*c == MC_PATH_SEP) *c = '/';
+  grown[stats->too_big_count++] = name;
+}
+
 mc_unzip_result mc_unzip(const char *zip_path, const char *dest, int64_t max_bytes,
                          mc_unzip_budget *budget, int (*cancel)(void *user), void *user,
                          mc_unzip_stats *stats) {
@@ -310,6 +330,8 @@ mc_unzip_result mc_unzip(const char *zip_path, const char *dest, int64_t max_byt
     mz_zip_archive_file_stat st;
     if (!mz_zip_reader_file_stat(&z, i, &st)) result = MC_UNZIP_BAD;
     else if (!st.m_is_directory && st.m_is_encrypted) result = MC_UNZIP_BAD;
+    else if (!st.m_is_directory && mc_file_too_big((int64_t)st.m_uncomp_size))
+      continue; /* left out, so not counted */
     else if (st.m_uncomp_size > (mz_uint64)max_bytes) result = MC_UNZIP_TOO_BIG;
     else if (!st.m_is_directory && (total += (int64_t)st.m_uncomp_size) > max_bytes) result = MC_UNZIP_TOO_BIG;
   }
@@ -344,6 +366,11 @@ mc_unzip_result mc_unzip(const char *zip_path, const char *dest, int64_t max_byt
       continue;
     }
     if (mc_file_exists(path)) { /* the same name twice */
+      free(path);
+      continue;
+    }
+    if (mc_file_too_big((int64_t)st.m_uncomp_size)) {
+      note_too_big(stats, path + strlen(dest) + 1);
       free(path);
       continue;
     }

@@ -848,6 +848,11 @@ static void update_scrobble(void) {
       wcsncat(text, L"\n", 511 - wcslen(text));
       wcsncat(text, line, 511 - wcslen(text));
     }
+    if (st.ignored > 0) {
+      mc_wformat(line, 256, mc_str_plural(MC_STR_SCROBBLE_IGNORED, st.ignored), MC_D(st.ignored), MC_S(service));
+      wcsncat(text, L"\n", 511 - wcslen(text));
+      wcsncat(text, line, 511 - wcslen(text));
+    }
   } else if (have && !st.has_key) {
     wcsncat(text, mc_wstr(MC_STR_SCROBBLE_NO_KEY), 511 - len);
     enabled = FALSE;

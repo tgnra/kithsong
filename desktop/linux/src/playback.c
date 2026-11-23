@@ -83,7 +83,7 @@ static void rename_up_next(void) {
   mc_up_next_list *list = playback_up_next();
   for (int i = 0; list && i < list->count; i++) {
     const mc_up_next_entry *e = &list->items[i];
-    if (e->first_item < 0 || e->first_item >= s.count) continue;
+    if (e->rest || e->first_item < 0 || e->first_item >= s.count) continue;
     const item *it = &s.items[e->first_item];
     const char *title = e->block ? (e->context == MC_PLAY_CONTEXT_ALBUM ? it->album : NULL) : it->title;
     if (title) mc_player_up_next_rename(s.player, e->id, title, e->block ? e->artist : it->artist);
@@ -243,7 +243,7 @@ static void refresh(void) {
     else if (st.state != MC_PLAYER_PLAYING && s.tick) g_clear_handle_id(&s.tick, g_source_remove);
     if (s.changed) s.changed(s.user);
   }
-  if (up_next_changed) queue_button_update();
+  if (up_next_changed || new_track || new_state) queue_button_update(); /* what's playing heads it */
 }
 
 static gboolean on_tick(gpointer data) {
@@ -501,6 +501,31 @@ const char *playback_current_uid(void) {
   return playback_has_current() ? s.items[s.index].uid : "";
 }
 
+char *playback_rest_title(const mc_up_next_entry *e, int64_t *duration_ms) {
+  *duration_ms = 0;
+  const char *album = NULL;
+  for (int i = e->first_item; i >= 0 && i < s.count && i < e->first_item + e->tracks; i++) {
+    *duration_ms += s.items[i].duration_ms;
+    if (!album) album = s.items[i].album;
+  }
+  if (!album || !album[0]) return g_strdup(mc_str(MC_STR_QUEUE_REST_UNTITLED));
+  char *title = mc_format_alloc(mc_str(MC_STR_QUEUE_REST), MC_S(album));
+  char *out = g_strdup(title);
+  mc_free(title);
+  return out;
+}
+
+gboolean playback_now_playing(const char **title, const char **artist, int *duration_ms) {
+  if (!playback_has_current() || s.state == MC_PLAYER_STOPPED) return FALSE;
+  mc_player_status st;
+  mc_player_status_get(s.player, &st);
+  const item *it = &s.items[s.index];
+  *title = it->title;
+  *artist = it->artist;
+  *duration_ms = duration_of(it, &st);
+  return TRUE;
+}
+
 gboolean playback_has_next(void) {
   return s.player && s.has_next;
 }
@@ -568,11 +593,11 @@ void playback_up_next_clear(void) {
   refresh();
 }
 
-void playback_add(mc_up_next_kind what, const char *uid, const char *name, gboolean next) {
+void playback_add(mc_up_next_kind what, const char *uid, const char *name) {
   if (!s.lib || !uid || !ensure_player()) return;
   mc_up_next_add *add = NULL;
   if (mc_up_next_add_load(s.lib, what, uid, name, s.queue_tracks, &add) == MC_OK) {
-    if ((next ? mc_player_play_next(s.player, add) : mc_player_play_last(s.player, add)) == MC_OK)
+    if (mc_player_up_next_add(s.player, add) == MC_OK)
       now_playing_flash(mc_str(MC_STR_QUEUE_ADDED));
     mc_up_next_add_free(add);
     refresh();

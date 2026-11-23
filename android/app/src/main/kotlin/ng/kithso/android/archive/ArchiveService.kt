@@ -159,7 +159,11 @@ class ArchiveService : Service() {
 /** What [this] is doing, or how it ended: a notification's title, or the line in Settings. */
 fun ArchiveJob.title(context: Context): String = when (result) {
     null -> context.getString(if (restoring) R.string.library_restoring else R.string.library_exporting, percent)
-    ArchiveJob.Result.Done -> context.getString(if (restoring) R.string.library_restored else R.string.library_exported)
+    ArchiveJob.Result.Done -> when {
+        // Files a 32-bit phone can't play (LibraryArchive.restore).
+        restoring && tooBig > 0 -> context.resources.getQuantityString(R.plurals.library_restored_too_big, tooBig, tooBig)
+        else -> context.getString(if (restoring) R.string.library_restored else R.string.library_exported)
+    }
     ArchiveJob.Result.Cancelled ->
         context.getString(if (restoring) R.string.library_restore_cancelled else R.string.library_export_cancelled)
     ArchiveJob.Result.NoSpace ->

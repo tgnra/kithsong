@@ -290,8 +290,10 @@ static mc_status now_playing(sqlite3 *lib, const mc_lastfm_service *svc, const c
 
 /* Sends up to *batch of the oldest queued plays and takes the ones that are done off the
  * queue. *progress is 0 once there's nothing more to send. A batch the service won't take
- * is sent again a play at a time, and a single play it won't take is dropped. */
-static mc_status submit(sqlite3 *db, const mc_lastfm_service *svc, int *batch, int *progress, int *api_error) {
+ * is sent again a play at a time, and a single play it won't take is dropped. *ignored counts
+ * up the plays dropped: those the service took but ignored, and those it wouldn't take. */
+static mc_status submit(sqlite3 *db, const mc_lastfm_service *svc, int *batch, int *progress, int *api_error,
+                        int *ignored) {
   *progress = 0;
   *api_error = 0;
   char sql[160];
@@ -334,7 +336,7 @@ static mc_status submit(sqlite3 *db, const mc_lastfm_service *svc, int *batch, i
     st = MC_OK;
   } else if (st == MC_ERR_FORMAT) {
     mc_log("kithcore: the service won't take a scrobble (error %d); dropped\n", *api_error);
-    done[0] = 1;
+    done[0] = 2;
     st = MC_OK;
   } else if (st == MC_OK) {
     *batch = MC_LASTFM_BATCH;
@@ -348,6 +350,7 @@ static mc_status submit(sqlite3 *db, const mc_lastfm_service *svc, int *batch, i
         kept++;
         continue;
       }
+      if (done[i] == 2) ++*ignored;
       sqlite3_bind_int64(del, 1, seqs[i]);
       sqlite3_step(del);
       sqlite3_reset(del);
@@ -423,6 +426,7 @@ static void run(void *arg) {
   uint64_t next_try = 0;
   uint32_t backoff = 0;
   int batch = MC_LASTFM_BATCH;
+  int ignored = 0; /* since this started; only shown, not kept */
   char *refused = NULL; /* a session key the service refused: not tried again */
   char *ended = NULL;   /* the service (its API address) that ended the session, signing us out */
   mc_status last_error = open_st;
@@ -474,7 +478,7 @@ static void run(void *arg) {
       if (sending && st != MC_ERR_AUTH && mc_mono_ms() >= next_try && !quitting(sc)) {
         int progress = 1;
         drop_flagged(lib, db);
-        while (progress && (st = submit(db, &svc, &batch, &progress, &api_error)) == MC_OK && !quitting(sc)) {
+        while (progress && (st = submit(db, &svc, &batch, &progress, &api_error, &ignored)) == MC_OK && !quitting(sc)) {
         }
         called = 1;
       }
@@ -505,6 +509,7 @@ static void run(void *arg) {
     mc_mutex_lock(&sc->lock);
     show_account(sc, &acc);
     sc->status.pending = pending;
+    sc->status.ignored = ignored;
     sc->status.has_key = has_key;
     sc->status.last_error = last_error;
     account_clear(&acc);

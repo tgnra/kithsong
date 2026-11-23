@@ -723,15 +723,15 @@ static BOOL drop_hover(drag_kind kind, const POINT *pt, char uid[MC_UID_STRLEN])
   return i >= 0;
 }
 
-/* Play Next or Play Last on recent row i. */
-static void add_recent_to_queue(int i, BOOL next) {
+/* Queue on recent row i. */
+static void add_recent_to_queue(int i) {
   const sb_row *r = &s.rows[i];
   mc_recent_kind kind = (mc_recent_kind)r->flags;
   mc_up_next_kind what = kind == MC_RECENT_ALBUM      ? MC_UP_NEXT_ALBUM
                        : kind == MC_RECENT_ARTIST   ? MC_UP_NEXT_ARTIST
                        : kind == MC_RECENT_PLAYLIST ? (r->smart ? MC_UP_NEXT_SMART_PLAYLIST : MC_UP_NEXT_PLAYLIST)
                                                     : (r->smart ? MC_UP_NEXT_SMART_ALBUM_GROUP : MC_UP_NEXT_ALBUM_GROUP);
-  playback_add(what, r->uid, r->text, next);
+  playback_add(what, r->uid, r->text);
 }
 
 static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -833,8 +833,7 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
       if (i >= 0 && i < s.nrows && s.rows[i].kind == ROW_RECENT && clickable(i)) {
         HMENU menu = CreatePopupMenu();
         mc_recent_kind kind = (mc_recent_kind)s.rows[i].flags;
-        AppendMenuW(menu, MF_STRING, 5, mc_wstr_mnemonic(MC_STR_PLAY_NEXT));
-        AppendMenuW(menu, MF_STRING, 6, mc_wstr_mnemonic(MC_STR_PLAY_LAST));
+        AppendMenuW(menu, MF_STRING, 5, mc_wstr_mnemonic(MC_STR_ENQUEUE));
         AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
         if (kind == MC_RECENT_ALBUM || kind == MC_RECENT_ARTIST) {
           AppendMenuW(menu, MF_STRING, 3, mc_wstr_mnemonic(MC_STR_EDIT_MENU));
@@ -848,8 +847,8 @@ static LRESULT CALLBACK sidebar_proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
           memcpy(s.clicked_recent, s.rows[i].uid, sizeof s.clicked_recent);
           s.clicked_kind = (mc_recent_kind)s.rows[i].flags;
         }
-        if (cmd == 5 || cmd == 6) {
-          add_recent_to_queue(i, cmd == 5);
+        if (cmd == 5) {
+          add_recent_to_queue(i);
         } else if (cmd)
           SendMessageW(GetParent(wnd), WM_COMMAND,
                        MAKEWPARAM(GetDlgCtrlID(wnd), cmd == 1 ? SBN_REMOVE_RECENT : cmd == 3 ? SBN_EDIT_RECENT : SBN_CLEAR_RECENTS),

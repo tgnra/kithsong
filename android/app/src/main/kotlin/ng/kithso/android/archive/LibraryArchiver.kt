@@ -16,7 +16,7 @@ import ng.kithso.core.LibraryArchive
 import java.io.File
 
 /** An export or restore under way ([result] null), or just over. */
-data class ArchiveJob(val restoring: Boolean, val percent: Int = 0, val result: Result? = null) {
+data class ArchiveJob(val restoring: Boolean, val percent: Int = 0, val result: Result? = null, val tooBig: Int = 0) {
     enum class Result { Done, Cancelled, NoSpace, TooBig, Newer, Bad, Failed }
 
     val isOver: Boolean get() = result != null
@@ -35,7 +35,8 @@ class LibraryArchiver(
     private val libraryDir: () -> File,
     /** Whether a restore may go ahead: the library has no tracks and isn't in a sync group. */
     private val canRestore: suspend () -> Boolean,
-    private val onRestored: () -> Unit,
+    /** Given how the restore ended, so a restart can still say what it left out. */
+    private val onRestored: (ArchiveJob) -> Unit,
     private val scope: CoroutineScope,
 ) {
     private val state = MutableStateFlow<ArchiveJob?>(null)
@@ -109,7 +110,8 @@ class LibraryArchiver(
                 null
             }
             end(outcome)
-            if (outcome?.ok == true) withContext(Dispatchers.Main) { onRestored() }
+            val job = state.value
+            if (outcome?.ok == true && job != null) withContext(Dispatchers.Main) { onRestored(job) }
         }
         true
     }
@@ -152,7 +154,7 @@ class LibraryArchiver(
             }
         }
         Log.i(TAG, "Library ${if (state.value?.restoring == true) "restore" else "export"}: $result (${outcome?.status}, ${outcome?.problem})")
-        state.value = state.value?.copy(result = result)
+        state.value = state.value?.copy(result = result, tooBig = outcome?.tooBig ?: 0)
     }
 
     private companion object {

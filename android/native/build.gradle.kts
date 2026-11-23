@@ -23,7 +23,10 @@ if (abiOverride != null && releaseRun) {
 val unitTestsOnly = requestedTasks.isNotEmpty() && requestedTasks.all {
     it.substringAfterLast(":").let { name -> name.endsWith("UnitTest") || name == "test" }
 }
-val nativeAbis = abiOverride ?: listOf("arm64-v8a", "x86_64")
+// A bundle (AAB) carries 32-bit ARM too, for the store to hand to 32-bit phones; APKs don't,
+// so 32-bit phones get the app from the store (see :app).
+val bundleRun = requestedTasks.any { it.substringAfterLast(":").startsWith("bundle") }
+val nativeAbis = abiOverride ?: (listOf("arm64-v8a", "x86_64") + if (bundleRun) listOf("armeabi-v7a") else emptyList())
 
 // ccache, if it's on the PATH, for everything but a release; -PkithsongCcache=off goes without.
 // base_dir and hash_dir let worktrees share results, whose paths differ only above the repo, at

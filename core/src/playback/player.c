@@ -27,7 +27,9 @@
  * items have a place, so an item's place isn't always its index. Playing from up next doesn't
  * move the place, so the list carries on after it where it left off. A track leaves up next once it's heard, not when it's buffered:
  * segments note those on their way (waiting), and they're always its first tracks, as changing
- * up next cuts them from the buffer first (up_settle()). Starting something new clears up next,
+ * up next cuts them from the buffer first (up_settle()). Entries that wait for the list (an album
+ * queued while an album plays in order) are up next's last, and are only next once the list has no
+ * next place (up_ahead()). Starting something new clears up next,
  * so what it replaces goes with the old list; a list only brought back keeps it (up_rehome()).
  *
  * The callback copies out of the ring buffer, applies the volume and counts. A flush (seek,
@@ -188,6 +190,8 @@ typedef struct up_entry {
   uint32_t id;
   char *title, *artist;
   int block;
+  int later; /* waits for the list to run out (up_ahead()); such entries are always up next's last */
+  int waited; /* ...or did, till it started */
   int origin; /* into origins, from 1 */
   up_track *tracks;
   int count, first;
@@ -211,6 +215,7 @@ struct mc_player {
   char (*track_uids)[MC_UID_STRLEN]; /* per item, or NULL if the queue isn't logged */
   int *item_origins; /* per item: 0 for the list's, else which of origins it's from, from 1 */
   mc_play_context context;
+  mc_play_context list_context; /* as the origin said, even when started shuffled */
   char context_uid[MC_UID_STRLEN];
   int count;
   int *list; /* the item at each place, in order: what the play order goes through */
@@ -467,10 +472,13 @@ static up_entry *up_take(mc_player *p, int i) {
   return e;
 }
 
-/* The first track of entry id has started: it's not up next any more. Under lock. */
+/* The first track of entry id has started: it's not up next any more. An entry that was waiting
+ * for the list is playing now, so it's one like any other from here on. Under lock. */
 static void up_pop(mc_player *p, uint32_t id) {
   if (!p->nup || p->up[0]->id != id) return;
   up_entry *e = p->up[0];
+  e->waited |= e->later;
+  e->later = 0;
   if (++e->first == e->count) {
     up_entry_free(p->spent);
     p->spent = up_take(p, 0);
@@ -516,6 +524,27 @@ static const up_track *up_nth(const mc_player *p, int n, const up_entry **entry)
   return NULL;
 }
 
+/* Entries that wait for the list (later) come after the rest of up next: the place they go to,
+ * which is the first of them, or the end. Under lock. */
+static int up_later_at(const mc_player *p) {
+  int at = 0;
+  while (at < p->nup && !p->up[at]->later) at++;
+  return at;
+}
+
+/* Whether the list has an item after place pos to go on to: not once it has played out, when
+ * it's back at its start but resuming plays up next. Under lock. */
+static int list_goes_on(mc_player *p, int pos) {
+  return !p->played_out && item_at(p, pos + 1) >= 0;
+}
+
+/* How many of up next's entries play before the list goes on from place pos: those that don't
+ * wait for it, or once it has nothing after pos (in order, it's over), all of them. Under lock. */
+static int up_ahead(mc_player *p, int pos) {
+  int at = up_later_at(p);
+  return at < p->nup && !list_goes_on(p, pos) ? p->nup : at;
+}
+
 /* What comes after what's been decoded, which is at place *pos: up next's first track not on
  * its way yet, setting *entry, or the item at the next place, moving *pos and clearing it. -1
  * if there's nothing. Under lock. */
@@ -524,7 +553,7 @@ static int next_item(mc_player *p, int *pos, uint32_t *entry) {
   for (int i = 0; i < p->nsegs; i++) waiting += p->segs[i].waiting != 0;
   const up_entry *e;
   const up_track *t = up_nth(p, waiting, &e);
-  if (t) {
+  if (t && (!e->later || item_at(p, *pos + 1) < 0)) {
     *entry = e->id;
     return t->item;
   }
@@ -661,6 +690,14 @@ static int open_device(mc_player *p, ma_uint32 rate) {
   config.sampleRate = rate;
   config.dataCallback = on_audio;
   config.pUserData = p;
+  /* Music, decoded a second ahead: larger periods (about 100 ms) rather than miniaudio's
+   * low-latency default of 10 ms, which wakes the device ten times as often for nothing and
+   * underruns on slow phones. On Android, AAudio is told it's music, and miniaudio's
+   * workarounds for older versions' AAudio (11 and before) are on. */
+  config.performanceProfile = ma_performance_profile_conservative;
+  config.aaudio.usage = ma_aaudio_usage_media;
+  config.aaudio.contentType = ma_aaudio_content_type_music;
+  config.aaudio.enableCompatibilityWorkarounds = MA_TRUE;
   return ma_device_init(NULL, &config, &p->device) == MA_SUCCESS;
 }
 
@@ -877,6 +914,7 @@ static unsigned do_command(mc_player *p) {
     log_begin(p, &p->segs[0]);
   }
   p->state = p->cmd_state; /* read now: pause() and resume() change it without a new command */
+  if (p->nup) up_changed(p); /* as in advance() */
   return events;
 }
 
@@ -954,6 +992,7 @@ static unsigned advance(mc_player *p) {
     p->current = p->segs[0].index;
     p->current_pos = p->segs[0].pos;
     events |= EV(MC_PLAYER_EVENT_TRACK);
+    if (p->nup) up_changed(p); /* what's left of the list, which up next shows (rest_at()) */
   }
   if (p->drained && !p->src && played >= p->written && p->state != MC_PLAYER_STOPPED) {
     events |= log_end(p, MC_PLAY_END_FINISHED);
@@ -1205,7 +1244,7 @@ static mc_status set_queue(mc_player *p, const char *const *paths, int count, in
   free(old_uids);
   free(old_origins);
   free(old_list);
-  p->context = origin ? origin->context : MC_PLAY_CONTEXT_UNKNOWN;
+  p->context = p->list_context = origin ? origin->context : MC_PLAY_CONTEXT_UNKNOWN;
   if (start < 0 && p->shuffle) p->context = MC_PLAY_CONTEXT_SHUFFLE;
   p->context_uid[0] = '\0';
   if (origin && origin->context_uid && strlen(origin->context_uid) < MC_UID_STRLEN)
@@ -1298,7 +1337,7 @@ static void post_played_out(mc_player *p) {
 /* mc_player_next(), ending the play under way as end. Under lock, after up_heard(). */
 static void go_next(mc_player *p, mc_play_end end) {
   int pos = current_pos(p) + 1, index = item_at(p, pos);
-  if (p->nup) {
+  if (up_ahead(p, resume_pos(p))) {
     play_up_next(p, resume_pos(p));
   } else if (index >= 0) {
     post(p, CMD_START, pos, index, 0, MC_PLAYER_PLAYING);
@@ -1321,7 +1360,8 @@ mc_status mc_player_next(mc_player *p) {
 
 /* Previous from a track of up next (st says it's current, at the very start of it): back a track
  * in its entry if it has one before it, else to the item the list had got to, with the track
- * going back up next at the front. With neither, back to its start. Under lock. */
+ * going back up next at the front, or if it waited for the list, which has an item to go back to
+ * now, waiting again. With neither, back to its start. Under lock. */
 static void previous_from_up_next(mc_player *p, const mc_player_status *st) {
   int pos = current_pos(p), before = item_at(p, pos);
   uint32_t id = current_entry(p);
@@ -1332,7 +1372,7 @@ static void previous_from_up_next(mc_player *p, const mc_player_status *st) {
     p->cmd_entry = id;
     return;
   }
-  if (e) { /* to the front of up next: there's always room for spent (up_add()) */
+  if (e) { /* to the front of up next: there's always room for spent (mc_player_up_next_add()) */
     int at = 0;
     while (at < p->nup && p->up[at] != e) at++;
     if (at == p->nup) p->nup++;
@@ -1345,6 +1385,10 @@ static void previous_from_up_next(mc_player *p, const mc_player_status *st) {
     play_up_next(p, pos);
     return;
   }
+  /* It waits again, so going back further keeps it after the list. Everything else is after it
+   * (what was ahead of it played before it started), and stays so, waiting too. */
+  if (e && e->waited && !p->shuffle)
+    for (int i = 0; i < p->nup; i++) p->up[i]->later = 1;
   if (e) {
     e->first--;
     up_changed(p);
@@ -1559,6 +1603,13 @@ mc_status mc_player_set_shuffle(mc_player *p, int on) {
     for (int i = 0; on && i < p->nsegs; i++) p->segs[i].pos = pos - (p->nsegs - 1 - i);
     if (p->cmd == CMD_NONE && p->nsegs) p->current_pos = p->segs[0].pos;
     if (on) p->drained = 0; /* the last item may have run out already: carry on after it */
+    /* A shuffled list never runs out, so what waits for it goes ahead now, and stays there. */
+    int waited = 0;
+    for (int i = 0; on && i < p->nup; i++) {
+      waited |= p->up[i]->later;
+      p->up[i]->later = 0;
+    }
+    if (waited) up_changed(p);
     mc_cond_broadcast(&p->wake);
   }
   mc_mutex_unlock(&p->lock);
@@ -1574,8 +1625,15 @@ mc_status mc_player_order(mc_player *p, int from, int count, int *out) {
   int pos = p->list_count ? current_pos(p) : -1;
   /* Playing from up next, the place is still the item played before it. */
   int detour = st.index >= 0 && p->item_origins[st.index];
-  long long left = 0;
-  for (int i = 0; i < p->nup; i++) left += p->up[i]->count - p->up[i]->first;
+  /* Up next's tracks that go ahead of the list, then the rest of the list (rest places), then
+   * those that wait for it. */
+  /* Played out, resuming plays up next with nothing of the list after it; with no up next, the
+   * list starts again. */
+  int after = p->played_out && p->nup ? p->list_count - 1 : pos;
+  int ahead = up_ahead(p, after);
+  long long left = 0, later = 0, rest = 0;
+  for (int i = 0; i < p->nup; i++) *(i < ahead ? &left : &later) += p->up[i]->count - p->up[i]->first;
+  if (later) rest = p->list_count - 1 - pos; /* only in order: shuffled, nothing waits */
   for (int i = 0; i < count; i++) {
     long long at = (long long)from + i;
     const up_entry *e;
@@ -1583,9 +1641,11 @@ mc_status mc_player_order(mc_player *p, int from, int count, int *out) {
       out[i] = st.index;
     } else if (at > 0 && at <= left) {
       out[i] = up_nth(p, (int)at - 1, &e)->item;
+    } else if (at > left + rest && at <= left + rest + later) {
+      out[i] = up_nth(p, (int)(at - rest) - 1, &e)->item;
     } else {
       /* Places far enough from the current one to overflow have no item. */
-      long long place = pos + (at > 0 ? at - left : at + detour);
+      long long place = at > 0 ? after + at - left - (at > left + rest ? later : 0) : pos + at + detour;
       out[i] = (pos >= 0 || at > 0) && place >= 0 && place <= INT_MAX ? item_at(p, (int)place) : -1;
     }
   }
@@ -1595,9 +1655,16 @@ mc_status mc_player_order(mc_player *p, int from, int count, int *out) {
 
 /* --- Up next: the API --- */
 
-/* mc_player_play_next() and mc_player_play_last(). The entries are made first, so the one thing
- * that can go wrong under the lock is running out of memory for the items. */
-static mc_status up_add(mc_player *p, const mc_up_next_add *add, int front) {
+/* Whether add waits for the list: an album or a group added while an album plays in order with
+ * tracks still to come. Under lock. */
+static int waits_for_list(mc_player *p, const mc_up_next_add *add) {
+  return (add->context == MC_PLAY_CONTEXT_ALBUM || add->context == MC_PLAY_CONTEXT_ALBUM_GROUP) &&
+         p->list_context == MC_PLAY_CONTEXT_ALBUM && !p->shuffle && list_goes_on(p, current_pos(p));
+}
+
+/* The entries are made first, so the one thing that can go wrong under the lock is running out of
+ * memory for the items. */
+mc_status mc_player_up_next_add(mc_player *p, const mc_up_next_add *add) {
   if (!p || !add || !add->tracks || add->count <= 0) return MC_ERR_INVALID_ARG;
   for (int i = 0; i < add->count; i++)
     if (!add->tracks[i].path) return MC_ERR_INVALID_ARG;
@@ -1646,11 +1713,18 @@ static mc_status up_add(mc_player *p, const mc_up_next_add *add, int front) {
         t->duration_ms = add->tracks[i].duration_ms;
         if (!add->title) e++;
       }
-      int at = front ? 0 : p->nup;
+      /* With nothing of the list left to go before, it's simply the end, and if what's there waits
+       * (for a list someone may go back into), this waits behind it. */
+      int later = waits_for_list(p, add), at = later ? p->nup : up_later_at(p);
+      if (!later && !list_goes_on(p, current_pos(p))) {
+        at = p->nup;
+        later = p->nup && p->up[p->nup - 1]->later;
+      }
       memmove(p->up + at + n, p->up + at, (size_t)(p->nup - at) * sizeof *p->up);
       for (int i = 0; i < n; i++) {
         entries[i]->id = ++p->last_id;
         entries[i]->origin = p->norigins;
+        entries[i]->later = later;
         p->up[at + i] = entries[i];
         entries[i] = NULL;
       }
@@ -1667,12 +1741,27 @@ static mc_status up_add(mc_player *p, const mc_up_next_add *add, int front) {
   return st;
 }
 
-mc_status mc_player_play_next(mc_player *p, const mc_up_next_add *add) {
-  return up_add(p, add, 1);
+/* Where the rest of the list goes in up next, as a row of its own (MC_UP_NEXT_REST): while it's
+ * an album playing in order with tracks to come and something queued to go before or after them,
+ * the place of the first entry that waits for it (nup with none), else -1. *pos gets the list's
+ * place. Under lock. */
+static int rest_at(mc_player *p, int *pos) {
+  *pos = current_pos(p);
+  if (!p->nup || p->shuffle || p->played_out || p->list_context != MC_PLAY_CONTEXT_ALBUM || item_at(p, *pos + 1) < 0)
+    return -1;
+  return up_later_at(p);
 }
 
-mc_status mc_player_play_last(mc_player *p, const mc_up_next_add *add) {
-  return up_add(p, add, 0);
+/* The rest of the list's row, the list being at place pos. Its title is the frontend's to make. Under
+ * lock. */
+static mc_status rest_row(mc_player *p, int pos, mc_up_next_entry *r) {
+  r->id = MC_UP_NEXT_REST;
+  r->rest = r->block = 1;
+  r->tracks = p->list_count - 1 - pos;
+  r->first_item = item_at(p, pos + 1);
+  r->context = p->list_context;
+  memcpy(r->context_uid, p->context_uid, MC_UID_STRLEN);
+  return (r->title = mc_strdup("")) ? MC_OK : MC_ERR_NOMEM;
 }
 
 mc_status mc_player_up_next(mc_player *p, mc_up_next_list **out) {
@@ -1683,13 +1772,16 @@ mc_status mc_player_up_next(mc_player *p, mc_up_next_list **out) {
   mc_status st = MC_OK;
   mc_mutex_lock(&p->lock);
   up_heard(p);
-  if (p->nup && !(list->items = calloc((size_t)p->nup, sizeof *list->items))) st = MC_ERR_NOMEM;
+  int pos, rest = rest_at(p, &pos);
+  if (p->nup && !(list->items = calloc((size_t)p->nup + 1, sizeof *list->items))) st = MC_ERR_NOMEM;
   for (int i = 0; st == MC_OK && i < p->nup; i++) {
     const up_entry *e = p->up[i];
+    if (i == rest) st = rest_row(p, pos, &list->items[list->count++]); /* before the first that waits */
     mc_up_next_entry *out_e = &list->items[list->count++];
     const item_origin *o = &p->origins[e->origin - 1];
     out_e->id = e->id;
     out_e->block = e->block;
+    out_e->after_list = e->later;
     out_e->tracks = e->count - e->first;
     for (int t = e->first; t < e->count; t++) out_e->duration_ms += e->tracks[t].duration_ms > 0 ? e->tracks[t].duration_ms : 0;
     out_e->first_item = e->tracks[e->first].item;
@@ -1699,6 +1791,7 @@ mc_status mc_player_up_next(mc_player *p, mc_up_next_list **out) {
     out_e->artist = e->artist ? mc_strdup(e->artist) : NULL;
     if (!out_e->title || (e->artist && !out_e->artist)) st = MC_ERR_NOMEM;
   }
+  if (st == MC_OK && rest == p->nup) st = rest_row(p, pos, &list->items[list->count++]); /* after them all */
   mc_mutex_unlock(&p->lock);
   if (st != MC_OK) {
     mc_up_next_list_free(list);
@@ -1729,14 +1822,40 @@ mc_status mc_player_up_next_move(mc_player *p, uint32_t id, int to) {
   if (!p) return MC_ERR_INVALID_ARG;
   mc_mutex_lock(&p->lock);
   up_settle(p);
-  int from = up_place(p, id);
-  if (from >= 0) {
+  int pos, rest = rest_at(p, &pos), from = up_place(p, id);
+  if (id == MC_UP_NEXT_REST && rest >= 0) {
+    /* What's above it plays first, and what's below waits for the album. */
+    from = 0;
+    to = to < 0 ? 0 : to > p->nup ? p->nup : to;
+    if (to != rest) {
+      for (int i = 0; i < p->nup; i++) p->up[i]->later = i >= to;
+      up_changed(p);
+    }
+  } else if (from >= 0 && rest >= 0) {
+    /* Places are rows as shown, the rest of the album's among them: the entry waits for the album
+     * if it ends up below that. */
+    int row = from < rest ? from : from + 1;
+    to = to < 0 ? 0 : to > p->nup ? p->nup : to;
+    if (to != row) {
+      up_entry *e = up_take(p, from);
+      int below = to > rest - (from < rest), at = below ? to - 1 : to;
+      memmove(p->up + at + 1, p->up + at, (size_t)(p->nup - at) * sizeof *p->up);
+      p->up[at] = e;
+      p->nup++;
+      e->later = below;
+      up_changed(p);
+    }
+  } else if (from >= 0) {
     to = to < 0 ? 0 : to >= p->nup ? p->nup - 1 : to;
     if (to != from) {
       up_entry *e = up_take(p, from);
       p->nup++;
       memmove(p->up + to + 1, p->up + to, (size_t)(p->nup - 1 - to) * sizeof *p->up);
       p->up[to] = e;
+      /* It plays where it's put: after one that waits for the list, it waits too; before one that
+       * doesn't, it doesn't. Between the two, it stays as it was. */
+      if (to > 0 && p->up[to - 1]->later) e->later = 1;
+      else if (to + 1 < p->nup && !p->up[to + 1]->later) e->later = 0;
       up_changed(p);
     }
   }

@@ -32,12 +32,8 @@ object Icons {
     )
     val ExpandMore = icon("ExpandMore", "M16.59,8.59L12,13.17 7.41,8.59 6,10l6,6 6,-6z")
     val ExpandLess = icon("ExpandLess", "M12,8l-6,6 1.41,1.41L12,10.83l4.59,4.58L18,14z")
-    // Play next and Play last.
-    val QueuePlayNext = icon(
-        "QueuePlayNext",
-        "M21,3H3C1.89,3 1,3.89 1,5v12c0,1.1 0.89,2 2,2h5v2h8v-2h2v-2H3V5h18v8h2V5C23,3.89 22.1,3 21,3z" +
-            "M13,10V7h-2v3H8v2h3v3h2v-3h3v-2H13zM24,18l-4.5,4.5L18,21l3,-3l-3,-3l1.5,-1.5L24,18z",
-    )
+    // Queue.
+    val AddToQueue = icon("AddToQueue", "M14,10H2v2h12v-2zM14,6H2v2h12V6zM18,14v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM2,16h8v-2H2v2z")
     val PlaylistPlay = icon("PlaylistPlay", "M4,10h12v2H4zM4,6h12v2H4zM4,14h8v2H4zM14,14v6l5,-3z")
     // The tablet layout's sidebar and top bar.
     val Home = icon("Home", "M10,20v-6h4v6h5v-8h3L12,3 2,12h3v8z")

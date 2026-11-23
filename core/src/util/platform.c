@@ -7,6 +7,16 @@
 
 #include "util/hex.h"
 
+#if defined(__ANDROID__) && !defined(__LP64__)
+int64_t mc_max_file_bytes = MC_32BIT_MAX_FILE_BYTES;
+#else
+int64_t mc_max_file_bytes = 0;
+#endif
+
+int mc_file_too_big(int64_t size) {
+  return mc_max_file_bytes > 0 && size >= mc_max_file_bytes;
+}
+
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>

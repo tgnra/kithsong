@@ -12,6 +12,7 @@ import android.text.format.Formatter
 import android.util.Log
 import android.webkit.MimeTypeMap
 import ng.kithso.android.R
+import ng.kithso.core.NativeCore
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.io.File
@@ -35,6 +36,19 @@ internal class StagedFiles(private val context: Context, private val root: File)
 
     private val resolver: ContentResolver = context.contentResolver
     private val problems = mutableListOf<String>()
+
+    // The core's limit on a track file (2 GiB on 32-bit phones, else 0 for none): such files
+    // aren't copied in only for the core to refuse them.
+    private val sizeLimit = NativeCore.fileSizeLimit()
+
+    private fun tooBig(size: Long) = sizeLimit > 0 && size >= sizeLimit
+
+    // Whether an audio file is too big to import, noting it if so.
+    private fun leftOutAsTooBig(name: String, size: Long): Boolean {
+        if (!isAudio(name) || !tooBig(size)) return false
+        problem(context.getString(R.string.import_too_big, name.substringAfterLast('/')))
+        return true
+    }
 
     @Synchronized
     fun takeProblems(): List<String> = problems.toList().also { problems.clear() }
@@ -84,6 +98,7 @@ internal class StagedFiles(private val context: Context, private val root: File)
                         pending += childId to path
                     } else if (isAudio(name) || isPicture(name) || isZip(name, mime)) {
                         val size = if (c.isNull(3)) -1L else c.getLong(3)
+                        if (leftOutAsTooBig(name, size)) continue
                         found += Entry(DocumentsContract.buildDocumentUriUsingTree(tree, childId), path, size)
                     }
                 }
@@ -134,6 +149,7 @@ internal class StagedFiles(private val context: Context, private val root: File)
             name = unique(name, used)
             when {
                 isZip(name, mime) -> zips += Batch(name, listOf(Item(uri, name, size)), isZip = true)
+                leftOutAsTooBig(name, size) -> {}
                 isAudio(name) -> audio += Item(uri, name, size)
                 else -> problem(context.getString(R.string.import_not_music, name))
             }
@@ -163,22 +179,30 @@ internal class StagedFiles(private val context: Context, private val root: File)
         for (file in batch.files) {
             currentCoroutineContext().ensureActive()
             val dest = File(dir, file.path)
+            // Audio of unknown size that turns out too big stops there.
+            val limit = if (sizeLimit > 0 && isAudio(file.path)) sizeLimit else Long.MAX_VALUE
             try {
                 dest.parentFile?.mkdirs()
                 val input = resolver.openInputStream(file.uri) ?: throw IOException("no stream")
                 input.use { from ->
                     FileOutputStream(dest).use { to ->
                         val buffer = ByteArray(BUFFER_SIZE)
+                        var written = 0L
                         while (true) {
                             val n = from.read(buffer)
                             if (n < 0) break
                             to.write(buffer, 0, n)
+                            written += n
+                            if (written >= limit) throw TooBig()
                             currentCoroutineContext().ensureActive()
                         }
                     }
                 }
                 copied++
                 if (first == null) first = dest
+            } catch (e: TooBig) {
+                dest.delete()
+                problem(context.getString(R.string.import_too_big, file.path.substringAfterLast('/')))
             } catch (e: IOException) {
                 Log.w(TAG, "Couldn't copy ${file.uri}", e)
                 dest.delete()
@@ -210,6 +234,8 @@ internal class StagedFiles(private val context: Context, private val root: File)
         problem(context.getString(R.string.import_read_failed))
         null
     }
+
+    private class TooBig : IOException()
 
     private companion object {
         const val TAG = "kithsong"

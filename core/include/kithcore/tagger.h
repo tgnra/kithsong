@@ -160,6 +160,13 @@ mc_status mc_musicbrainz_reachable(int timeout_ms);
  * path is 260 characters or more becomes a failed item the same way, with error
  * MC_STR_IMPORT_ERROR_LONG_PATH, so the frontend can explain Windows' long-path setting.
  *
+ * Too big. On 32-bit Android an audio file of 2 GiB (2^31 bytes) or more can't be tagged or
+ * played (a 32-bit off_t), so it isn't imported: it becomes a failed item the same way, with
+ * error MC_STR_IMPORT_ERROR_TOO_BIG, before its tags are read; one in a zip isn't extracted,
+ * and its item's folder is the zip's path, '/', and its path in the zip. Other files that big
+ * aren't imported anyway, so they go unremarked (and unextracted). Other builds have no
+ * such limit.
+ *
  * Callbacks run on the import thread; frontends marshal them to their UI thread. Every
  * other function may be called from any thread. */
 
