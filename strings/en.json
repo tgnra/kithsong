@@ -1283,6 +1283,10 @@
     "cover_of": "Cover of {0}",
     "albums": { "one": "{0:d} album", "other": "{0:d} albums" },
 
+    "customise": { "text": "Customise", "note": "An item of the phone's main menu, and the title of the page it opens, which changes how the main screen looks." },
+    "customise_sections": { "text": "Section order", "note": "Heading on the Customise page, over the main screen's sections (Recents, Playlists, Albums and so on) to drag into order." },
+    "customise_sections_text": { "text": "Drag the sections into the order the main screen shows them in.", "note": "Under customise_sections." },
+
     "jump_to_section": "Jump to a section",
     "jump_to_named_section": { "text": "Jump to {0}", "note": "An accessibility action on the main screen's section headings. {0} is a section, such as Albums." },
     "fast_scroll": { "text": "Fast scroll", "note": "For accessibility: the strip of letters (and section markers) down the right edge of a long list, for jumping through it." },

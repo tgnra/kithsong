@@ -136,7 +136,8 @@ abstract class StoreScreenshots(
     @Test fun albumDark() = album("album-dark", dark(), "Nightjar Season")
 
     @Test fun searchLight() = shoot("search-light", light()) {
-        if (tablet) tap(hasText(string(R.string.search)) and hasClickAction()) else menu(R.string.search)
+        // The phone searches in its header's field, which typing focuses.
+        if (tablet) tap(hasText(string(R.string.search)) and hasClickAction())
         settle()
         compose.onNode(hasSetTextAction()).performTextInput("copper")
         // Past the search's wait for more typing.

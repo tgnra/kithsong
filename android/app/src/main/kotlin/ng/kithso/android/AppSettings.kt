@@ -103,6 +103,17 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
             save()
         }
 
+    /**
+     * The phone's main screen's sections in the order it shows them, by name (see
+     * [ng.kithso.android.ui.orderedSections]), or empty for the usual order.
+     */
+    var sectionOrder: List<String>
+        get() = core.string(KEY_SECTION_ORDER)?.split(',')?.filter { it.isNotBlank() }.orEmpty()
+        set(value) {
+            core.setString(KEY_SECTION_ORDER, value.joinToString(","))
+            save()
+        }
+
     /** The playback volume, 0 to 100, as it was left; nothing sets it yet. */
     val volume: Int get() = core.volume
 
@@ -121,6 +132,7 @@ class AppSettings(private val core: CoreSettings, old: SharedPreferences) {
         const val KEY_STRESS_LIBRARY = "stress_library"
         const val KEY_ASKED_FOR_NOTIFICATIONS = "android_asked_for_notifications"
         const val KEY_ARCHIVE_EXPLAINED = "archive_explained"
+        const val KEY_SECTION_ORDER = "android_section_order"
         // What they were in [old].
         const val OLD_ASKED_FOR_NOTIFICATIONS = "asked_for_notifications"
         const val OLD_DEVICE_NAME = "device_name"

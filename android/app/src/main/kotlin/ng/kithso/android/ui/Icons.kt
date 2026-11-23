@@ -76,6 +76,11 @@ object Icons {
         "M12,12c2.21,0 4,-1.79 4,-4s-1.79,-4 -4,-4 -4,1.79 -4,4 1.79,4 4,4zM12,14c-2.67,0 -8,1.34 -8,4v2h16v-2" +
             "c0,-2.66 -5.33,-4 -8,-4z",
     )
+    val Tune = icon(
+        "Tune",
+        "M3,17v2h6v-2H3zM3,5v2h10V5H3zM13,21v-2h8v-2h-8v-2h-2v6h2zM7,9v2H3v2h4v2h2V9H7zM21,13v-2H11v2h10z" +
+            "M15,9h2V7h4V5h-4V3h-2v6z",
+    )
     val DragHandle =icon("DragHandle", "M20,9H4v2h16V9zM4,15h16v-2H4v2z")
     val RemoveCircle = icon("RemoveCircle", "M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM17,13H7v-2h10v2z")
     val Remove = icon("Remove", "M19,13H5v-2h14v2z")

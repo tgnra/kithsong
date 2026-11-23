@@ -80,6 +80,9 @@ sealed interface Page {
     data object Search : Page
     data object Stats : Page
 
+    /** The phone's Customise page, from its main menu. */
+    data object Customise : Page
+
     /** A track list, over the main list or the search it was found in. */
     data class Collection(val ref: CollectionRef) : Page
     /** The import's items, from its card's Review. */
@@ -99,6 +102,7 @@ sealed interface Page {
             is Device -> "device:${page.uid}"
             Search -> "search"
             Stats -> "stats"
+            Customise -> "customise"
             is Collection -> page.ref.group?.let { "grouplist:${URLEncoder.encode(it, "UTF-8")}:${page.ref.uid}" }
                 ?: "list:${page.ref.kind.name}:${page.ref.uid}"
             Import -> "import"
@@ -117,6 +121,7 @@ sealed interface Page {
                 "device" -> Device(rest)
                 "search" -> Search
                 "stats" -> Stats
+                "customise" -> Customise
                 "import" -> Import
                 "importitem" -> ImportItem(rest.substringBefore(':').toInt(), rest.substringAfter(':').toInt())
                 "list" -> Collection(

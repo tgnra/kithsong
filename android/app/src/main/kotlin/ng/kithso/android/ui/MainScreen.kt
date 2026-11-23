@@ -194,33 +194,50 @@ private const val ROW_ART = 6
 
 // Null while the library is being read: just the header, rather than a flash of the empty state.
 // With lists to make ([canMake]), Playlists and Album groups show even when empty, for their +
-// buttons; with no music, only for what's already there.
-internal fun mainItems(library: Library?, columns: Int, banner: Boolean, canMake: Boolean): List<MainItem> = buildList {
+// buttons; with no music, only for what's already there. The sections come in [order].
+internal fun mainItems(
+    library: Library?,
+    columns: Int,
+    banner: Boolean,
+    canMake: Boolean,
+    order: List<Section> = Section.entries,
+): List<MainItem> = buildList {
     add(MainItem.Header)
     if (banner) add(MainItem.Banner)
     if (library == null) return@buildList
     if (library.isEmpty) add(MainItem.Empty)
     val headings = canMake && !library.isEmpty
-    if (library.recents.isNotEmpty()) {
-        add(MainItem.Heading(Section.Recents))
-        add(MainItem.RecentsRow(library.recents.take(PHONE_RECENTS)))
+    for (section in order) when (section) {
+        Section.Recents -> if (library.recents.isNotEmpty()) {
+            add(MainItem.Heading(Section.Recents))
+            add(MainItem.RecentsRow(library.recents.take(PHONE_RECENTS)))
+        }
+        Section.Playlists -> if (library.playlists.isNotEmpty() || headings) {
+            add(MainItem.Heading(Section.Playlists))
+            library.playlists.mapTo(this, MainItem::PlaylistItem)
+        }
+        Section.AlbumGroups -> if (library.albumGroups.isNotEmpty() || headings) {
+            add(MainItem.Heading(Section.AlbumGroups))
+            if (library.albumGroups.isNotEmpty()) add(MainItem.AlbumGroupsRow(library.albumGroups))
+        }
+        Section.Albums -> if (library.albums.isNotEmpty()) {
+            add(MainItem.Heading(Section.Albums))
+            library.albums.chunked(columns).mapTo(this, MainItem::AlbumRow)
+        }
+        Section.Artists -> if (library.artists.isNotEmpty()) {
+            add(MainItem.Heading(Section.Artists))
+            library.artists.mapTo(this, MainItem::ArtistItem)
+        }
     }
-    if (library.playlists.isNotEmpty() || headings) {
-        add(MainItem.Heading(Section.Playlists))
-        library.playlists.mapTo(this, MainItem::PlaylistItem)
-    }
-    if (library.albumGroups.isNotEmpty() || headings) {
-        add(MainItem.Heading(Section.AlbumGroups))
-        if (library.albumGroups.isNotEmpty()) add(MainItem.AlbumGroupsRow(library.albumGroups))
-    }
-    if (library.albums.isNotEmpty()) {
-        add(MainItem.Heading(Section.Albums))
-        library.albums.chunked(columns).mapTo(this, MainItem::AlbumRow)
-    }
-    if (library.artists.isNotEmpty()) {
-        add(MainItem.Heading(Section.Artists))
-        library.artists.mapTo(this, MainItem::ArtistItem)
-    }
+}
+
+/**
+ * The sections in a saved order, by name ([AppSettings.sectionOrder]): those it names, then any
+ * it doesn't (as a newer version's would be) in the usual order. Unknown names are left out.
+ */
+internal fun orderedSections(saved: List<String>): List<Section> {
+    val named = saved.mapNotNull { name -> Section.entries.find { it.name == name } }.distinct()
+    return named + Section.entries.filter { it !in named }
 }
 
 /** How many items a section has before the fast scroll strip has its letters as well as its heading. */
@@ -287,9 +304,9 @@ private val AlbumLabelsHeight = 58.dp
  * for a new playlist or (with true) album group.
  *
  * Search is in the header: typing there slides the library down and away and shows [source]'s
- * results in its place, and closing the keyboard (or Back) closes them and brings it back. The
- * header's menu, pulling the list down from its top (see [pullToSearch]) and [searchRequests]
- * all go to the header's field. [onPlayTrack] and [onTrackMenu] are for a found track.
+ * results in its place, and closing the keyboard (or Back) closes them and brings it back.
+ * Pulling the list down from its top (see [pullToSearch]) and [searchRequests] go to the
+ * header's field. [onPlayTrack] and [onTrackMenu] are for a found track.
  */
 @Composable
 fun MainScreen(
@@ -319,6 +336,9 @@ fun MainScreen(
     onNewList: ((isAlbums: Boolean) -> Unit)? = null,
     // A red dot on the header's menu and its Sync: deletes wait in the recycle bin while a member is online.
     syncDot: Boolean = false,
+    // The sections' order, from the Customise page the header's menu opens with [onCustomise].
+    sectionOrder: List<Section> = Section.entries,
+    onCustomise: () -> Unit = {},
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -332,7 +352,9 @@ fun MainScreen(
 
         val hasBanner = banner != null
         val canMake = onNewList != null
-        val items = remember(library, columns, hasBanner, canMake) { mainItems(library, columns, hasBanner, canMake) }
+        val items = remember(library, columns, hasBanner, canMake, sectionOrder) {
+            mainItems(library, columns, hasBanner, canMake, sectionOrder)
+        }
         val sections = remember(items) {
             items.mapIndexedNotNull { i, item -> (item as? MainItem.Heading)?.let { SectionStart(it.section, i) } }
         }
@@ -392,7 +414,7 @@ fun MainScreen(
         // The library slides down and fades as the results come in over it.
         val slide by animateFloatAsState(if (showResults) 1f else 0f, label = "searchSlide")
         val slidePx = constraints.maxHeight * LIBRARY_SLIDE
-        // Pulling down from the top opens search, as the header's menu does.
+        // Pulling down from the top focuses the header's search.
         val pull = rememberPullToSearch(openSearch)
 
         PrefetchArt(listState, cellPx) { index -> items.getOrNull(index)?.art.orEmpty() }
@@ -420,7 +442,7 @@ fun MainScreen(
                         onFocusTaken = { focusWanted = false },
                         focused = focused,
                         onFocusChange = { focused = it },
-                        onSearch = openSearch,
+                        onCustomise = onCustomise,
                         onSync = onSync,
                         onSettings = onSettings,
                         onStats = onStats,
@@ -561,7 +583,7 @@ private const val LIBRARY_SLIDE = 0.25f
 
 /**
  * The logo, the search field with the name in it, and the menu. It scrolls away with the list.
- * [focusWanted] focuses the field, and [onFocusTaken] says so. [onSearch] is the menu's Search.
+ * [focusWanted] focuses the field, and [onFocusTaken] says so.
  */
 @Composable
 private fun Header(
@@ -572,7 +594,7 @@ private fun Header(
     onFocusTaken: () -> Unit,
     focused: Boolean,
     onFocusChange: (Boolean) -> Unit,
-    onSearch: () -> Unit,
+    onCustomise: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
     onStats: () -> Unit,
@@ -598,7 +620,7 @@ private fun Header(
             query, onQueryChange, onClear, focusWanted, onFocusTaken, focused, onFocusChange,
             Modifier.weight(1f),
         )
-        HeaderMenu(onSearch, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
+        HeaderMenu(onCustomise, onSync, onSettings, onStats, importPickers, importRunning, syncDot)
     }
 }
 
@@ -686,7 +708,7 @@ private fun HeaderSearchField(
  */
 @Composable
 private fun HeaderMenu(
-    onSearch: () -> Unit,
+    onCustomise: () -> Unit,
     onSync: () -> Unit,
     onSettings: () -> Unit,
     onStats: () -> Unit,
@@ -742,11 +764,6 @@ private fun HeaderMenu(
                     },
                     onClick = { importing = true },
                 )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.search)) },
-                    leadingIcon = { Icon(Icons.Search, contentDescription = null) },
-                    onClick = pick(onSearch),
-                )
                 val waitingText = stringResource(R.string.sync_bin_waiting)
                 DropdownMenuItem(
                     text = {
@@ -764,6 +781,11 @@ private fun HeaderMenu(
                     text = { Text(stringResource(R.string.stats_title)) },
                     leadingIcon = { Icon(Icons.BarChart, contentDescription = null) },
                     onClick = pick(onStats),
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.customise)) },
+                    leadingIcon = { Icon(Icons.Tune, contentDescription = null) },
+                    onClick = pick(onCustomise),
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.settings)) },
@@ -810,7 +832,6 @@ private fun SectionHeading(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(stringResource(section.title), style = MaterialTheme.typography.titleLarge)
-            Icon(Icons.ExpandMore, contentDescription = null, modifier = Modifier.padding(start = 4.dp))
         }
         if (onNew != null) {
             IconButton(

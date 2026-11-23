@@ -339,6 +339,8 @@ fun App(
     val audio = remember(context) { context.getSystemService(AudioManager::class.java) }
     // A page the sidebar or the rail opens, as picking it there does: by itself, where picked
     // again it stays as it is; on top of what's open on the phone.
+    // The phone's main screen's sections, in the order its Customise page left them.
+    var sectionOrder by remember { mutableStateOf(orderedSections(settings.sectionOrder)) }
     // Opens the phone's header search: from the keyboard shortcut, as the main screen's own pull
     // and menu open it there.
     val phoneSearchRequests = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1) }
@@ -439,6 +441,15 @@ fun App(
                 },
             )
             Page.Stats -> StatsScreen(source, pagePadding, onBack = dismiss)
+            Page.Customise -> CustomiseScreen(
+                sectionOrder,
+                onOrder = { order ->
+                    sectionOrder = order
+                    settings.sectionOrder = order.map { it.name }
+                },
+                pagePadding,
+                onBack = dismiss,
+            )
             Page.Licenses -> LicensesScreen(pagePadding, onOpen = { nav = nav.push(Page.License(it)) }, onBack = dismiss)
             is Page.License -> LicenseTextScreen(page.asset, pagePadding, onBack = dismiss)
             Page.Sync -> SyncScreen(
@@ -597,6 +608,8 @@ fun App(
                     onSync = { nav = nav.push(Page.Sync) },
                     onSettings = { nav = nav.push(Page.Settings) },
                     onStats = { nav = nav.push(Page.Stats) },
+                    sectionOrder = sectionOrder,
+                    onCustomise = { nav = nav.push(Page.Customise) },
                     importPickers = importPickers,
                     importRunning = importProgress?.phase?.isOver == false,
                     banner = banner,
