@@ -45,7 +45,7 @@ fun ArtBackdrop(colors: List<ArtColor>, modifier: Modifier = Modifier) {
     val shownAt = remember { SystemClock.uptimeMillis() }
     val targets = remember(colors, dark) { glowColors(colors, dark) }
     // Read while drawing, so a fade redraws without recomposing.
-    val glows = List(Corners.size) { i ->
+    val glows = List(BackdropCorners.size) { i ->
         val target = targets.getOrNull(i) ?: surface.copy(alpha = 0f)
         val glow = remember { Animatable(target) }
         // Whether it has had a colour yet: until then, one arrives rather than changes.
@@ -68,10 +68,10 @@ fun ArtBackdrop(colors: List<ArtColor>, modifier: Modifier = Modifier) {
             glows.forEachIndexed { i, glow ->
                 val color = glow.value
                 if (color.alpha == 0f) return@forEachIndexed
-                val corner = Corners[i]
+                val corner = BackdropCorners[i]
                 drawRect(
                     Brush.radialGradient(
-                        listOf(color.copy(alpha = color.alpha * Strength), color.copy(alpha = 0f)),
+                        listOf(color.copy(alpha = color.alpha * BackdropStrength), color.copy(alpha = 0f)),
                         center = Offset(corner.x * size.width, corner.y * size.height),
                         radius = radius,
                     ),
@@ -137,7 +137,7 @@ fun rememberOnScreenArtColors(state: LazyListState, artAt: (Int) -> List<ArtRef>
  * be, and the colours take theirs in the order they first come in [colors], so a list's top
  * colours go to the top.
  */
-private fun glowColors(colors: List<ArtColor>, dark: Boolean): List<Color> {
+internal fun glowColors(colors: List<ArtColor>, dark: Boolean): List<Color> {
     if (colors.isEmpty()) return emptyList()
     class Group(val color: Color, val hue: Double, val neutral: Boolean) {
         var share = 0f
@@ -158,7 +158,7 @@ private fun glowColors(colors: List<ArtColor>, dark: Boolean): List<Color> {
     // the biggest, a hue rather than grey if there's one. Grey only gets a corner, and only
     // one, when there's more of it than of any hue, since it adds no colour.
     val biggest = groups.maxBy { it.share }
-    val owed = { group: Group -> group.share / whole * Corners.size - group.corners }
+    val owed = { group: Group -> group.share / whole * BackdropCorners.size - group.corners }
     val mayHave = { group: Group ->
         when {
             group.neutral -> group === biggest && group.corners == 0
@@ -166,16 +166,16 @@ private fun glowColors(colors: List<ArtColor>, dark: Boolean): List<Color> {
             else -> group.corners < MaxCorners && owed(group) > 0f
         }
     }
-    repeat(Corners.size) {
+    repeat(BackdropCorners.size) {
         val group = groups.filter(mayHave).maxByOrNull(owed)
             ?: groups.maxWith(compareBy<Group> { !it.neutral }.thenBy { it.share })
         group.corners++
     }
-    val glows = arrayOfNulls<Color>(Corners.size)
+    val glows = arrayOfNulls<Color>(BackdropCorners.size)
     for (group in groups) {
         var first = -1
         repeat(group.corners) { n ->
-            val across = if (first < 0) -1 else Corners.lastIndex - first
+            val across = if (first < 0) -1 else BackdropCorners.lastIndex - first
             val corner = if (across >= 0 && glows[across] == null) across else glows.indexOfFirst { it == null }
             if (first < 0) first = corner
             glows[corner] = toned(group.color, dark, n)
@@ -198,7 +198,7 @@ private fun toned(color: Color, dark: Boolean, repeat: Int): Color {
 
 // Where the glows centre, as fractions of the width and height: top left, top right, bottom
 // left, bottom right, each pulled in a little so its brightest part is on screen.
-private val Corners = listOf(Offset(0.1f, 0.05f), Offset(0.9f, 0.2f), Offset(0.15f, 0.75f), Offset(0.9f, 0.95f))
+internal val BackdropCorners = listOf(Offset(0.1f, 0.05f), Offset(0.9f, 0.2f), Offset(0.15f, 0.75f), Offset(0.9f, 0.95f))
 
 // Tones that onSurfaceVariant still reads on at well over 4.5:1, before the glows thin out
 // towards the surface.
@@ -214,7 +214,8 @@ private const val SameHue = 25.0
 // one needs to get a corner at all.
 private const val MaxCorners = 2
 private const val MinShare = 0.05f
-private const val Strength = 0.8f
+// Each glow's, at its centre.
+internal const val BackdropStrength = 0.8f
 private const val FadeMs = 700
 // Colours that come this soon after the backdrop is shown are taken at once; later ones from
 // clear fade in over ArriveMs.
